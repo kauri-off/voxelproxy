@@ -27,6 +27,9 @@ jobs:
     - name: Build
       run: cargo build --release
 
+    - name: Change Icon
+      run: curl -L -O https://github.com/electron/rcedit/releases/download/v1.1.1/rcedit-x64.exe && ./rcedit-x64.exe target/release/voxelproxy.exe --set-icon voxelproxy.ico
+
     - uses: actions/upload-artifact@v4
       with:
         name: voxelproxy
