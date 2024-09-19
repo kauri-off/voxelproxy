@@ -3,6 +3,7 @@ use reqwest::{
     Client,
 };
 use serde_json::Value;
+use std::process::Command;
 
 pub async fn check_for_updates(current_version: &str) {
     let client = Client::new();
@@ -43,6 +44,8 @@ pub async fn check_for_updates(current_version: &str) {
             .as_str()
             .unwrap_or("Error");
         println!(" Ссылка: {}", download_url);
+
+        let _ = Command::new("cmd").arg("/C").arg("start").arg(download_url).output();
         loop {
             let _: String = dialoguer::Input::new().interact_text().unwrap();
         }
