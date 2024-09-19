@@ -288,7 +288,6 @@ impl Server2Client {
 
             if self.state.cheat_alive {
                 if let Err(_) = packet.write(&mut self.cheat_writer, self.threshold).await {
-                    println!("[-] {:?} отключился", Client::Cheat);
                     self.state.set_dead(&Client::Cheat);
                     self.global_state.lock().await.set_dead(&Client::Cheat);
                 }
@@ -296,7 +295,6 @@ impl Server2Client {
 
             if self.state.legit_alive {
                 if let Err(_) = packet.write(&mut self.legit_writer, self.threshold).await {
-                    println!("[-] {:?} отключился", Client::Legit);
                     self.state.set_dead(&Client::Legit);
                     self.global_state.lock().await.set_dead(&Client::Legit);
                 }
