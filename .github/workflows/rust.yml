@@ -29,3 +29,15 @@ jobs:
       with:
         name: voxelproxy
         path: target/x86_64-pc-windows-gnu/release/voxelproxy.exe
+    
+    - name: Replace RELEASE constant
+      run: |
+        sed -i 's/pub const RELEASE: bool = true;/pub const RELEASE: bool = false;/g' src/lib.rs
+    
+    - name: Build Debug
+      run: cargo build --release --target x86_64-pc-windows-gnu
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: voxelproxy_debug
+        path: target/x86_64-pc-windows-gnu/release/voxelproxy.exe
