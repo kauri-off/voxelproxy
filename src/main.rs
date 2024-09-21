@@ -1,13 +1,14 @@
 use auto_update::check_for_updates;
 use dialoguer::{Input, Select};
 use minecraft_protocol::{types::var_int::VarInt, Packet};
-use packets::packets::{ChatMessage, Handshake, LoginStart, SetCompression, Status};
+use packets::packets::{
+    ChatMessage, Handshake, LoginStart, Position, PositionLook, SetCompression, Status,
+};
 use serde_json::json;
 use std::{
     io::{self, Error},
     sync::Arc,
 };
-use voxelproxy::*;
 use tokio::{
     join,
     net::{
@@ -19,6 +20,7 @@ use tokio::{
         Mutex,
     },
 };
+use voxelproxy::*;
 mod auto_update;
 mod packets;
 
@@ -195,34 +197,34 @@ async fn recieve_streams(
     let (legit_reader, legit_writer) = legit_stream.into_split();
     let (remote_reader, remote_writer) = remote_stream.into_split();
 
-    let state = Arc::new(Mutex::new(State::basic()));
-    let (tx, rx) = mpsc::channel(32);
-    let tx = Arc::new(tx);
+    let (remote_tx, remote_pipe) = PacketPipe::new(remote_writer, threshold);
+    let (cheat_tx, cheat_pipe) = PacketPipe::new(cheat_writer, threshold);
+    let (legit_tx, legit_pipe) = PacketPipe::new(legit_writer, threshold);
 
-    let c2s_thread = tokio::spawn(c2s_packet_handler(
-        state.clone(),
-        rx,
-        remote_writer,
-        threshold.clone(),
-    ));
+    let remote_pipe_thread = tokio::spawn(remote_pipe.run());
+    let cheat_pipe_thread = tokio::spawn(cheat_pipe.run());
+    let legit_pipe_thread = tokio::spawn(legit_pipe.run());
 
     let config = Cfg::new(&nick, &proxy_config.server_dns);
 
+    let state = Arc::new(Mutex::new(State::basic()));
     let cheat2server = Client2Server::new(
         cheat_reader,
         threshold.clone(),
         Client::Cheat,
-        tx.clone(),
+        remote_tx.clone(),
         state.clone(),
         config.clone(),
+        legit_tx.clone(),
     );
     let legit2server = Client2Server::new(
         legit_reader,
         threshold.clone(),
         Client::Legit,
-        tx.clone(),
+        remote_tx.clone(),
         state.clone(),
         config.clone(),
+        legit_tx.clone(),
     );
 
     let cheat2server_thread = tokio::spawn(cheat2server.run());
@@ -231,8 +233,8 @@ async fn recieve_streams(
     let server2clients = Server2Client::new(
         remote_reader,
         threshold.clone(),
-        cheat_writer,
-        legit_writer,
+        cheat_tx,
+        legit_tx,
         state.clone(),
     );
     let server2client_thread = tokio::spawn(server2clients.run());
@@ -240,7 +242,9 @@ async fn recieve_streams(
     println!("VoxelProxy запущен!");
 
     let _ = join!(
-        c2s_thread,
+        remote_pipe_thread,
+        cheat_pipe_thread,
+        legit_pipe_thread,
         cheat2server_thread,
         legit2server_thread,
         server2client_thread
@@ -250,25 +254,25 @@ async fn recieve_streams(
 struct Server2Client {
     reader: OwnedReadHalf,
     threshold: Option<i32>,
-    cheat_writer: OwnedWriteHalf,
-    legit_writer: OwnedWriteHalf,
+    cheat_tx: Arc<Sender<Packet>>,
+    legit_tx: Arc<Sender<Packet>>,
     state: State,
-    global_state: Arc<Mutex<State>>
+    global_state: Arc<Mutex<State>>,
 }
 
 impl Server2Client {
     fn new(
         reader: OwnedReadHalf,
         threshold: Option<i32>,
-        cheat_writer: OwnedWriteHalf,
-        legit_writer: OwnedWriteHalf,
+        cheat_tx: Arc<Sender<Packet>>,
+        legit_tx: Arc<Sender<Packet>>,
         state: Arc<Mutex<State>>,
     ) -> Self {
         Self {
             reader,
             threshold,
-            cheat_writer,
-            legit_writer,
+            cheat_tx,
+            legit_tx,
             state: State::basic(),
             global_state: state,
         }
@@ -287,14 +291,14 @@ impl Server2Client {
             }
 
             if self.state.cheat_alive {
-                if let Err(_) = packet.write(&mut self.cheat_writer, self.threshold).await {
+                if let Err(_) = self.cheat_tx.send(packet.clone()).await {
                     self.state.set_dead(&Client::Cheat);
                     self.global_state.lock().await.set_dead(&Client::Cheat);
                 }
             }
 
             if self.state.legit_alive {
-                if let Err(_) = packet.write(&mut self.legit_writer, self.threshold).await {
+                if let Err(_) = self.legit_tx.send(packet).await {
                     self.state.set_dead(&Client::Legit);
                     self.global_state.lock().await.set_dead(&Client::Legit);
                 }
@@ -307,9 +311,10 @@ struct Client2Server {
     reader: OwnedReadHalf,
     threshold: Option<i32>,
     client: Client,
-    tx: Arc<Sender<SignedPacket>>,
+    tx: Arc<Sender<Packet>>,
     state: Arc<Mutex<State>>,
     config: Cfg,
+    legit_tx: Arc<Sender<Packet>>, // Position Sync
 }
 
 impl Client2Server {
@@ -317,9 +322,10 @@ impl Client2Server {
         reader: OwnedReadHalf,
         threshold: Option<i32>,
         client: Client,
-        tx: Arc<Sender<SignedPacket>>,
+        tx: Arc<Sender<Packet>>,
         state: Arc<Mutex<State>>,
         config: Cfg,
+        legit_tx: Arc<Sender<Packet>>,
     ) -> Self {
         Client2Server {
             reader,
@@ -328,6 +334,7 @@ impl Client2Server {
             tx,
             state,
             config,
+            legit_tx,
         }
     }
 
@@ -347,13 +354,47 @@ impl Client2Server {
         // println!("SB > {:?} : {:?}", self.client, packet);
         if packet.packet_id().await.unwrap().0 == 0x03 {
             let _ = self.chat_message(&packet).await;
-        }
+        };
 
-        let signed_packet = SignedPacket::new(self.client.clone(), packet);
-        self.tx
-            .send(signed_packet)
-            .await
-            .map_err(|e| Error::new(io::ErrorKind::Other, e))
+        if self.state.lock().await.read_from == self.client {
+            if packet.packet_id().await.unwrap().0 == 0x13
+                && self.client == Client::Cheat
+                && self.state.lock().await.legit_alive
+            {
+                let _ = self.position_look(&packet).await;
+            };
+
+            self.tx
+                .send(packet)
+                .await
+                .map_err(|e| Error::new(io::ErrorKind::Other, e))
+        } else {
+            Ok(())
+        }
+    }
+    async fn position_look(&self, packet: &Packet) -> io::Result<()> {
+        match packet {
+            Packet::UnCompressed(t) => {
+                let pl = PositionLook::deserialize(t).await?;
+                let position = Position {
+                    packet_id: VarInt(0x34),
+                    x: pl.x,
+                    y: pl.y,
+                    z: pl.z,
+                    yaw: pl.yaw,
+                    pitch: pl.pitch,
+                    flags: 0,
+                    teleportid: VarInt(0),
+                };
+                let _ = self
+                    .legit_tx
+                    .send(Packet::UnCompressed(position.serialize()))
+                    .await;
+            }
+            Packet::Compressed(_) => (),
+        };
+
+        Ok(())
     }
 
     async fn chat_message(&self, packet: &Packet) -> io::Result<()> {
@@ -378,21 +419,28 @@ impl Client2Server {
     }
 }
 
-async fn c2s_packet_handler(
-    state: Arc<Mutex<State>>,
-    mut rx: Receiver<SignedPacket>,
-    mut remote_writer: OwnedWriteHalf,
+struct PacketPipe {
+    out: OwnedWriteHalf,
+    rx: Receiver<Packet>,
     threshold: Option<i32>,
-) {
-    loop {
-        let signed_packet = rx.recv().await.unwrap();
+}
 
-        if state.lock().await.read_from == signed_packet.client {
-            signed_packet
-                .packet
-                .write(&mut remote_writer, threshold)
-                .await
-                .unwrap();
+impl PacketPipe {
+    fn new(out: OwnedWriteHalf, threshold: Option<i32>) -> (Arc<Sender<Packet>>, Self) {
+        let (tx, rx) = mpsc::channel(32);
+
+        (Arc::new(tx), PacketPipe { out, rx, threshold })
+    }
+
+    async fn run(mut self) -> io::Result<()> {
+        loop {
+            let packet = self.rx.recv().await;
+
+            if packet.is_none() {
+                return Err(Error::new(io::ErrorKind::Other, "None"));
+            }
+
+            packet.unwrap().write(&mut self.out, self.threshold).await?;
         }
     }
 }
@@ -473,21 +521,23 @@ fn get_config() -> ProxyConfig {
 
 #[tokio::main]
 async fn main() {
-    println!(r#"
+    println!(
+        r#"
 __     __            _ ____
 \ \   / /____  _____| |  _ \ _ __ _____  ___   _
  \ \ / / _ \ \/ / _ \ | |_) | '__/ _ \ \/ / | | |
   \ V / (_) >  <  __/ |  __/| | | (_) >  <| |_| |
    \_/ \___/_/\_\___|_|_|   |_|  \___/_/\_\\__, |
-                                           |___/"#);
+                                           |___/"#
+    );
     let version = env!("CARGO_PKG_VERSION");
 
     match RELEASE {
         true => {
             println!(" Версия: v{}", version);
             check_for_updates(version).await;
-        },
-        false => println!(" Версия: DEV v{}", version)
+        }
+        false => println!(" Версия: DEV v{}", version),
     }
     println!();
 

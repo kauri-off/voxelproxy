@@ -9,10 +9,7 @@ pub async fn check_for_updates(current_version: &str) {
     let client = Client::new();
 
     let mut headers = HeaderMap::new();
-    headers.append(
-        "User-Agent",
-        HeaderValue::from_str("VP Updater").unwrap(),
-    );
+    headers.append("User-Agent", HeaderValue::from_str("VP Updater").unwrap());
     headers.append(
         "Accept",
         HeaderValue::from_str("application/vnd.github+json").unwrap(),
@@ -45,7 +42,11 @@ pub async fn check_for_updates(current_version: &str) {
             .unwrap_or("Error");
         println!(" Ссылка: {}", download_url);
 
-        let _ = Command::new("cmd").arg("/C").arg("start").arg(download_url).output();
+        let _ = Command::new("cmd")
+            .arg("/C")
+            .arg("start")
+            .arg(download_url)
+            .output();
         loop {
             let _: String = dialoguer::Input::new().interact_text().unwrap();
         }

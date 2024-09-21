@@ -131,3 +131,31 @@ impl Integer for u128 {
         std::mem::size_of::<Self>()
     }
 }
+
+impl Integer for f32 {
+    fn to_bytes(&self) -> Vec<u8> {
+        self.to_be_bytes().to_vec()
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Self {
+        f32::from_be_bytes(bytes.try_into().unwrap())
+    }
+
+    fn byte_len() -> usize {
+        std::mem::size_of::<Self>()
+    }
+}
+
+impl Integer for f64 {
+    fn to_bytes(&self) -> Vec<u8> {
+        self.to_be_bytes().to_vec()
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Self {
+        f64::from_be_bytes(bytes.try_into().unwrap())
+    }
+
+    fn byte_len() -> usize {
+        std::mem::size_of::<Self>()
+    }
+}
