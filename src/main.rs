@@ -25,8 +25,9 @@ mod auto_update;
 mod packets;
 
 async fn start_vp(proxy_config: ProxyConfig) -> io::Result<()> {
-    let (ctx, crx) = mpsc::channel(32); // CheatTX, CheatRX
-    let (ltx, lrx) = mpsc::channel(32); // LegitTX, LegitRX
+    // mpsc Каналы для подключений клиентов
+    let (ctx, crx) = mpsc::channel(32);
+    let (ltx, lrx) = mpsc::channel(32);
 
     let cheat_reader = tokio::spawn(read_port(
         ctx,
@@ -56,6 +57,7 @@ async fn start_vp(proxy_config: ProxyConfig) -> io::Result<()> {
     Ok(())
 }
 
+/// Ожидает подключения к порту и отправляет в process_socket
 async fn read_port(tx: Sender<TcpStream>, ip: Addr, status: ProxyServerStatus) -> io::Result<()> {
     let tcp_socket = TcpSocket::new_v4()?;
     tcp_socket.set_reuseaddr(true)?;
@@ -80,7 +82,7 @@ async fn process_socket(
 
     match handshake.next_state.0 {
         0x01 => status(&mut socket, &proxy_status).await,
-        0x02 => Ok(tx.send(socket).await.unwrap()),
+        0x02 => Ok(tx.send(socket).await.unwrap()), // Отправляет в wait_for_sockets
         _ => unreachable!(),
     }
 }
@@ -111,21 +113,27 @@ async fn wait_for_sockets(
     }
 }
 
+/// Получает 2 клиента и обрабатывает их
 async fn recieve_streams(
     mut cheat_stream: TcpStream,
     mut legit_stream: TcpStream,
     proxy_config: ProxyConfig,
 ) {
+    // Handshake уже был в process_socket, поэтому
+    // C→S: Login Start
+    // Важно отметить что в login_start находится адрес сервера к которому мы подключаемся
+    // Поэтому эти 2 пакета мы игнарируем и будем делать новый
     let socket1_packet = Packet::read_uncompressed(&mut cheat_stream).await.unwrap();
     let _socket2_packet = Packet::read_uncompressed(&mut legit_stream).await.unwrap();
 
-    let nick = LoginStart::deserialize(&socket1_packet)
+    let nickname = LoginStart::deserialize(&socket1_packet)
         .await
         .map(|p| p.name)
         .unwrap_or(String::from("Error"));
 
-    println!("Ник: {}", nick);
+    println!("Ник: {}", nickname);
 
+    // Получаем адрес из srv записи для обхода бот фильтра
     let remote_addr = resolve(&proxy_config.server_dns).await;
 
     let addr = match remote_addr {
@@ -193,6 +201,7 @@ async fn recieve_streams(
         .unwrap();
     println!("[+] Login success");
 
+    // Разделяем потоки
     let (cheat_reader, cheat_writer) = cheat_stream.into_split();
     let (legit_reader, legit_writer) = legit_stream.into_split();
     let (remote_reader, remote_writer) = remote_stream.into_split();
@@ -205,7 +214,7 @@ async fn recieve_streams(
     let cheat_pipe_thread = tokio::spawn(cheat_pipe.run());
     let legit_pipe_thread = tokio::spawn(legit_pipe.run());
 
-    let config = Cfg::new(&nick, &proxy_config.server_dns);
+    let config = Cfg::new(&nickname, &proxy_config.server_dns);
 
     let state = Arc::new(Mutex::new(State::basic()));
     let cheat2server = Client2Server::new(
