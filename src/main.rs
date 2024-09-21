@@ -2,7 +2,8 @@ use auto_update::check_for_updates;
 use dialoguer::{Input, Select};
 use minecraft_protocol::{types::var_int::VarInt, Packet};
 use packets::packets::{
-    ChatMessage, Handshake, LoginStart, Position, PositionLook, SetCompression, Status,
+    CPosition, ChatMessage, Handshake, LoginStart, Look, Position, PositionLook, SetCompression,
+    Status,
 };
 use serde_json::json;
 use std::{
@@ -324,6 +325,7 @@ struct Client2Server {
     state: Arc<Mutex<State>>,
     config: Cfg,
     legit_tx: Arc<Sender<Packet>>, // Position Sync
+    prev_pos: Position,
 }
 
 impl Client2Server {
@@ -344,6 +346,16 @@ impl Client2Server {
             state,
             config,
             legit_tx,
+            prev_pos: Position {
+                packet_id: VarInt(0x34),
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                yaw: 0.0,
+                pitch: 0.0,
+                flags: 0,
+                teleportid: VarInt(0),
+            },
         }
     }
 
@@ -366,12 +378,14 @@ impl Client2Server {
         };
 
         if self.state.lock().await.read_from == self.client {
-            if packet.packet_id().await.unwrap().0 == 0x13
-                && self.client == Client::Cheat
-                && self.state.lock().await.legit_alive
-            {
-                let _ = self.position_look(&packet).await;
-            };
+            match packet.packet_id().await.unwrap().0 {
+                0x12 | 0x13 | 0x14 => {
+                    if self.client == Client::Cheat && self.state.lock().await.legit_alive {
+                        let _ = self.position_fix(&packet).await;
+                    }
+                }
+                _ => (),
+            }
 
             self.tx
                 .send(packet)
@@ -381,23 +395,36 @@ impl Client2Server {
             Ok(())
         }
     }
-    async fn position_look(&self, packet: &Packet) -> io::Result<()> {
+
+    async fn position_fix(&mut self, packet: &Packet) -> io::Result<()> {
         match packet {
             Packet::UnCompressed(t) => {
-                let pl = PositionLook::deserialize(t).await?;
-                let position = Position {
-                    packet_id: VarInt(0x34),
-                    x: pl.x,
-                    y: pl.y,
-                    z: pl.z,
-                    yaw: pl.yaw,
-                    pitch: pl.pitch,
-                    flags: 0,
-                    teleportid: VarInt(0),
-                };
+                match t.packet_id.0 {
+                    0x12 => {
+                        let pos = CPosition::deserialize(t).await?;
+                        self.prev_pos.x = pos.x;
+                        self.prev_pos.y = pos.y;
+                        self.prev_pos.z = pos.z;
+                    }
+                    0x13 => {
+                        let pos = PositionLook::deserialize(t).await?;
+                        self.prev_pos.x = pos.x;
+                        self.prev_pos.y = pos.y;
+                        self.prev_pos.z = pos.z;
+                        self.prev_pos.yaw = pos.yaw;
+                        self.prev_pos.pitch = pos.pitch;
+                    }
+                    0x14 => {
+                        let pos = Look::deserialize(t).await?;
+                        self.prev_pos.yaw = pos.yaw;
+                        self.prev_pos.pitch = pos.pitch;
+                    }
+                    _ => unreachable!(),
+                }
+
                 let _ = self
                     .legit_tx
-                    .send(Packet::UnCompressed(position.serialize()))
+                    .send(Packet::UnCompressed(self.prev_pos.clone().serialize()))
                     .await;
             }
             Packet::Compressed(_) => (),

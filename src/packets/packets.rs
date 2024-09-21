@@ -73,7 +73,7 @@ impl LoginStart {
 }
 
 /// PacketID 0x03
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SetCompression {
     pub packet_id: VarInt,
     pub threshold: VarInt,
@@ -145,7 +145,8 @@ impl Status {
     }
 }
 
-// PacketID 0x34
+/// PacketID 0x34
+#[derive(Clone)]
 pub struct Position {
     pub packet_id: VarInt,
     pub x: f64,
@@ -195,7 +196,46 @@ impl Position {
     }
 }
 
-// PacketID 0x34
+/// PacketID 0x12
+#[derive(Debug)]
+pub struct CPosition {
+    pub packet_id: VarInt,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub on_ground: bool,
+}
+
+impl CPosition {
+    pub fn serialize(self) -> UncompressedPacket {
+        PacketBuilder::new(self.packet_id.clone())
+            .write_int(self.x)
+            .write_int(self.y)
+            .write_int(self.z)
+            .write_bool(self.on_ground)
+            .build()
+    }
+
+    pub async fn deserialize(packet: &UncompressedPacket) -> io::Result<Self> {
+        let mut packet_reader = PacketReader::new(packet);
+        let packet_id = packet.packet_id.clone();
+
+        let x: f64 = packet_reader.read_int()?;
+        let y: f64 = packet_reader.read_int()?;
+        let z: f64 = packet_reader.read_int()?;
+        let on_ground = packet_reader.read_bool()?;
+
+        Ok(CPosition {
+            packet_id,
+            x,
+            y,
+            z,
+            on_ground,
+        })
+    }
+}
+
+/// PacketID 0x13
 #[derive(Debug)]
 pub struct PositionLook {
     pub packet_id: VarInt,
@@ -235,6 +275,41 @@ impl PositionLook {
             x,
             y,
             z,
+            yaw,
+            pitch,
+            on_ground,
+        })
+    }
+}
+
+/// PacketID 0x14
+#[derive(Debug)]
+pub struct Look {
+    pub packet_id: VarInt,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub on_ground: bool,
+}
+
+impl Look {
+    pub fn serialize(self) -> UncompressedPacket {
+        PacketBuilder::new(self.packet_id.clone())
+            .write_int(self.yaw)
+            .write_int(self.pitch)
+            .write_bool(self.on_ground)
+            .build()
+    }
+
+    pub async fn deserialize(packet: &UncompressedPacket) -> io::Result<Self> {
+        let mut packet_reader = PacketReader::new(packet);
+        let packet_id = packet.packet_id.clone();
+
+        let yaw: f32 = packet_reader.read_int()?;
+        let pitch: f32 = packet_reader.read_int()?;
+        let on_ground = packet_reader.read_bool()?;
+
+        Ok(Look {
+            packet_id,
             yaw,
             pitch,
             on_ground,
