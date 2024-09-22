@@ -5,7 +5,7 @@ use trust_dns_resolver::config::*;
 use trust_dns_resolver::TokioAsyncResolver;
 use get_if_addrs::get_if_addrs;
 
-pub const LOG_LEVEL: i32 = 0;
+pub const LOG_LEVEL: i32 = 1;
 
 pub fn get_local_ip() -> Option<String> {
     for iface in get_if_addrs().unwrap() {
