@@ -2,8 +2,8 @@ use auto_update::check_for_updates;
 use dialoguer::{Input, Select};
 use minecraft_protocol::{types::var_int::VarInt, Packet};
 use packets::packets::{
-    CPosition, ChatMessage, Handshake, LoginStart, Look, Position, PositionLook, SetCompression,
-    Status,
+    c2s::{ChatMessage, Handshake, LoginStart, Look, Position as CPosition, PositionLook},
+    s2c::{Position, SetCompression, Status},
 };
 use serde_json::json;
 use std::{
@@ -146,7 +146,6 @@ async fn recieve_streams(
     println!("Успех");
 
     let handshake = Handshake {
-        packet_id: VarInt(0),
         protocol_version: VarInt(proxy_config.status.protocol),
         server_address: proxy_config.server_addr.ip.clone(),
         server_port: proxy_config.server_addr.port,
@@ -347,7 +346,6 @@ impl Client2Server {
             config,
             legit_tx,
             prev_pos: Position {
-                packet_id: VarInt(0x34),
                 x: 0.0,
                 y: 0.0,
                 z: 0.0,
@@ -485,7 +483,6 @@ async fn status(socket: &mut TcpStream, status: &ProxyServerStatus) -> io::Resul
     let _status_req = Packet::read_uncompressed(socket).await?;
 
     let response = Status {
-        packet_id: VarInt(0x00),
         status: status.serialize(),
     };
     response.serialize().write(socket).await?;
