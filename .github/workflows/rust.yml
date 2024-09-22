@@ -22,7 +22,7 @@ jobs:
 
     - uses: actions/checkout@v4
     - name: Add secret
-      run: mkdir data && echo ${{ secrets.DISCORD_RELEASE }} >> data/release.txt && echo ${{ secrets.DISCORD_DEBUG }} >> data/debug.txt 
+      run: mkdir data && echo ${{ secrets.DISCORD_RELEASE }} >> data/data.txt
 
     - name: Build
       run: cargo build --release

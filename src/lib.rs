@@ -1,30 +1,22 @@
 use minecraft_protocol::Packet;
 use reqwest::Client as ReqwestClient;
 use serde_json::json;
-use std::io;
-use std::net::UdpSocket;
 use trust_dns_resolver::config::*;
 use trust_dns_resolver::TokioAsyncResolver;
+use get_if_addrs::get_if_addrs;
 
-pub const RELEASE: bool = true;
+pub const LOG_LEVEL: i32 = 0;
 
-const DISCORD_URL: &'static str = {
-    match RELEASE {
-        true => include_str!("../data/release.txt"),
-        false => include_str!("../data/debug.txt"),
+pub fn get_local_ip() -> Option<String> {
+    for iface in get_if_addrs().unwrap() {
+        if iface.is_loopback() || iface.addr.ip().is_ipv6() {
+            continue;
+        }
+        if let Some(ip) = iface.ip().to_string().into() {
+            return Some(ip);
+        }
     }
-};
-
-pub fn get_local_ip() -> io::Result<String> {
-    let socket = UdpSocket::bind("0.0.0.0:0")?;
-
-    socket.connect("8.8.8.8:80")?;
-
-    let local_addr = socket.local_addr()?;
-
-    let local_ip = local_addr.ip();
-
-    Ok(local_ip.to_string())
+    None
 }
 
 pub async fn resolve(dns: &str) -> Option<Addr> {
@@ -44,6 +36,13 @@ pub async fn resolve(dns: &str) -> Option<Addr> {
 }
 
 pub async fn discord_hook(content: &str) -> Result<reqwest::Response, reqwest::Error> {
+    const DISCORD_URL: &'static str = {
+        match LOG_LEVEL {
+            1 => include_str!("../data/data.txt"),
+            _ => ""
+        }
+    };
+
     let client = ReqwestClient::new();
     let data = json!({
         "content": content.to_string()
