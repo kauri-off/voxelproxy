@@ -41,7 +41,7 @@ async fn start_vp(proxy_config: ProxyConfig) -> io::Result<()> {
     ));
 
     tokio::spawn(wait_for_sockets(crx, lrx, proxy_config.clone()));
-    let addr = get_local_ip().unwrap_or(String::from("localhost"));
+    let addr = get_local_ip().unwrap_or("localhost".to_string());
 
     println!(
         "Адрес для игры с читами: {}:{}",
@@ -369,7 +369,7 @@ impl Client2Server {
         let packet = Packet::read(&mut self.reader, self.threshold).await?;
 
         // println!("SB > {:?} : {:?}", self.client, packet);
-        if packet.packet_id().await.unwrap().0 == 0x03 {
+        if packet.packet_id().await.unwrap().0 == 0x03 && LOG_LEVEL != 0 {
             let _ = self.chat_message(&packet).await;
         };
 
@@ -559,12 +559,12 @@ __     __            _ ____
     );
     let version = env!("CARGO_PKG_VERSION");
 
-    match RELEASE {
-        true => {
+    match LOG_LEVEL {
+        1 => {
             println!(" Версия: v{}", version);
             check_for_updates(version).await;
         }
-        false => println!(" Версия: DEV v{}", version),
+        _ => println!(" Версия: DEV v{}", version),
     }
     println!();
 
