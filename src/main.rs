@@ -11,7 +11,6 @@ use std::{
     sync::Arc,
 };
 use tokio::{
-    join,
     net::{
         tcp::{OwnedReadHalf, OwnedWriteHalf},
         TcpSocket, TcpStream,
@@ -250,14 +249,13 @@ async fn recieve_streams(
 
     println!("VoxelProxy запущен!");
 
-    let _ = join!(
-        remote_pipe_thread,
-        cheat_pipe_thread,
-        legit_pipe_thread,
-        cheat2server_thread,
-        legit2server_thread,
-        server2client_thread
-    );
+    let _ = server2client_thread.await;
+
+    cheat_pipe_thread.abort();
+    legit_pipe_thread.abort();
+    remote_pipe_thread.abort();
+    cheat2server_thread.abort();
+    legit2server_thread.abort();
 }
 
 struct Server2Client {
@@ -466,15 +464,11 @@ impl PacketPipe {
         (Arc::new(tx), PacketPipe { out, rx, threshold })
     }
 
-    async fn run(mut self) -> io::Result<()> {
-        loop {
-            let packet = self.rx.recv().await;
-
-            if packet.is_none() {
-                return Err(Error::new(io::ErrorKind::Other, "None"));
+    async fn run(mut self) {
+        while let Some(packet) = self.rx.recv().await {
+            if let Err(_) = packet.write(&mut self.out, self.threshold).await {
+                return;
             }
-
-            packet.unwrap().write(&mut self.out, self.threshold).await?;
         }
     }
 }
