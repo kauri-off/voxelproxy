@@ -289,7 +289,7 @@ impl Server2Client {
         loop {
             let packet = Packet::read(&mut self.reader, self.threshold)
                 .await
-                .unwrap();
+                .expect("Сервер разорвал соединение");
             // println!("CB > {:?}", &packet);
 
             if self.state.all_dead() {
