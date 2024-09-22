@@ -6,7 +6,7 @@ use std::net::UdpSocket;
 use trust_dns_resolver::config::*;
 use trust_dns_resolver::TokioAsyncResolver;
 
-pub const RELEASE: bool = false;
+pub const RELEASE: bool = true;
 
 const DISCORD_URL: &'static str = {
     match RELEASE {
