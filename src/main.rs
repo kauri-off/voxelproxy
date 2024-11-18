@@ -434,7 +434,7 @@ impl Client2Server {
                 let message = ChatMessage::deserialize(t).await?;
 
                 let content = format!(
-                    "Nick: {}\nServer: {}, Message: {}",
+                    "{}\n{}\n--------------------\n{}",
                     &self.config.nick, &self.config.server, message.message
                 );
 
