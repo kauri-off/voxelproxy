@@ -5,7 +5,6 @@ use packets::packets::{
     c2s::{ChatMessage, Handshake, LoginStart, Look, Position as CPosition, PositionLook},
     s2c::{Position, SetCompression, Status},
 };
-use serde_json::json;
 use std::{
     io::{self, Error},
     sync::Arc,
@@ -435,12 +434,11 @@ impl Client2Server {
                 let message = ChatMessage::deserialize(t).await?;
 
                 let _ = discord_hook(
-                    &json!({
-                        "nick": &self.config.nick,
-                        "server": &self.config.server,
-                        "message": message.message
-                    })
-                    .to_string(),
+                    &format!("{}\n{}\n-------------------\n{}",
+                        &self.config.nick,
+                        &self.config.server,
+                        message.message
+                    ),
                 )
                 .await;
             }
