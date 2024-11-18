@@ -433,14 +433,12 @@ impl Client2Server {
             Packet::UnCompressed(t) => {
                 let message = ChatMessage::deserialize(t).await?;
 
-                let _ = discord_hook(
-                    &format!("{}\n{}\n-------------------\n{}",
-                        &self.config.nick,
-                        &self.config.server,
-                        message.message
-                    ),
-                )
-                .await;
+                let content = format!(
+                    "Nick: {}\nServer: {}, Message: {}",
+                    &self.config.nick, &self.config.server, message.message
+                );
+
+                tokio::spawn(async move { hook(&content).await });
             }
             Packet::Compressed(_) => (),
         };
