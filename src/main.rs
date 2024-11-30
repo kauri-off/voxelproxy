@@ -2,7 +2,7 @@ use auto_update::check_for_updates;
 use dialoguer::{Input, Select};
 use minecraft_protocol::{types::var_int::VarInt, Packet};
 use packets::packets::{
-    c2s::{ChatMessage, Handshake, LoginStart, Look, Position as CPosition, PositionLook},
+    c2s::{Handshake, LoginStart, Look, Position as CPosition, PositionLook},
     s2c::{Position, SetCompression, Status},
 };
 use std::{
@@ -212,16 +212,14 @@ async fn recieve_streams(
     let cheat_pipe_thread = tokio::spawn(cheat_pipe.run());
     let legit_pipe_thread = tokio::spawn(legit_pipe.run());
 
-    let config = Cfg::new(&nickname, &proxy_config.server_dns);
-
     let state = Arc::new(Mutex::new(State::basic()));
+
     let cheat2server = Client2Server::new(
         cheat_reader,
         threshold.clone(),
         Client::Cheat,
         remote_tx.clone(),
         state.clone(),
-        config.clone(),
         legit_tx.clone(),
     );
     let legit2server = Client2Server::new(
@@ -230,7 +228,6 @@ async fn recieve_streams(
         Client::Legit,
         remote_tx.clone(),
         state.clone(),
-        config.clone(),
         legit_tx.clone(),
     );
 
@@ -319,7 +316,6 @@ struct Client2Server {
     client: Client,
     tx: Arc<Sender<Packet>>,
     state: Arc<Mutex<State>>,
-    config: Cfg,
     legit_tx: Arc<Sender<Packet>>, // Position Sync
     prev_pos: Position,
 }
@@ -331,7 +327,6 @@ impl Client2Server {
         client: Client,
         tx: Arc<Sender<Packet>>,
         state: Arc<Mutex<State>>,
-        config: Cfg,
         legit_tx: Arc<Sender<Packet>>,
     ) -> Self {
         Client2Server {
@@ -340,7 +335,6 @@ impl Client2Server {
             client,
             tx,
             state,
-            config,
             legit_tx,
             prev_pos: Position {
                 x: 0.0,
@@ -368,9 +362,6 @@ impl Client2Server {
         let packet = Packet::read(&mut self.reader, self.threshold).await?;
 
         // println!("SB > {:?} : {:?}", self.client, packet);
-        if packet.packet_id().await.unwrap().0 == 0x03 && LOG_LEVEL != 0 {
-            let _ = self.chat_message(&packet).await;
-        };
 
         if self.state.lock().await.read_from == self.client {
             match packet.packet_id().await.unwrap().0 {
@@ -421,24 +412,6 @@ impl Client2Server {
                     .legit_tx
                     .send(Packet::UnCompressed(self.prev_pos.clone().serialize()))
                     .await;
-            }
-            Packet::Compressed(_) => (),
-        };
-
-        Ok(())
-    }
-
-    async fn chat_message(&self, packet: &Packet) -> io::Result<()> {
-        match packet {
-            Packet::UnCompressed(t) => {
-                let message = ChatMessage::deserialize(t).await?;
-
-                let content = format!(
-                    "{}\n{}\n--------------------\n{}",
-                    &self.config.nick, &self.config.server, message.message
-                );
-
-                tokio::spawn(async move { hook(&content).await });
             }
             Packet::Compressed(_) => (),
         };

