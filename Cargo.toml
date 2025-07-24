@@ -1,13 +1,24 @@
 [package]
 name = "voxelproxy"
-version = "2.4.2"
+version = "3.0.0"
 edition = "2021"
 
 [dependencies]
 tokio = { version = "1.38.1", features = ["full"] }
-minecraft_protocol = { path = "minecraft_protocol" }
 serde_json = "1.0.128"
 trust-dns-resolver = "0.23.2"
 dialoguer = "0.11.0"
 reqwest = { version = "0.12.7", features = ["json"] }
+anyhow = "1.0.98"
+#minecraft_protocol = { git = "https://github.com/kauri-off/minecraft_protocol.git" }
+minecraft_protocol = { path = "C:/Users/kauri/dev/minecraft_protocol" }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61.3", features = [
+    "Win32_Networking_WinSock", 
+    "Win32_NetworkManagement_IpHelper", 
+    "Win32_NetworkManagement_Ndis"
+] }
+
+#[target.'cfg(linux)'.dependencies]
 get_if_addrs = "0.5.3"

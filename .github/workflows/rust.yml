@@ -2,35 +2,34 @@ name: Rust
 
 on:
   push:
-    branches: [ "master" ]
+    branches: ["master"]
   pull_request:
-    branches: [ "master" ]
+    branches: ["master"]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   build:
-
     runs-on: windows-latest
 
     steps:
-    - name: Set up Rust
-      uses: actions-rs/toolchain@v1.0.7
-      with:
-        toolchain: stable
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1.0.7
+        with:
+          toolchain: stable
 
-    - uses: actions/checkout@v4
-    - name: Add secret
-      run: mkdir data && echo ${{ secrets.TOKEN }} >> data/data.txt
+      - uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: "5.38"
 
-    - name: Build
-      run: cargo build --release
+      - name: Build
+        run: cargo build --release
 
-    - name: Change Icon
-      run: curl -L -O https://github.com/electron/rcedit/releases/download/v1.1.1/rcedit-x64.exe && ./rcedit-x64.exe target/release/voxelproxy.exe --set-icon voxelproxy.ico
+      - name: Change Icon
+        run: curl -L -O https://github.com/electron/rcedit/releases/download/v1.1.1/rcedit-x64.exe && ./rcedit-x64.exe target/release/voxelproxy.exe --set-icon voxelproxy.ico
 
-    - uses: actions/upload-artifact@v4
-      with:
-        name: voxelproxy
-        path: target/release/voxelproxy.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voxelproxy
+          path: target/release/voxelproxy.exe
