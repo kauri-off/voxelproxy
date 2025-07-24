@@ -23,6 +23,8 @@ jobs:
         with:
           perl-version: "5.38"
 
+      - uses: actions/checkout@v4
+
       - name: Build
         run: cargo build --release
 
