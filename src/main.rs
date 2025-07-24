@@ -70,9 +70,6 @@ __     __            _ ____
             Err(e) => {
                 println!("При проверки обновлений произошла ошибка: {}", e);
                 println!("Проверьте соединение к интернету");
-                loop {
-                    let _: String = dialoguer::Input::new().interact_text().unwrap();
-                }
             }
         }
     }

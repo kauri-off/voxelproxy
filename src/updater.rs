@@ -13,32 +13,44 @@ pub async fn has_update(current_version: &str) -> anyhow::Result<Option<NewVersi
     let client = Client::new();
 
     let mut headers = HeaderMap::new();
-    headers.append("User-Agent", HeaderValue::from_str("VP Updater").unwrap());
-    headers.append(
+    headers.insert("User-Agent", HeaderValue::from_static("VP Updater"));
+    headers.insert(
         "Accept",
-        HeaderValue::from_str("application/vnd.github+json").unwrap(),
+        HeaderValue::from_static("application/vnd.github+json"),
     );
-    headers.append(
+    headers.insert(
         "X-GitHub-Api-Version",
-        HeaderValue::from_str("2022-11-28").unwrap(),
+        HeaderValue::from_static("2022-11-28"),
     );
 
-    let response: Value = client
+    let response = client
         .get("https://api.github.com/repos/kauri-off/voxelproxy/releases/latest")
         .headers(headers)
         .send()
         .await?
-        .json()
-        .await?;
+        .error_for_status()?; // Проверка на 4xx/5xx статус
 
-    if response["tag_name"].as_str().unwrap_or("") != current_version {
-        let tag = response["tag_name"].as_str().unwrap_or("").to_string();
-        let link = response["assets"][0]["browser_download_url"]
-            .as_str()
-            .unwrap_or("Error")
-            .to_string();
-        return Ok(Some(NewVersion { tag, link }));
+    let json: Value = response.json().await?;
+
+    let tag = json
+        .get("tag_name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("Missing or invalid 'tag_name' field"))?;
+
+    if tag == current_version {
+        return Ok(None);
     }
 
-    Ok(None)
+    let asset_url = json
+        .get("assets")
+        .and_then(Value::as_array)
+        .and_then(|assets| assets.first())
+        .and_then(|asset| asset.get("browser_download_url"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("Missing or invalid asset download URL"))?;
+
+    Ok(Some(NewVersion {
+        tag: tag.to_string(),
+        link: asset_url.to_string(),
+    }))
 }
