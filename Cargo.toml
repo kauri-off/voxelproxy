@@ -10,8 +10,7 @@ trust-dns-resolver = "0.23.2"
 dialoguer = "0.11.0"
 reqwest = { version = "0.12.7", features = ["json"] }
 anyhow = "1.0.98"
-#minecraft_protocol = { git = "https://github.com/kauri-off/minecraft_protocol.git" }
-minecraft_protocol = { path = "C:/Users/kauri/dev/minecraft_protocol" }
+minecraft_protocol = { git = "https://github.com/kauri-off/minecraft_protocol.git" }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61.3", features = [
