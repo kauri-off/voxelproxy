@@ -1,0 +1,58 @@
+name: Rust Release
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1.0.7
+        with:
+          toolchain: stable
+
+      - uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: "5.38"
+
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Change Icon
+        run: curl -L -O https://github.com/electron/rcedit/releases/download/v1.1.1/rcedit-x64.exe && ./rcedit-x64.exe target/release/voxelproxy.exe --set-icon voxelproxy.ico
+
+      - name: Extract version from Cargo.toml
+        id: version
+        shell: bash
+        run: |
+          ver=$(grep '^version =' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          echo "version=$ver" >> $GITHUB_OUTPUT
+
+      - name: Get last commit message
+        id: changelog
+        shell: bash
+        run: |
+          msg=$(git log -1 --pretty=format:"%s")
+          echo "msg=$msg" >> $GITHUB_OUTPUT
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voxelproxy
+          path: target/release/voxelproxy.exe
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Release ${{ steps.version.outputs.version }}
+          body: ${{ steps.changelog.outputs.msg }}
+          files: target/release/voxelproxy.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
