@@ -37,7 +37,7 @@ pub struct Controller {
     position: s2c::Position,
     last_action: i16,
     need_sync: bool,
-    bypass_funtime: bool,
+    bypass: bool,
 }
 
 impl Controller {
@@ -48,7 +48,7 @@ impl Controller {
         remote_tx: Sender<RawPacket>,
         event_rx: Receiver<Event>,
         threshold: Option<i32>,
-        bypass_funtime: bool,
+        bypass: bool,
     ) -> Self {
         Self {
             active_client,
@@ -69,7 +69,7 @@ impl Controller {
             },
             last_action: 0,
             need_sync: false,
-            bypass_funtime,
+            bypass,
         }
     }
     pub async fn run(mut self) {
@@ -113,11 +113,11 @@ impl Controller {
                                 }
                             }
                         }
-                        if self.bypass_funtime {
+                        if self.bypass {
                             if let Ok(Some(packet)) = packet.try_uncompress(self.threshold) {
                                 if packet.packet_id.0 == 0x07 {
                                     if let Ok(t) = packet.convert::<c2s::Transaction>() {
-                                        if t.action < -500 {
+                                        if t.action < 0 {
                                             if self.need_sync {
                                                 println!(
                                                     "Синхронизация: {} -> {}",
