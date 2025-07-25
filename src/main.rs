@@ -23,6 +23,8 @@ use crate::{
 };
 
 mod controller;
+#[cfg(target_os = "windows")]
+mod keybind;
 mod local_ip;
 #[allow(dead_code)]
 mod packets;
@@ -31,6 +33,13 @@ mod updater;
 
 #[tokio::main]
 async fn main() {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use windows::Win32::System::Console::AllocConsole;
+
+        AllocConsole().unwrap(); // создаёт новое окно консоли (conhost.exe)
+    }
+
     println!(
         r#"
 __     __            _ ____
@@ -73,6 +82,17 @@ __     __            _ ____
                 println!("Проверьте соединение к интернету");
             }
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::sync::mpsc;
+
+        use crate::keybind::setup_keybind;
+        let (tx, rx) = mpsc::channel();
+
+        std::thread::spawn(|| unsafe { setup_keybind(tx) });
+        println!("{}", rx.recv().unwrap());
     }
 
     let (remote_addr, remote_dns) = {

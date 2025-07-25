@@ -66,7 +66,7 @@ pub fn get_local_ip() -> Option<Ipv4Addr> {
     return preferred_ip;
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(not(target_os = "windows"))]
 pub fn get_local_ip() -> Option<Ipv4Addr> {
     use get_if_addrs::get_if_addrs;
     get_if_addrs()
