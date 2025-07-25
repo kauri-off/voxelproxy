@@ -37,6 +37,7 @@ pub struct Controller {
     position: s2c::Position,
     last_action: i16,
     need_sync: bool,
+    bypass_funtime: bool,
 }
 
 impl Controller {
@@ -47,6 +48,7 @@ impl Controller {
         remote_tx: Sender<RawPacket>,
         event_rx: Receiver<Event>,
         threshold: Option<i32>,
+        bypass_funtime: bool,
     ) -> Self {
         Self {
             active_client,
@@ -67,6 +69,7 @@ impl Controller {
             },
             last_action: 0,
             need_sync: false,
+            bypass_funtime,
         }
     }
     pub async fn run(mut self) {
@@ -110,50 +113,52 @@ impl Controller {
                                 }
                             }
                         }
-
-                        if let Ok(Some(packet)) = packet.try_uncompress(self.threshold) {
-                            if packet.packet_id.0 == 0x07 {
-                                if let Ok(t) = packet.convert::<c2s::Transaction>() {
-                                    if t.action < -500 {
-                                        if self.need_sync {
-                                            println!(
-                                                "Синхронизация: {} -> {}",
-                                                t.action, self.last_action
-                                            );
-                                            if self.last_action <= t.action {
-                                                continue;
-                                            } else if self.last_action == t.action + 1 {
-                                                self.need_sync = false;
-                                                self.last_action = t.action;
-                                            } else {
-                                                for i in (t.action + 1..=self.last_action - 1).rev()
-                                                {
-                                                    println!("Синхронизация: Отправка {}", i);
-                                                    let mut new_transaction = t.clone();
-                                                    new_transaction.action = i;
-                                                    let new_transaction = match self.threshold {
-                                                        Some(t) => new_transaction
-                                                            .as_uncompressed()
-                                                            .unwrap()
-                                                            .compress(t as usize)
-                                                            .unwrap()
-                                                            .to_raw_packet(),
-                                                        None => new_transaction
-                                                            .as_uncompressed()
-                                                            .unwrap()
-                                                            .to_raw_packet()
-                                                            .unwrap(),
-                                                    };
-                                                    self.remote_tx
-                                                        .send(new_transaction)
-                                                        .await
-                                                        .unwrap();
+                        if self.bypass_funtime {
+                            if let Ok(Some(packet)) = packet.try_uncompress(self.threshold) {
+                                if packet.packet_id.0 == 0x07 {
+                                    if let Ok(t) = packet.convert::<c2s::Transaction>() {
+                                        if t.action < -500 {
+                                            if self.need_sync {
+                                                println!(
+                                                    "Синхронизация: {} -> {}",
+                                                    t.action, self.last_action
+                                                );
+                                                if self.last_action <= t.action {
+                                                    continue;
+                                                } else if self.last_action == t.action + 1 {
+                                                    self.need_sync = false;
+                                                    self.last_action = t.action;
+                                                } else {
+                                                    for i in
+                                                        (t.action + 1..=self.last_action - 1).rev()
+                                                    {
+                                                        println!("Синхронизация: Отправка {}", i);
+                                                        let mut new_transaction = t.clone();
+                                                        new_transaction.action = i;
+                                                        let new_transaction = match self.threshold {
+                                                            Some(t) => new_transaction
+                                                                .as_uncompressed()
+                                                                .unwrap()
+                                                                .compress(t as usize)
+                                                                .unwrap()
+                                                                .to_raw_packet(),
+                                                            None => new_transaction
+                                                                .as_uncompressed()
+                                                                .unwrap()
+                                                                .to_raw_packet()
+                                                                .unwrap(),
+                                                        };
+                                                        self.remote_tx
+                                                            .send(new_transaction)
+                                                            .await
+                                                            .unwrap();
+                                                    }
+                                                    self.need_sync = false;
+                                                    self.last_action = t.action;
                                                 }
-                                                self.need_sync = false;
+                                            } else {
                                                 self.last_action = t.action;
                                             }
-                                        } else {
-                                            self.last_action = t.action;
                                         }
                                     }
                                 }

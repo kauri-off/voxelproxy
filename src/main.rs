@@ -248,7 +248,7 @@ async fn handle_clients(
 
     let handshake = c2s::Handshake {
         protocol_version: VarInt(cheat_protocol),
-        server_address: remote_dns,
+        server_address: remote_dns.clone(),
         server_port: 25565,
         intent: VarInt(2),
     };
@@ -328,6 +328,11 @@ async fn handle_clients(
     let (legit_tx, legit_rx) = mpsc::channel(100);
     let (remote_tx, remote_rx) = mpsc::channel(100);
 
+    let bypass_funtime = if remote_dns == "mc.funtime.su" {
+        true
+    } else {
+        false
+    };
     let controller = Controller::new(
         ClientId::C,
         cheat_tx,
@@ -335,6 +340,7 @@ async fn handle_clients(
         remote_tx,
         event_rx,
         threshold,
+        bypass_funtime,
     );
 
     tokio::spawn(run_client(
