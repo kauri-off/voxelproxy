@@ -33,11 +33,21 @@ mod updater;
 
 #[tokio::main]
 async fn main() {
+    if let Err(e) = run().await {
+        println!("Ошибка: {}", e);
+    } else {
+        println!("Завершение работы?");
+    }
+    let _ = dialoguer::Confirm::new().interact();
+}
+
+async fn run() -> anyhow::Result<()> {
     #[cfg(target_os = "windows")]
+    #[cfg(not(debug_assertions))]
     unsafe {
         use windows::Win32::System::Console::AllocConsole;
 
-        AllocConsole().unwrap(); // создаёт новое окно консоли (conhost.exe)
+        AllocConsole()?;
     }
 
     println!(
@@ -71,7 +81,7 @@ __     __            _ ____
                     .arg(&new_version.link)
                     .output();
                 loop {
-                    let _: String = dialoguer::Input::new().interact_text().unwrap();
+                    let _: String = dialoguer::Input::new().interact_text()?;
                 }
             }
             Ok(None) => {
@@ -92,15 +102,14 @@ __     __            _ ____
         let (tx, rx) = mpsc::channel();
 
         std::thread::spawn(|| unsafe { setup_keybind(tx) });
-        println!("{}", rx.recv().unwrap());
+        println!("{}", rx.recv()?);
     }
 
     let (remote_addr, remote_dns) = {
         loop {
             let input: String = dialoguer::Input::with_theme(&ColorfulTheme::default())
                 .with_prompt("Введите адрес сервера")
-                .interact_text()
-                .unwrap();
+                .interact_text()?;
 
             if let Some(addr) = resolve_host_port(&input, 25565, "minecraft", "tcp").await {
                 break (addr, input);
@@ -132,7 +141,7 @@ __     __            _ ____
         Err(e) => {
             println!("Ошибка при создании сокета. {}", e);
             loop {
-                let _: String = dialoguer::Input::new().interact_text().unwrap();
+                let _: String = dialoguer::Input::new().interact_text()?;
             }
         }
     };
@@ -151,12 +160,9 @@ __     __            _ ____
         }
     });
 
-    if let Err(e) = handler.await.unwrap() {
-        println!("Ошибка: {}", e);
-        loop {
-            let _: String = dialoguer::Input::new().interact_text().unwrap();
-        }
-    }
+    handler.await??;
+
+    Ok(())
 }
 
 async fn handle_connection(
@@ -315,10 +321,7 @@ async fn handle_clients(
                 return Err(anyhow!("Licensed"));
             }
             2 => {
-                let packet = match threshold {
-                    Some(t) => packet.compress(t as usize)?.to_raw_packet(),
-                    None => packet.to_raw_packet()?,
-                };
+                let packet = packet.compress_to_raw(threshold)?;
                 packet.write(&mut cheat_stream).await?;
                 packet.write(&mut legit_stream).await?;
                 println!("[+] Login success");
@@ -363,7 +366,7 @@ async fn handle_clients(
         println!("[+] BYPASS Синхронизации")
     }
     let controller = Controller::new(
-        ClientId::C,
+        ClientId::Cheat,
         cheat_tx,
         legit_tx,
         remote_tx,
@@ -375,7 +378,7 @@ async fn handle_clients(
     tokio::spawn(run_client(
         cheat_read,
         cheat_write,
-        ClientId::C,
+        ClientId::Cheat,
         event_tx.clone(),
         cheat_rx,
     ));
@@ -383,7 +386,7 @@ async fn handle_clients(
     tokio::spawn(run_client(
         legit_read,
         legit_write,
-        ClientId::L,
+        ClientId::Legit,
         event_tx.clone(),
         legit_rx,
     ));

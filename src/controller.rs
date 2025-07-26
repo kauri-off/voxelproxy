@@ -12,8 +12,8 @@ use crate::packets::p767::{c2s, s2c};
 // Идентификаторы клиентов
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientId {
-    C,
-    L,
+    Cheat,
+    Legit,
 }
 
 // События для регулятора
@@ -22,7 +22,6 @@ pub enum Event {
     ClientData(ClientId, RawPacket),
     ClientDisconnected(ClientId),
     ServerData(RawPacket),
-    // SwitchActive,
 }
 
 // Регулятор
@@ -33,7 +32,8 @@ pub struct Controller {
     remote_tx: Sender<RawPacket>,
     event_rx: Receiver<Event>,
     threshold: Option<i32>,
-    both_active: bool,
+    cheat_active: bool,
+    legit_active: bool,
     position: s2c::Position,
     last_action: i16,
     need_sync: bool,
@@ -57,7 +57,8 @@ impl Controller {
             remote_tx,
             event_rx,
             threshold,
-            both_active: true,
+            cheat_active: true,
+            legit_active: true,
             position: s2c::Position {
                 x: 0.0,
                 y: 0.0,
@@ -77,35 +78,30 @@ impl Controller {
             match event {
                 Event::ClientData(client_id, packet) => {
                     if client_id == self.active_client {
-                        if self.both_active {
+                        if self.both_active() {
                             if let Ok(Some(packet)) = packet.try_uncompress(self.threshold) {
                                 match packet.packet_id.0 {
                                     0x12 | 0x13 | 0x14 => {
                                         let _ = self.update_position(&packet);
                                         // Уведомляем пассивного клиента
                                         let passive = match self.active_client {
-                                            ClientId::C => ClientId::L,
-                                            ClientId::L => ClientId::C,
+                                            ClientId::Cheat => ClientId::Legit,
+                                            ClientId::Legit => ClientId::Cheat,
                                         };
 
-                                        let notice = match self.threshold {
-                                            Some(t) => self
-                                                .position
-                                                .as_uncompressed()
-                                                .unwrap()
-                                                .compress(t as usize)
-                                                .unwrap()
-                                                .to_raw_packet(),
-                                            None => self
-                                                .position
-                                                .as_uncompressed()
-                                                .unwrap()
-                                                .to_raw_packet()
-                                                .unwrap(),
-                                        };
+                                        let notice = self
+                                            .position
+                                            .as_uncompressed()
+                                            .unwrap()
+                                            .compress_to_raw(self.threshold)
+                                            .unwrap();
                                         match passive {
-                                            ClientId::C => self.cheat_tx.send(notice).await.ok(),
-                                            ClientId::L => self.legit_tx.send(notice).await.ok(),
+                                            ClientId::Cheat => {
+                                                self.cheat_tx.send(notice).await.ok()
+                                            }
+                                            ClientId::Legit => {
+                                                self.legit_tx.send(notice).await.ok()
+                                            }
                                         };
                                     }
 
@@ -113,6 +109,7 @@ impl Controller {
                                 }
                             }
                         }
+
                         if self.bypass {
                             if let Ok(Some(packet)) = packet.try_uncompress(self.threshold) {
                                 if packet.packet_id.0 == 0x07 {
@@ -135,19 +132,11 @@ impl Controller {
                                                         println!("Синхронизация: Отправка {}", i);
                                                         let mut new_transaction = t.clone();
                                                         new_transaction.action = i;
-                                                        let new_transaction = match self.threshold {
-                                                            Some(t) => new_transaction
-                                                                .as_uncompressed()
-                                                                .unwrap()
-                                                                .compress(t as usize)
-                                                                .unwrap()
-                                                                .to_raw_packet(),
-                                                            None => new_transaction
-                                                                .as_uncompressed()
-                                                                .unwrap()
-                                                                .to_raw_packet()
-                                                                .unwrap(),
-                                                        };
+                                                        let new_transaction = new_transaction
+                                                            .as_uncompressed()
+                                                            .unwrap()
+                                                            .compress_to_raw(self.threshold)
+                                                            .unwrap();
                                                         self.remote_tx
                                                             .send(new_transaction)
                                                             .await
@@ -164,44 +153,44 @@ impl Controller {
                                 }
                             }
                         }
-                        // Перенаправляем активного клиента на сервер
+
                         if let Err(e) = self.remote_tx.send(packet).await {
-                            eprintln!("Server send error: {}", e);
+                            println!("Ошибка отправки пакета на сервер: {}", e);
+                            return;
                         }
                     }
                 }
                 Event::ClientDisconnected(client_id) => {
-                    if !self.both_active {
+                    if !self.both_active() {
                         println!("Оба клиента отключились");
                         return;
                     }
-                    self.both_active = false;
+                    match client_id {
+                        ClientId::Cheat => self.cheat_active = false,
+                        ClientId::Legit => self.legit_active = false,
+                    };
+
                     if self.active_client == client_id {
-                        // Автоматическое переключение при отключении активного
                         self.active_client = match client_id {
-                            ClientId::C => ClientId::L,
-                            ClientId::L => ClientId::C,
+                            ClientId::Cheat => ClientId::Legit,
+                            ClientId::Legit => ClientId::Cheat,
                         };
                         println!("Переключился на {:?}", self.active_client);
                         self.need_sync = true;
                     }
                 }
                 Event::ServerData(packet) => {
-                    // Рассылаем всем клиентам
-                    self.cheat_tx.send(packet.clone()).await.ok();
-                    self.legit_tx.send(packet).await.ok();
-                } // Event::SwitchActive => {
-                  //     if self.can_switch {
-                  //         self.active_client = match self.active_client {
-                  //             ClientId::C => ClientId::L,
-                  //             ClientId::L => ClientId::C,
-                  //         };
-                  //         println!(
-                  //             "Manually switched active client to {:?}",
-                  //             self.active_client
-                  //         );
-                  //     }
-                  // }
+                    if self.cheat_active {
+                        if self.cheat_tx.send(packet.clone()).await.is_err() {
+                            self.cheat_active = false;
+                        }
+                    }
+                    if self.legit_active {
+                        if self.legit_tx.send(packet).await.is_err() {
+                            self.legit_active = false;
+                        }
+                    }
+                }
             }
         }
     }
@@ -233,6 +222,10 @@ impl Controller {
 
         Ok(())
     }
+
+    fn both_active(&self) -> bool {
+        (self.cheat_active == self.legit_active) && self.cheat_active
+    }
 }
 
 // Запуск клиентского обработчика
@@ -249,7 +242,6 @@ pub async fn run_client(
             loop {
                 match RawPacket::read(&mut client_read).await {
                     Ok(packet) => {
-                        if client_id == ClientId::C {}
                         if event_tx
                             .send(Event::ClientData(client_id, packet))
                             .await

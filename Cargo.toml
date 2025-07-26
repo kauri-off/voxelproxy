@@ -1,14 +1,14 @@
 [package]
 name = "voxelproxy"
-version = "3.1.0"
+version = "3.1.1"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1.38.1", features = ["full"] }
-serde_json = "1.0.128"
+tokio = { version = "1.46.1", features = ["full"] }
+serde_json = "1.0.141"
 trust-dns-resolver = "0.23.2"
 dialoguer = "0.11.0"
-reqwest = { version = "0.12.7", features = ["json"] }
+reqwest = { version = "0.12.22", features = ["json"] }
 anyhow = "1.0.98"
 minecraft_protocol = { git = "https://github.com/kauri-off/minecraft_protocol.git" }
 
