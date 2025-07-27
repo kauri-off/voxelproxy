@@ -35,10 +35,19 @@ mod updater;
 async fn main() {
     if let Err(e) = run().await {
         println!("Ошибка: {}", e);
-    } else {
-        println!("Завершение работы?");
+
+        #[cfg(target_os = "windows")]
+        #[cfg(not(debug_assertions))]
+        unsafe {
+            use windows::Win32::{
+                System::Console::GetConsoleWindow,
+                UI::WindowsAndMessaging::{ShowWindow, SW_SHOW},
+            };
+
+            let _ = ShowWindow(GetConsoleWindow(), SW_SHOW);
+        }
+        let _: String = dialoguer::Input::new().interact_text().unwrap();
     }
-    let _ = dialoguer::Confirm::new().interact();
 }
 
 async fn run() -> anyhow::Result<()> {
@@ -47,7 +56,7 @@ async fn run() -> anyhow::Result<()> {
     unsafe {
         use windows::Win32::System::Console::AllocConsole;
 
-        AllocConsole()?;
+        AllocConsole().unwrap();
     }
 
     println!(
