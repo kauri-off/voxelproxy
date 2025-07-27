@@ -3,7 +3,7 @@ use trust_dns_resolver::{config::*, TokioAsyncResolver};
 
 fn parse_host_port(input: &str, default_port: u16) -> (String, u16) {
     if let Some((host, port)) = input.rsplit_once(':') {
-        // Проверка: может ли `port` быть числом, а `host` — не IPv6
+        
         if port.parse::<u16>().is_ok() && !host.contains(']') && !host.contains(':') {
             return (host.to_string(), port.parse().unwrap());
         }

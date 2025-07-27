@@ -28,7 +28,7 @@ pub async fn has_update(current_version: &str) -> anyhow::Result<Option<NewVersi
         .headers(headers)
         .send()
         .await?
-        .error_for_status()?; // Проверка на 4xx/5xx статус
+        .error_for_status()?;
 
     let json: Value = response.json().await?;
 

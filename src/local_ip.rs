@@ -50,9 +50,9 @@ pub fn get_local_ip() -> Option<Ipv4Addr> {
                         let ip = Ipv4Addr::new(octets[4], octets[5], octets[6], octets[7]);
 
                         if ip.octets()[0] == 192 && ip.octets()[1] == 168 {
-                            return Some(ip); // приоритет — сразу возвращаем
+                            return Some(ip); 
                         } else if preferred_ip.is_none() {
-                            preferred_ip = Some(ip); // сохранить как запасной
+                            preferred_ip = Some(ip); 
                         }
                     }
                     addr = (*addr).Next;

@@ -9,7 +9,6 @@ use tokio::{
 
 use crate::packets::p767::{c2s, s2c};
 
-// Идентификаторы клиентов
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientId {
     Cheat,
@@ -25,7 +24,6 @@ impl ClientId {
     }
 }
 
-// События для регулятора
 #[derive(Debug)]
 pub enum Event {
     ClientData(ClientId, RawPacket),
@@ -64,7 +62,6 @@ impl TransactionSync {
     }
 }
 
-// Регулятор
 pub struct Controller {
     active_client: ClientId,
     cheat_tx: Sender<RawPacket>,
@@ -121,19 +118,14 @@ impl Controller {
                                     | c2s::Position::PACKET_ID
                                     | c2s::PositionLook::PACKET_ID => {
                                         let _ = self.update_position(&packet);
-                                        // Уведомляем пассивного клиента
-                                        let passive = match self.active_client {
-                                            ClientId::Cheat => ClientId::Legit,
-                                            ClientId::Legit => ClientId::Cheat,
-                                        };
-
                                         let notice = self
                                             .position
                                             .as_uncompressed()
                                             .unwrap()
                                             .compress_to_raw(self.threshold)
                                             .unwrap();
-                                        match passive {
+
+                                        match self.active_client.opposite() {
                                             ClientId::Cheat => {
                                                 self.cheat_tx.send(notice).await.ok()
                                             }
@@ -283,7 +275,6 @@ impl Controller {
     }
 }
 
-// Запуск клиентского обработчика
 pub async fn run_client(
     read_half: OwnedReadHalf,
     write_half: OwnedWriteHalf,
@@ -317,13 +308,12 @@ pub async fn run_client(
         },
         async move {
             while let Some(packet) = packet_rx.recv().await {
-                let _ = packet.write(&mut client_write).await.is_err();
+                let _ = packet.write(&mut client_write).await;
             }
         }
     );
 }
 
-// Запуск серверного обработчика
 pub async fn run_server(
     read_half: tokio::net::tcp::OwnedReadHalf,
     write_half: tokio::net::tcp::OwnedWriteHalf,
