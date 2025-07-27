@@ -315,7 +315,7 @@ async fn handle_clients(
                 error_handler(
                     &mut cheat_stream,
                     &mut legit_stream,
-                    "Лицензионный сервер пока не поддерживается".to_string(),
+                    "Лицензионный сервер не поддерживается\nИспользуйте ViaProxy".to_string(),
                 )
                 .await;
                 return Err(anyhow!("Licensed"));
@@ -351,20 +351,6 @@ async fn handle_clients(
     let (legit_tx, legit_rx) = mpsc::channel(100);
     let (remote_tx, remote_rx) = mpsc::channel(100);
 
-    let bypass_servers = vec!["mc.funtime.su", "mc.holyworld.ru"];
-    let bypass = if bypass_servers
-        .iter()
-        .find(|t: &&&str| remote_dns.eq(*t))
-        .is_some()
-    {
-        true
-    } else {
-        false
-    };
-
-    if bypass {
-        println!("[+] BYPASS Синхронизации")
-    }
     let controller = Controller::new(
         ClientId::Cheat,
         cheat_tx,
@@ -372,7 +358,6 @@ async fn handle_clients(
         remote_tx,
         event_rx,
         threshold,
-        bypass,
     );
 
     tokio::spawn(run_client(

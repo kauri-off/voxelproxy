@@ -20,24 +20,11 @@ pub mod p767 {
         #[packet(0x00)]
         pub struct StatusRequest {}
 
-        #[derive(Packet)]
-        #[packet(0x01)]
-        pub struct PingRequest {
-            pub timestamp: i64,
-        }
-
         // ----------- LOGIN -----------
         #[derive(Packet, Debug)]
         #[packet(0x00)]
         pub struct LoginStart {
             pub name: String,
-        }
-
-        #[derive(Packet, Debug)]
-        #[packet(0x01)]
-        pub struct EncryptionResponse {
-            pub shared_secret: Vec<u8>,
-            pub verify_token: Vec<u8>,
         }
 
         #[derive(Packet, Debug)]
@@ -87,26 +74,11 @@ pub mod p767 {
             pub response: String,
         }
 
-        #[derive(Packet)]
-        #[packet(0x01)]
-        pub struct PingResponse {
-            pub timestamp: i64,
-        }
-
         // ----------- LOGIN -----------
         #[derive(Packet, Debug)]
         #[packet(0x00)]
         pub struct LoginDisconnect {
             pub reason: String,
-        }
-
-        #[derive(Packet, Debug)]
-        #[packet(0x01)]
-        pub struct EncryptionRequest {
-            pub server_id: String,
-            pub public_key: Vec<u8>,
-            pub verify_token: Vec<u8>,
-            pub should_authenticate: bool,
         }
 
         #[derive(Packet, Debug)]
@@ -125,6 +97,14 @@ pub mod p767 {
             pub pitch: f32,
             pub flags: i8,
             pub teleportid: VarInt,
+        }
+
+        #[derive(Packet, Debug, Clone)]
+        #[packet(0x11)]
+        pub struct Transaction {
+            pub window_id: i8,
+            pub action: i16,
+            pub accepted: bool,
         }
     }
 }

@@ -16,12 +16,52 @@ pub enum ClientId {
     Legit,
 }
 
+impl ClientId {
+    fn opposite(&self) -> ClientId {
+        match self {
+            ClientId::Cheat => ClientId::Legit,
+            ClientId::Legit => ClientId::Cheat,
+        }
+    }
+}
+
 // События для регулятора
 #[derive(Debug)]
 pub enum Event {
     ClientData(ClientId, RawPacket),
     ClientDisconnected(ClientId),
     ServerData(RawPacket),
+}
+
+pub struct TransactionSync {
+    action: i16,
+    cheat_sent: bool,
+    legit_sent: bool,
+}
+
+impl TransactionSync {
+    fn new(transaction: &s2c::Transaction) -> Self {
+        Self {
+            action: transaction.action,
+            cheat_sent: false,
+            legit_sent: false,
+        }
+    }
+
+    fn sent(&mut self, client: ClientId) -> bool {
+        match client {
+            ClientId::Cheat => self.cheat_sent = true,
+            ClientId::Legit => self.legit_sent = true,
+        };
+        self.cheat_sent == self.legit_sent
+    }
+
+    fn is_sent(&self, client: ClientId) -> bool {
+        match client {
+            ClientId::Cheat => self.cheat_sent,
+            ClientId::Legit => self.legit_sent,
+        }
+    }
 }
 
 // Регулятор
@@ -35,9 +75,7 @@ pub struct Controller {
     cheat_active: bool,
     legit_active: bool,
     position: s2c::Position,
-    last_action: i16,
-    need_sync: bool,
-    bypass: bool,
+    transactions: Vec<TransactionSync>,
 }
 
 impl Controller {
@@ -48,7 +86,6 @@ impl Controller {
         remote_tx: Sender<RawPacket>,
         event_rx: Receiver<Event>,
         threshold: Option<i32>,
-        bypass: bool,
     ) -> Self {
         Self {
             active_client,
@@ -68,9 +105,7 @@ impl Controller {
                 flags: 0,
                 teleportid: VarInt(0),
             },
-            last_action: 0,
-            need_sync: false,
-            bypass,
+            transactions: vec![],
         }
     }
     pub async fn run(mut self) {
@@ -78,10 +113,13 @@ impl Controller {
             match event {
                 Event::ClientData(client_id, packet) => {
                     if client_id == self.active_client {
+                        // Position Sync
                         if self.both_active() {
                             if let Ok(Some(packet)) = packet.try_uncompress(self.threshold) {
-                                match packet.packet_id.0 {
-                                    0x12 | 0x13 | 0x14 => {
+                                match packet.packet_id {
+                                    c2s::Look::PACKET_ID
+                                    | c2s::Position::PACKET_ID
+                                    | c2s::PositionLook::PACKET_ID => {
                                         let _ = self.update_position(&packet);
                                         // Уведомляем пассивного клиента
                                         let passive = match self.active_client {
@@ -109,51 +147,34 @@ impl Controller {
                                 }
                             }
                         }
+                    }
 
-                        if self.bypass {
-                            if let Ok(Some(packet)) = packet.try_uncompress(self.threshold) {
-                                if packet.packet_id.0 == 0x07 {
-                                    if let Ok(t) = packet.convert::<c2s::Transaction>() {
-                                        if t.action < 0 {
-                                            if self.need_sync {
-                                                println!(
-                                                    "Синхронизация: {} -> {}",
-                                                    t.action, self.last_action
-                                                );
-                                                if self.last_action <= t.action {
-                                                    continue;
-                                                } else if self.last_action == t.action + 1 {
-                                                    self.need_sync = false;
-                                                    self.last_action = t.action;
-                                                } else {
-                                                    for i in
-                                                        (t.action + 1..=self.last_action - 1).rev()
-                                                    {
-                                                        println!("Синхронизация: Отправка {}", i);
-                                                        let mut new_transaction = t.clone();
-                                                        new_transaction.action = i;
-                                                        let new_transaction = new_transaction
-                                                            .as_uncompressed()
-                                                            .unwrap()
-                                                            .compress_to_raw(self.threshold)
-                                                            .unwrap();
-                                                        self.remote_tx
-                                                            .send(new_transaction)
-                                                            .await
-                                                            .unwrap();
-                                                    }
-                                                    self.need_sync = false;
-                                                    self.last_action = t.action;
-                                                }
-                                            } else {
-                                                self.last_action = t.action;
-                                            }
-                                        }
+                    if let Ok(Some(packet)) = packet.try_uncompress(self.threshold) {
+                        if packet.packet_id == c2s::Transaction::PACKET_ID {
+                            let t: c2s::Transaction = packet.convert().unwrap();
+
+                            if self.both_active() {
+                                if let Some(index) =
+                                    self.transactions.iter_mut().position(|sync_packet| {
+                                        sync_packet.action == t.action
+                                            && sync_packet.sent(client_id)
+                                    })
+                                {
+                                    self.transactions.remove(index);
+                                }
+                            } else {
+                                if let Some(t) = self.transactions.get(0) {
+                                    if t.is_sent(client_id.opposite()) {
+                                        println!("Синхронизация: Пропуск: {}", t.action);
+                                        self.transactions.remove(0);
+                                        continue;
                                     }
                                 }
                             }
                         }
+                    }
 
+                    if client_id == self.active_client {
                         if let Err(e) = self.remote_tx.send(packet).await {
                             println!("Ошибка отправки пакета на сервер: {}", e);
                             return;
@@ -176,10 +197,44 @@ impl Controller {
                             ClientId::Legit => ClientId::Cheat,
                         };
                         println!("Переключился на {:?}", self.active_client);
-                        self.need_sync = true;
+
+                        let mut to_send = vec![];
+                        self.transactions.retain(|t| {
+                            if t.is_sent(self.active_client) {
+                                let transaction = c2s::Transaction {
+                                    window_id: 0,
+                                    action: t.action,
+                                    accepted: true,
+                                };
+                                to_send.push(transaction);
+                                true
+                            } else {
+                                false
+                            }
+                        });
+
+                        for transaction in to_send {
+                            println!("Синхронизация: Отправка: {}", transaction.action);
+                            self.remote_tx
+                                .send(
+                                    transaction
+                                        .as_uncompressed()
+                                        .unwrap()
+                                        .compress_to_raw(self.threshold)
+                                        .unwrap(),
+                                )
+                                .await
+                                .unwrap();
+                        }
                     }
                 }
                 Event::ServerData(packet) => {
+                    if let Ok(Some(packet)) = packet.try_uncompress(self.threshold) {
+                        if packet.packet_id == s2c::Transaction::PACKET_ID {
+                            let t: s2c::Transaction = packet.convert().unwrap();
+                            self.transactions.push(TransactionSync::new(&t));
+                        }
+                    }
                     if self.cheat_active {
                         if self.cheat_tx.send(packet.clone()).await.is_err() {
                             self.cheat_active = false;
@@ -196,14 +251,14 @@ impl Controller {
     }
 
     fn update_position(&mut self, packet: &UncompressedPacket) -> anyhow::Result<()> {
-        match packet.packet_id.0 {
-            0x12 => {
+        match packet.packet_id {
+            c2s::Position::PACKET_ID => {
                 let pos: c2s::Position = packet.convert()?;
                 self.position.x = pos.x;
                 self.position.y = pos.y;
                 self.position.z = pos.z;
             }
-            0x13 => {
+            c2s::PositionLook::PACKET_ID => {
                 let pos: c2s::PositionLook = packet.convert()?;
                 self.position.x = pos.x;
                 self.position.y = pos.y;
@@ -211,7 +266,7 @@ impl Controller {
                 self.position.yaw = pos.yaw;
                 self.position.pitch = pos.pitch;
             }
-            0x14 => {
+            c2s::Look::PACKET_ID => {
                 let pos: c2s::Look = packet.convert()?;
                 self.position.yaw = pos.yaw;
                 self.position.pitch = pos.pitch;
@@ -262,9 +317,7 @@ pub async fn run_client(
         },
         async move {
             while let Some(packet) = packet_rx.recv().await {
-                if packet.write(&mut client_write).await.is_err() {
-                    break;
-                }
+                let _ = packet.write(&mut client_write).await.is_err();
             }
         }
     );
