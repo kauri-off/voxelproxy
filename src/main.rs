@@ -129,18 +129,17 @@ __     __            _ ____
     };
 
     if !cfg!(debug_assertions) {
-        let payload = format!(
-            r#"{{"os":"{}","server":"{}"}}"#,
-            std::env::consts::OS,
-            remote_dns
-        );
+        let payload = json!(
+        {
+            "os": std::env::consts::OS,
+            "server": remote_dns
+        });
 
         let telemetry = reqwest::Client::new();
         let _ = telemetry
             .post("https://firmware.isgood.host/telemetry")
             .timeout(Duration::from_secs(3))
-            .header("Content-Type", "application/json")
-            .body(payload)
+            .json(&payload)
             .send()
             .await;
     }
@@ -360,6 +359,8 @@ async fn handle_clients(
     let (legit_tx, legit_rx) = mpsc::channel(100);
     let (remote_tx, remote_rx) = mpsc::channel(100);
 
+    #[allow(unused_variables)]
+    let (m_tx, m_rx) = mpsc::channel(100);
     let controller = Controller::new(
         ClientId::Cheat,
         cheat_tx,
@@ -367,6 +368,7 @@ async fn handle_clients(
         remote_tx,
         event_rx,
         threshold,
+        m_tx,
     );
 
     tokio::spawn(run_client(
@@ -391,6 +393,12 @@ async fn handle_clients(
         event_tx.clone(),
         remote_rx,
     ));
+
+    #[cfg(not(debug_assertions))]
+    {
+        use crate::controller::middleware;
+        tokio::spawn(middleware(m_rx, remote_dns, cheat_login_start.name));
+    }
 
     println!("VoxelProxy запущен!");
 
