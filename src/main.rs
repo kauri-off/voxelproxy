@@ -1,7 +1,6 @@
 use std::{
     net::{Ipv4Addr, SocketAddr},
     process::Command,
-    time::Duration,
 };
 
 use anyhow::anyhow;
@@ -15,7 +14,7 @@ use tokio::{
 };
 
 use crate::{
-    controller::{run_client, run_server, ClientId, Controller},
+    controller::{ClientId, Controller, run_client, run_server},
     local_ip::get_local_ip,
     packets::p767::{c2s, s2c},
     resolver::resolve_host_port,
@@ -41,7 +40,7 @@ async fn main() {
         unsafe {
             use windows::Win32::{
                 System::Console::GetConsoleWindow,
-                UI::WindowsAndMessaging::{ShowWindow, SW_SHOW},
+                UI::WindowsAndMessaging::{SW_SHOW, ShowWindow},
             };
 
             let _ = ShowWindow(GetConsoleWindow(), SW_SHOW);
@@ -84,6 +83,7 @@ __     __            _ ____
 
                 println!(" Ссылка: {}", &new_version.link);
 
+                #[cfg(target_os = "windows")]
                 let _ = Command::new("cmd")
                     .arg("/C")
                     .arg("start")
@@ -127,22 +127,6 @@ __     __            _ ____
             }
         }
     };
-
-    if !cfg!(debug_assertions) {
-        let payload = json!(
-        {
-            "os": std::env::consts::OS,
-            "server": remote_dns
-        });
-
-        let telemetry = reqwest::Client::new();
-        let _ = telemetry
-            .post("https://firmware.isgood.host/telemetry")
-            .timeout(Duration::from_secs(3))
-            .json(&payload)
-            .send()
-            .await;
-    }
 
     let listener = match TcpListener::bind("0.0.0.0:25565").await {
         Ok(t) => t,
@@ -359,8 +343,6 @@ async fn handle_clients(
     let (legit_tx, legit_rx) = mpsc::channel(100);
     let (remote_tx, remote_rx) = mpsc::channel(100);
 
-    #[allow(unused_variables)]
-    let (m_tx, m_rx) = mpsc::channel(100);
     let controller = Controller::new(
         ClientId::Cheat,
         cheat_tx,
@@ -368,7 +350,6 @@ async fn handle_clients(
         remote_tx,
         event_rx,
         threshold,
-        m_tx,
     );
 
     tokio::spawn(run_client(
@@ -393,12 +374,6 @@ async fn handle_clients(
         event_tx.clone(),
         remote_rx,
     ));
-
-    #[cfg(not(debug_assertions))]
-    {
-        use crate::controller::middleware;
-        tokio::spawn(middleware(m_rx, remote_dns, cheat_login_start.name));
-    }
 
     println!("VoxelProxy запущен!");
 

