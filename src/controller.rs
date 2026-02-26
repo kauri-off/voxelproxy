@@ -112,18 +112,17 @@ impl Controller {
                     if client_id == self.active_client {
                         // Position Sync
                         if self.both_active() {
-                            if let Ok(Some(packet)) = packet.try_uncompress(self.threshold) {
+                            if let Ok(packet) = packet.uncompress(self.threshold) {
                                 match packet.packet_id {
                                     c2s::Look::PACKET_ID
                                     | c2s::Position::PACKET_ID
                                     | c2s::PositionLook::PACKET_ID => {
                                         let _ = self.update_position(&packet);
-                                        let notice = self
-                                            .position
-                                            .as_uncompressed()
-                                            .unwrap()
-                                            .compress_to_raw(self.threshold)
-                                            .unwrap();
+                                        let notice =
+                                            UncompressedPacket::from_packet(&self.position)
+                                                .unwrap()
+                                                .to_raw_packet_compressed(self.threshold)
+                                                .unwrap();
 
                                         match self.active_client.opposite() {
                                             ClientId::Cheat => {
@@ -141,9 +140,9 @@ impl Controller {
                         }
                     }
 
-                    if let Ok(Some(packet)) = packet.try_uncompress(self.threshold) {
+                    if let Ok(packet) = packet.uncompress(self.threshold) {
                         if packet.packet_id == c2s::Transaction::PACKET_ID {
-                            let t: c2s::Transaction = packet.convert().unwrap();
+                            let t: c2s::Transaction = packet.deserialize_payload().unwrap();
 
                             if self.both_active() {
                                 if let Some(index) =
@@ -209,10 +208,9 @@ impl Controller {
                             println!("Синхронизация: Отправка: {}", transaction.action);
                             self.remote_tx
                                 .send(
-                                    transaction
-                                        .as_uncompressed()
+                                    UncompressedPacket::from_packet(&transaction)
                                         .unwrap()
-                                        .compress_to_raw(self.threshold)
+                                        .to_raw_packet_compressed(self.threshold)
                                         .unwrap(),
                                 )
                                 .await
@@ -221,9 +219,9 @@ impl Controller {
                     }
                 }
                 Event::ServerData(packet) => {
-                    if let Ok(Some(packet)) = packet.try_uncompress(self.threshold) {
+                    if let Ok(packet) = packet.uncompress(self.threshold) {
                         if packet.packet_id == s2c::Transaction::PACKET_ID {
-                            let t: s2c::Transaction = packet.convert().unwrap();
+                            let t: s2c::Transaction = packet.deserialize_payload().unwrap();
                             self.transactions.push(TransactionSync::new(&t));
                         }
                     }
@@ -241,13 +239,13 @@ impl Controller {
     fn update_position(&mut self, packet: &UncompressedPacket) -> anyhow::Result<()> {
         match packet.packet_id {
             c2s::Position::PACKET_ID => {
-                let pos: c2s::Position = packet.convert()?;
+                let pos: c2s::Position = packet.deserialize_payload()?;
                 self.position.x = pos.x;
                 self.position.y = pos.y;
                 self.position.z = pos.z;
             }
             c2s::PositionLook::PACKET_ID => {
-                let pos: c2s::PositionLook = packet.convert()?;
+                let pos: c2s::PositionLook = packet.deserialize_payload()?;
                 self.position.x = pos.x;
                 self.position.y = pos.y;
                 self.position.z = pos.z;
@@ -255,7 +253,7 @@ impl Controller {
                 self.position.pitch = pos.pitch;
             }
             c2s::Look::PACKET_ID => {
-                let pos: c2s::Look = packet.convert()?;
+                let pos: c2s::Look = packet.deserialize_payload()?;
                 self.position.yaw = pos.yaw;
                 self.position.pitch = pos.pitch;
             }
@@ -282,7 +280,7 @@ pub async fn run_client(
     let _ = tokio::join!(
         async move {
             loop {
-                match RawPacket::read(&mut client_read).await {
+                match RawPacket::read_async(&mut client_read).await {
                     Ok(packet) => {
                         if event_tx
                             .send(Event::ClientData(client_id, packet))
@@ -304,7 +302,7 @@ pub async fn run_client(
         },
         async move {
             while let Some(packet) = packet_rx.recv().await {
-                if packet.write(&mut client_write).await.is_err() {
+                if packet.write_async(&mut client_write).await.is_err() {
                     break;
                 };
             }
@@ -322,7 +320,7 @@ pub async fn run_server(
     let _ = tokio::join!(
         async move {
             loop {
-                match RawPacket::read(&mut server_read).await {
+                match RawPacket::read_async(&mut server_read).await {
                     Ok(packet) => {
                         if event_tx.send(Event::ServerData(packet)).await.is_err() {
                             break;
@@ -334,7 +332,7 @@ pub async fn run_server(
         },
         async move {
             while let Some(packet) = packet_rx.recv().await {
-                if packet.write(&mut server_write).await.is_err() {
+                if packet.write_async(&mut server_write).await.is_err() {
                     break;
                 }
             }

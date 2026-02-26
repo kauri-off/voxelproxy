@@ -5,7 +5,10 @@ use std::{
 
 use anyhow::anyhow;
 use dialoguer::theme::ColorfulTheme;
-use minecraft_protocol::{packet::RawPacket, varint::VarInt};
+use minecraft_protocol::{
+    packet::{RawPacket, UncompressedPacket},
+    varint::VarInt,
+};
 use serde_json::json;
 use tokio::{
     io::AsyncWriteExt,
@@ -161,10 +164,10 @@ async fn handle_connection(
     mut stream: TcpStream,
     tx: Sender<(TcpStream, i32)>,
 ) -> anyhow::Result<()> {
-    let handshake: c2s::Handshake = RawPacket::read(&mut stream)
+    let handshake: c2s::Handshake = RawPacket::read_async(&mut stream)
         .await?
         .as_uncompressed()?
-        .convert()?;
+        .deserialize_payload()?;
 
     match handshake.intent.0 {
         1 => process_status(stream, handshake.protocol_version.0).await?,
@@ -178,11 +181,11 @@ async fn handle_connection(
 }
 
 async fn process_status(mut stream: TcpStream, _protocol: i32) -> anyhow::Result<()> {
-    while let Ok(packet) = RawPacket::read(&mut stream).await {
+    while let Ok(packet) = RawPacket::read_async(&mut stream).await {
         let packet_id = packet.clone().as_uncompressed()?.packet_id;
 
-        if packet_id.0 == 0 {
-            s2c::StatusResponse {
+        if packet_id == 0 {
+            UncompressedPacket::from_packet(&s2c::StatusResponse {
                 response: json!({
                   "version": {
                     "name": "1.16.5",
@@ -195,13 +198,11 @@ async fn process_status(mut stream: TcpStream, _protocol: i32) -> anyhow::Result
                   "description": "A Minecraft Server",
                 })
                 .to_string(),
-            }
-            .as_uncompressed()?
-            .to_raw_packet()?
-            .write(&mut stream)
+            })?
+            .write_async(&mut stream)
             .await?;
-        } else if packet_id.0 == 1 {
-            packet.write(&mut stream).await?;
+        } else if packet_id == 1 {
+            packet.write_async(&mut stream).await?;
         }
     }
 
@@ -214,17 +215,17 @@ async fn handle_clients(
     remote_dns: String,
 ) -> anyhow::Result<()> {
     let (mut cheat_stream, cheat_protocol) = rx.recv().await.unwrap();
-    let cheat_login_start: c2s::LoginStart = RawPacket::read(&mut cheat_stream)
+    let cheat_login_start: c2s::LoginStart = RawPacket::read_async(&mut cheat_stream)
         .await?
         .as_uncompressed()?
-        .convert()?;
+        .deserialize_payload()?;
     println!("[+] Клиент с читами");
 
     let (mut legit_stream, legit_protocol) = rx.recv().await.unwrap();
-    let _legit_login_start: c2s::LoginStart = RawPacket::read(&mut legit_stream)
+    let _legit_login_start: c2s::LoginStart = RawPacket::read_async(&mut legit_stream)
         .await?
         .as_uncompressed()?
-        .convert()?;
+        .deserialize_payload()?;
     println!("[+] Клиент без читов");
 
     if cheat_protocol != legit_protocol {
@@ -271,34 +272,29 @@ async fn handle_clients(
         intent: VarInt(2),
     };
 
-    handshake
-        .as_uncompressed()?
-        .to_raw_packet()?
-        .write(&mut remote_stream)
+    UncompressedPacket::from_packet(&handshake)?
+        .write_async(&mut remote_stream)
         .await?;
     println!("[+] Handshake");
 
-    cheat_login_start
-        .as_uncompressed()?
-        .to_raw_packet()?
-        .write(&mut remote_stream)
+    UncompressedPacket::from_packet(&cheat_login_start)?
+        .write_async(&mut remote_stream)
         .await?;
     println!("[+] Login start");
 
     let mut threshold = None;
 
     loop {
-        let packet = RawPacket::read(&mut remote_stream)
+        let packet = RawPacket::read_async(&mut remote_stream)
             .await?
-            .try_uncompress(threshold)?
-            .unwrap();
+            .uncompress(threshold)?;
 
-        match packet.packet_id.0 {
+        match packet.packet_id {
             0 => {
                 error_handler(
                     &mut cheat_stream,
                     &mut legit_stream,
-                    packet.convert::<s2c::LoginDisconnect>()?.reason,
+                    packet.deserialize_payload::<s2c::LoginDisconnect>()?.reason,
                 )
                 .await;
                 return Err(anyhow!("Disconnected"));
@@ -313,19 +309,19 @@ async fn handle_clients(
                 return Err(anyhow!("Licensed"));
             }
             2 => {
-                let packet = packet.compress_to_raw(threshold)?;
-                packet.write(&mut cheat_stream).await?;
-                packet.write(&mut legit_stream).await?;
+                let packet = packet.to_raw_packet_compressed(threshold)?;
+                packet.write_async(&mut cheat_stream).await?;
+                packet.write_async(&mut legit_stream).await?;
                 println!("[+] Login success");
                 break;
             }
             3 => {
-                let compression: s2c::SetCompression = packet.convert()?;
+                let compression: s2c::SetCompression = packet.deserialize_payload()?;
                 threshold = Some(compression.threshold.0);
 
                 let packet = packet.to_raw_packet()?;
-                packet.write(&mut cheat_stream).await?;
-                packet.write(&mut legit_stream).await?;
+                packet.write_async(&mut cheat_stream).await?;
+                packet.write_async(&mut legit_stream).await?;
                 println!("[+] Compression");
             }
             _ => {
@@ -386,25 +382,11 @@ async fn error_handler<W: AsyncWriteExt + Unpin>(
     legit_stream: &mut W,
     message: String,
 ) {
-    let disconnect = s2c::LoginDisconnect {
+    let disconnect = UncompressedPacket::from_packet(&s2c::LoginDisconnect {
         reason: json!({"text": message}).to_string(),
-    };
+    })
+    .unwrap();
 
-    disconnect
-        .as_uncompressed()
-        .unwrap()
-        .to_raw_packet()
-        .unwrap()
-        .write(cheat_stream)
-        .await
-        .unwrap();
-
-    disconnect
-        .as_uncompressed()
-        .unwrap()
-        .to_raw_packet()
-        .unwrap()
-        .write(legit_stream)
-        .await
-        .unwrap();
+    disconnect.write_async(cheat_stream).await.unwrap();
+    disconnect.write_async(legit_stream).await.unwrap();
 }
