@@ -2,10 +2,11 @@ use std::net::{IpAddr, SocketAddr};
 use trust_dns_resolver::{config::*, TokioAsyncResolver};
 
 fn parse_host_port(input: &str, default_port: u16) -> (String, u16) {
-    if let Some((host, port)) = input.rsplit_once(':') {
-        
-        if port.parse::<u16>().is_ok() && !host.contains(']') && !host.contains(':') {
-            return (host.to_string(), port.parse().unwrap());
+    if let Some((host, port_str)) = input.rsplit_once(':') {
+        if let Ok(port) = port_str.parse::<u16>() {
+            if !host.contains(']') && !host.contains(':') {
+                return (host.to_string(), port);
+            }
         }
     }
     (input.to_string(), default_port)
@@ -25,7 +26,7 @@ pub async fn resolve_host_port(
 
     let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
 
-    // SRV-запрос
+    // SRV lookup
     let srv_name = format!("_{}._{}.{}", service, protocol, host);
     if let Ok(srv_lookup) = resolver.srv_lookup(&srv_name).await {
         if let Some(record) = srv_lookup.iter().next() {
@@ -39,7 +40,7 @@ pub async fn resolve_host_port(
         }
     }
 
-    // Fallback: обычный A/AAAA
+    // Fallback: standard A/AAAA lookup
     let ip_response = resolver.lookup_ip(&host).await.ok()?;
     let ip = ip_response.iter().next()?;
     Some(SocketAddr::new(ip, port))

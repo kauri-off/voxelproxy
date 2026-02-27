@@ -19,10 +19,17 @@ use tokio::{
 use crate::{
     controller::{ClientId, Controller, run_client, run_server},
     local_ip::get_local_ip,
-    packets::p767::{c2s, s2c},
+    packets::v1_16_5::{c2s, s2c},
     resolver::resolve_host_port,
     updater::has_update,
 };
+
+const DEFAULT_PORT: u16 = 25565;
+const REQUIRED_PROTOCOL: i32 = 754;
+const MC_VERSION: &str = "1.16.5";
+const STATUS_MAX_PLAYERS: u32 = 20;
+const HANDSHAKE_CHANNEL_CAPACITY: usize = 32;
+const IO_CHANNEL_CAPACITY: usize = 100;
 
 mod controller;
 #[cfg(target_os = "windows")]
@@ -123,7 +130,7 @@ __     __            _ ____
                 .with_prompt("Введите адрес сервера")
                 .interact_text()?;
 
-            if let Some(addr) = resolve_host_port(&input, 25565, "minecraft", "tcp").await {
+            if let Some(addr) = resolve_host_port(&input, DEFAULT_PORT, "minecraft", "tcp").await {
                 break (addr, input);
             } else {
                 println!("Ошибка");
@@ -131,7 +138,7 @@ __     __            _ ____
         }
     };
 
-    let listener = match TcpListener::bind("0.0.0.0:25565").await {
+    let listener = match TcpListener::bind(format!("0.0.0.0:{}", DEFAULT_PORT)).await {
         Ok(t) => t,
         Err(e) => {
             println!("Ошибка при создании сокета. {}", e);
@@ -145,7 +152,7 @@ __     __            _ ____
 
     println!("Адрес для подключения (сначала чит, потом легит): {}", addr);
 
-    let (tx, rx) = mpsc::channel(32);
+    let (tx, rx) = mpsc::channel(HANDSHAKE_CHANNEL_CAPACITY);
 
     let handler = tokio::spawn(handle_clients(rx, remote_addr, remote_dns));
 
@@ -160,14 +167,15 @@ __     __            _ ____
     Ok(())
 }
 
+async fn read_uncompressed(stream: &mut TcpStream) -> anyhow::Result<UncompressedPacket> {
+    Ok(RawPacket::read_async(stream).await?.as_uncompressed()?)
+}
+
 async fn handle_connection(
     mut stream: TcpStream,
     tx: Sender<(TcpStream, i32)>,
 ) -> anyhow::Result<()> {
-    let handshake: c2s::Handshake = RawPacket::read_async(&mut stream)
-        .await?
-        .as_uncompressed()?
-        .deserialize_payload()?;
+    let handshake: c2s::Handshake = read_uncompressed(&mut stream).await?.deserialize_payload()?;
 
     match handshake.intent.0 {
         1 => process_status(stream, handshake.protocol_version.0).await?,
@@ -188,11 +196,11 @@ async fn process_status(mut stream: TcpStream, _protocol: i32) -> anyhow::Result
             UncompressedPacket::from_packet(&s2c::StatusResponse {
                 response: json!({
                   "version": {
-                    "name": "1.16.5",
-                    "protocol": 754
+                    "name": MC_VERSION,
+                    "protocol": REQUIRED_PROTOCOL
                   },
                   "players": {
-                    "max": 20,
+                    "max": STATUS_MAX_PLAYERS,
                     "online": 0
                   },
                   "description": "A Minecraft Server",
@@ -215,17 +223,13 @@ async fn handle_clients(
     remote_dns: String,
 ) -> anyhow::Result<()> {
     let (mut cheat_stream, cheat_protocol) = rx.recv().await.unwrap();
-    let cheat_login_start: c2s::LoginStart = RawPacket::read_async(&mut cheat_stream)
-        .await?
-        .as_uncompressed()?
-        .deserialize_payload()?;
+    let cheat_login_start: c2s::LoginStart =
+        read_uncompressed(&mut cheat_stream).await?.deserialize_payload()?;
     println!("[+] Клиент с читами");
 
     let (mut legit_stream, legit_protocol) = rx.recv().await.unwrap();
-    let _legit_login_start: c2s::LoginStart = RawPacket::read_async(&mut legit_stream)
-        .await?
-        .as_uncompressed()?
-        .deserialize_payload()?;
+    let _legit_login_start: c2s::LoginStart =
+        read_uncompressed(&mut legit_stream).await?.deserialize_payload()?;
     println!("[+] Клиент без читов");
 
     if cheat_protocol != legit_protocol {
@@ -238,7 +242,7 @@ async fn handle_clients(
         return Ok(());
     }
 
-    if cheat_protocol != 754 {
+    if cheat_protocol != REQUIRED_PROTOCOL {
         error_handler(
             &mut cheat_stream,
             &mut legit_stream,
@@ -268,7 +272,7 @@ async fn handle_clients(
     let handshake = c2s::Handshake {
         protocol_version: VarInt(cheat_protocol),
         server_address: remote_dns.clone(),
-        server_port: 25565,
+        server_port: DEFAULT_PORT,
         intent: VarInt(2),
     };
 
@@ -334,10 +338,10 @@ async fn handle_clients(
     let (legit_read, legit_write) = legit_stream.into_split();
     let (remote_read, remote_write) = remote_stream.into_split();
 
-    let (event_tx, event_rx) = mpsc::channel(100);
-    let (cheat_tx, cheat_rx) = mpsc::channel(100);
-    let (legit_tx, legit_rx) = mpsc::channel(100);
-    let (remote_tx, remote_rx) = mpsc::channel(100);
+    let (event_tx, event_rx) = mpsc::channel(IO_CHANNEL_CAPACITY);
+    let (cheat_tx, cheat_rx) = mpsc::channel(IO_CHANNEL_CAPACITY);
+    let (legit_tx, legit_rx) = mpsc::channel(IO_CHANNEL_CAPACITY);
+    let (remote_tx, remote_rx) = mpsc::channel(IO_CHANNEL_CAPACITY);
 
     let controller = Controller::new(
         ClientId::Cheat,

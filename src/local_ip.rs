@@ -8,10 +8,12 @@ pub fn get_local_ip() -> Option<Ipv4Addr> {
         Win32::Networking::WinSock::{AF_INET, AF_UNSPEC},
     };
 
+    const INITIAL_ADAPTER_BUFFER_SIZE: u32 = 15000;
+
     let mut preferred_ip: Option<Ipv4Addr> = None;
 
     unsafe {
-        let mut buffer_length: u32 = 15000;
+        let mut buffer_length: u32 = INITIAL_ADAPTER_BUFFER_SIZE;
         let mut buffer: Vec<u8> = vec![0; buffer_length as usize];
 
         let mut result = GetAdaptersAddresses(
@@ -63,7 +65,7 @@ pub fn get_local_ip() -> Option<Ipv4Addr> {
         }
     }
 
-    return preferred_ip;
+    preferred_ip
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -72,16 +74,12 @@ pub fn get_local_ip() -> Option<Ipv4Addr> {
     get_if_addrs()
         .unwrap()
         .into_iter()
-        .find(|iface| {
-            if iface.is_loopback() || iface.addr.ip().is_ipv6() {
-                false
+        .find(|iface| !iface.is_loopback() && iface.addr.ip().is_ipv4())
+        .and_then(|iface| {
+            if let std::net::IpAddr::V4(v4) = iface.ip() {
+                Some(v4)
             } else {
-                true
+                None
             }
         })
-        .map(|t| match t.ip() {
-            std::net::IpAddr::V4(ipv4_addr) => Some(ipv4_addr),
-            std::net::IpAddr::V6(ipv6_addr) => None,
-        })
-        .unwrap_or(None)
 }

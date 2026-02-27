@@ -33,17 +33,17 @@ impl State {
     }
 }
 
+const HOTKEY_ID: i32 = 1;
+
 pub unsafe fn setup_keybind(tx: Sender<String>) {
-    if let Err(e) = unsafe { RegisterHotKey(None, 1, MOD_ALT | MOD_NOREPEAT, VK_F10.0 as u32) } {
+    if let Err(e) = unsafe { RegisterHotKey(None, HOTKEY_ID, MOD_ALT | MOD_NOREPEAT, VK_F10.0 as u32) } {
         tx.send(format!("Ошибка при установке горячей клавиши: {}", e))
             .unwrap();
         return;
     }
 
-    tx.send(format!(
-        "Установлена горячая клавиша ALT+F10 для скрытия/показа окна консоли"
-    ))
-    .unwrap();
+    tx.send("Установлена горячая клавиша ALT+F10 для скрытия/показа окна консоли".to_owned())
+        .unwrap();
     let mut state = State::Opened;
     let hwnd = unsafe { GetConsoleWindow() };
 

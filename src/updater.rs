@@ -9,9 +9,7 @@ pub struct NewVersion {
     pub link: String,
 }
 
-pub async fn has_update(current_version: &str) -> anyhow::Result<Option<NewVersion>> {
-    let client = Client::new();
-
+fn build_github_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert("User-Agent", HeaderValue::from_static("VP Updater"));
     headers.insert(
@@ -22,26 +20,31 @@ pub async fn has_update(current_version: &str) -> anyhow::Result<Option<NewVersi
         "X-GitHub-Api-Version",
         HeaderValue::from_static("2022-11-28"),
     );
+    headers
+}
 
-    let response = client
+pub async fn has_update(current_version: &str) -> anyhow::Result<Option<NewVersion>> {
+    let client = Client::new();
+
+    let release: Value = client
         .get("https://api.github.com/repos/kauri-off/voxelproxy/releases/latest")
-        .headers(headers)
+        .headers(build_github_headers())
         .send()
         .await?
-        .error_for_status()?;
+        .error_for_status()?
+        .json()
+        .await?;
 
-    let json: Value = response.json().await?;
-
-    let tag = json
+    let latest_version = release
         .get("tag_name")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("Missing or invalid 'tag_name' field"))?;
 
-    if tag == current_version {
+    if latest_version == current_version {
         return Ok(None);
     }
 
-    let asset_url = json
+    let download_url = release
         .get("assets")
         .and_then(Value::as_array)
         .and_then(|assets| assets.first())
@@ -50,7 +53,7 @@ pub async fn has_update(current_version: &str) -> anyhow::Result<Option<NewVersi
         .ok_or_else(|| anyhow::anyhow!("Missing or invalid asset download URL"))?;
 
     Ok(Some(NewVersion {
-        tag: tag.to_string(),
-        link: asset_url.to_string(),
+        tag: latest_version.to_string(),
+        link: download_url.to_string(),
     }))
 }

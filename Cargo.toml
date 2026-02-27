@@ -1,6 +1,6 @@
 [package]
 name = "voxelproxy"
-version = "3.1.4"
+version = "3.1.5"
 edition = "2024"
 authors = ["kauri-off <https://github.com/kauri-off>"]
 description = "Бесплатный аналог takker.ru"

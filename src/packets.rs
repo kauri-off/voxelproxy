@@ -1,4 +1,4 @@
-pub mod p767 {
+pub mod v1_16_5 {
     use minecraft_protocol::{varint::VarInt, Packet};
 
     pub mod c2s {
@@ -96,7 +96,7 @@ pub mod p767 {
             pub yaw: f32,
             pub pitch: f32,
             pub flags: i8,
-            pub teleportid: VarInt,
+            pub teleport_id: VarInt,
         }
 
         #[derive(Packet, Debug, Clone)]
