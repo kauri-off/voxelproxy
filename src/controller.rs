@@ -9,6 +9,7 @@ use tokio::{
 
 use crate::packets::p767::{c2s, s2c};
 
+/// Identifies which of the two connected clients a packet or event belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientId {
     Cheat,
@@ -16,6 +17,7 @@ pub enum ClientId {
 }
 
 impl ClientId {
+    /// Returns the other client variant.
     fn opposite(&self) -> ClientId {
         match self {
             ClientId::Cheat => ClientId::Legit,
@@ -24,20 +26,33 @@ impl ClientId {
     }
 }
 
+/// Events sent to the Controller from the background I/O tasks.
 #[derive(Debug)]
 pub enum Event {
+    /// A packet was received from a client.
     ClientData(ClientId, RawPacket),
+    /// A client's TCP connection was closed or errored.
     ClientDisconnected(ClientId),
+    /// A packet was received from the upstream server.
     ServerData(RawPacket),
 }
 
+/// Tracks whether each client has acknowledged a single server-initiated transaction.
+///
+/// The server sends a transaction to both clients; both must confirm it before the
+/// entry is removed from the pending queue.
 pub struct TransactionSync {
+    /// The action ID that uniquely identifies this transaction.
     action: i16,
+    /// Whether the Cheat client has sent its confirmation.
     cheat_sent: bool,
+    /// Whether the Legit client has sent its confirmation.
     legit_sent: bool,
 }
 
 impl TransactionSync {
+    /// Creates a new tracker for a transaction received from the server.
+    /// Both clients start as unconfirmed.
     fn new(transaction: &s2c::Transaction) -> Self {
         Self {
             action: transaction.action,
@@ -46,6 +61,8 @@ impl TransactionSync {
         }
     }
 
+    /// Marks `client` as having confirmed this transaction.
+    /// Returns `true` once both clients have confirmed (i.e. ready to remove from queue).
     fn sent(&mut self, client: ClientId) -> bool {
         match client {
             ClientId::Cheat => self.cheat_sent = true,
@@ -54,6 +71,7 @@ impl TransactionSync {
         self.cheat_sent == self.legit_sent
     }
 
+    /// Returns whether `client` has already sent its confirmation (non-mutating).
     fn is_sent(&self, client: ClientId) -> bool {
         match client {
             ClientId::Cheat => self.cheat_sent,
@@ -62,20 +80,34 @@ impl TransactionSync {
     }
 }
 
+/// Central coordinator that routes packets between two clients and the upstream server,
+/// and keeps position and transaction state synchronised across both clients.
 pub struct Controller {
+    /// Which client is currently the authoritative sender to the server.
     active_client: ClientId,
+    /// Channel for sending packets to the Cheat client.
     cheat_tx: Sender<RawPacket>,
+    /// Channel for sending packets to the Legit client.
     legit_tx: Sender<RawPacket>,
+    /// Channel for sending packets to the upstream server.
     remote_tx: Sender<RawPacket>,
+    /// Receives events (client data, disconnections, server data) from I/O tasks.
     event_rx: Receiver<Event>,
+    /// Compression threshold negotiated during login; `None` means no compression.
     threshold: Option<i32>,
+    /// Whether the Cheat client is still connected.
     cheat_active: bool,
+    /// Whether the Legit client is still connected.
     legit_active: bool,
+    /// The last known authoritative player position/rotation (driven by the active client).
     position: s2c::Position,
+    /// Pending transactions waiting for acknowledgement from both clients.
     transactions: Vec<TransactionSync>,
 }
 
 impl Controller {
+    /// Constructs a new Controller. Both clients are assumed to be active on creation.
+    /// Player position defaults to the world origin (0, 0, 0) with zero rotation.
     pub fn new(
         active_client: ClientId,
         cheat_tx: Sender<RawPacket>,
@@ -105,10 +137,20 @@ impl Controller {
             transactions: vec![],
         }
     }
+    /// Main event loop. Runs until the channel closes (both I/O tasks have exited).
+    ///
+    /// Each iteration handles one of three event types:
+    /// - `ClientData`       — position sync, transaction tracking, relay to server
+    /// - `ClientDisconnected` — update state, optionally switch active client & replay transactions
+    /// - `ServerData`       — track new transactions, broadcast to active clients
     pub async fn run(mut self) {
         while let Some(event) = self.event_rx.recv().await {
             match event {
                 Event::ClientData(client_id, packet) => {
+                    // ── Position sync ────────────────────────────────────────────────────
+                    // Only the active client drives the authoritative position. When both
+                    // clients are connected we forward a synthetic s2c::Position packet to
+                    // the inactive client so its state stays in sync with the active one.
                     if client_id == self.active_client {
                         // Position Sync
                         if self.both_active() {
@@ -140,11 +182,16 @@ impl Controller {
                         }
                     }
 
+                    // ── Transaction tracking ─────────────────────────────────────────────
                     if let Ok(packet) = packet.uncompress(self.threshold) {
                         if packet.packet_id == c2s::Transaction::PACKET_ID {
                             let t: c2s::Transaction = packet.deserialize_payload().unwrap();
 
                             if self.both_active() {
+                                // Both clients are connected: a transaction is complete only
+                                // when *both* have acknowledged it. `sent()` marks this client
+                                // and returns `true` the moment the second ack arrives, at
+                                // which point the entry is removed from the pending queue.
                                 if let Some(index) =
                                     self.transactions.iter_mut().position(|sync_packet| {
                                         sync_packet.action == t.action
@@ -154,6 +201,9 @@ impl Controller {
                                     self.transactions.remove(index);
                                 }
                             } else {
+                                // One client is gone. If the head of the queue was already
+                                // acknowledged by the now-absent client, skip (discard) it so
+                                // a stale entry doesn't block the still-active client.
                                 if let Some(t) = self.transactions.get(0) {
                                     if t.is_sent(client_id.opposite()) {
                                         println!("Синхронизация: Пропуск: {}", t.action);
@@ -165,6 +215,8 @@ impl Controller {
                         }
                     }
 
+                    // ── Server relay ─────────────────────────────────────────────────────
+                    // Only the active client's packets are forwarded to the server.
                     if client_id == self.active_client {
                         if let Err(e) = self.remote_tx.send(packet).await {
                             println!("Ошибка отправки пакета на сервер: {}", e);
@@ -173,22 +225,33 @@ impl Controller {
                     }
                 }
                 Event::ClientDisconnected(client_id) => {
+                    // If both_active() is already false here, the *second* client just
+                    // disconnected — nothing left to do, shut down the controller.
                     if !self.both_active() {
                         println!("Оба клиента отключились");
                         return;
                     }
+                    // Mark the disconnecting client as inactive.
                     match client_id {
                         ClientId::Cheat => self.cheat_active = false,
                         ClientId::Legit => self.legit_active = false,
                     };
 
                     if self.active_client == client_id {
+                        // The active client disconnected — switch control to the other client.
                         self.active_client = match client_id {
                             ClientId::Cheat => ClientId::Legit,
                             ClientId::Legit => ClientId::Cheat,
                         };
                         println!("Переключился на {:?}", self.active_client);
 
+                        // Transaction replay after client switch:
+                        // - For each pending transaction that the new active client already
+                        //   acknowledged before the switch, re-send that ack to the server
+                        //   now (the old client's ack was never forwarded). `retain` keeps
+                        //   those entries (`true`) while collecting them in `to_send`.
+                        // - Transactions that the new active client never confirmed are
+                        //   silently dropped (`false`), because we have no ack to replay.
                         let mut to_send = vec![];
                         self.transactions.retain(|t| {
                             if t.is_sent(self.active_client) {
@@ -219,12 +282,15 @@ impl Controller {
                     }
                 }
                 Event::ServerData(packet) => {
+                    // Track every new transaction so we can wait for both client acks.
                     if let Ok(packet) = packet.uncompress(self.threshold) {
                         if packet.packet_id == s2c::Transaction::PACKET_ID {
                             let t: s2c::Transaction = packet.deserialize_payload().unwrap();
                             self.transactions.push(TransactionSync::new(&t));
                         }
                     }
+                    // Broadcast the raw packet (compressed or not) to whichever clients
+                    // are still active.
                     if self.cheat_active {
                         let _ = self.cheat_tx.send(packet.clone()).await;
                     }
@@ -236,6 +302,8 @@ impl Controller {
         }
     }
 
+    /// Decodes a c2s movement packet and updates the controller's authoritative
+    /// position/rotation. Only called for Look, Position, and PositionLook packets.
     fn update_position(&mut self, packet: &UncompressedPacket) -> anyhow::Result<()> {
         match packet.packet_id {
             c2s::Position::PACKET_ID => {
@@ -264,11 +332,17 @@ impl Controller {
         Ok(())
     }
 
+    /// Returns `true` only when both clients are currently connected.
     fn both_active(&self) -> bool {
         (self.cheat_active == self.legit_active) && self.cheat_active
     }
 }
 
+/// Drives a single client connection using two concurrent tasks:
+/// - **Read task**: reads packets from the TCP socket and sends them to the Controller
+///   as `Event::ClientData`; sends `Event::ClientDisconnected` on any read error.
+/// - **Write task**: receives packets from the Controller via `packet_rx` and writes
+///   them to the TCP socket; exits silently on write error.
 pub async fn run_client(
     read_half: OwnedReadHalf,
     write_half: OwnedWriteHalf,
@@ -310,6 +384,11 @@ pub async fn run_client(
     );
 }
 
+/// Drives the upstream server connection using two concurrent tasks:
+/// - **Read task**: reads packets from the server and sends them to the Controller
+///   as `Event::ServerData`; exits on read error.
+/// - **Write task**: receives packets from the Controller via `packet_rx` and writes
+///   them to the server socket; exits silently on write error.
 pub async fn run_server(
     read_half: tokio::net::tcp::OwnedReadHalf,
     write_half: tokio::net::tcp::OwnedWriteHalf,
