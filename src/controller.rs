@@ -1,4 +1,4 @@
-use minecraft_protocol::{
+use mc_protocol::{
     packet::{RawPacket, UncompressedPacket},
     varint::VarInt,
 };

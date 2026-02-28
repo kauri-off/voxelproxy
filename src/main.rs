@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::anyhow;
 use dialoguer::theme::ColorfulTheme;
-use minecraft_protocol::{
+use mc_protocol::{
     packet::{RawPacket, UncompressedPacket},
     varint::VarInt,
 };
@@ -175,7 +175,9 @@ async fn handle_connection(
     mut stream: TcpStream,
     tx: Sender<(TcpStream, i32)>,
 ) -> anyhow::Result<()> {
-    let handshake: c2s::Handshake = read_uncompressed(&mut stream).await?.deserialize_payload()?;
+    let handshake: c2s::Handshake = read_uncompressed(&mut stream)
+        .await?
+        .deserialize_payload()?;
 
     match handshake.intent.0 {
         1 => process_status(stream, handshake.protocol_version.0).await?,
@@ -223,13 +225,15 @@ async fn handle_clients(
     remote_dns: String,
 ) -> anyhow::Result<()> {
     let (mut cheat_stream, cheat_protocol) = rx.recv().await.unwrap();
-    let cheat_login_start: c2s::LoginStart =
-        read_uncompressed(&mut cheat_stream).await?.deserialize_payload()?;
+    let cheat_login_start: c2s::LoginStart = read_uncompressed(&mut cheat_stream)
+        .await?
+        .deserialize_payload()?;
     println!("[+] Клиент с читами");
 
     let (mut legit_stream, legit_protocol) = rx.recv().await.unwrap();
-    let _legit_login_start: c2s::LoginStart =
-        read_uncompressed(&mut legit_stream).await?.deserialize_payload()?;
+    let _legit_login_start: c2s::LoginStart = read_uncompressed(&mut legit_stream)
+        .await?
+        .deserialize_payload()?;
     println!("[+] Клиент без читов");
 
     if cheat_protocol != legit_protocol {
