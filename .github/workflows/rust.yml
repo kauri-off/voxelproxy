@@ -14,16 +14,11 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Set up Rust
-        uses: actions-rs/toolchain@v1.0.7
-        with:
-          toolchain: stable
-
-      - uses: shogo82148/actions-setup-perl@v1
-        with:
-          perl-version: "5.38"
-
       - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Build
         run: cargo build --release
