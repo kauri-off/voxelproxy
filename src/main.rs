@@ -19,7 +19,12 @@ use tokio::{
 use crate::{
     controller::{ClientId, Controller, run_client, run_server},
     local_ip::get_local_ip,
-    packets::v1_16_5::{c2s, s2c},
+    packets::v1_16_5::{
+        Intent,
+        handshaking::c2s::Handshake,
+        login::{c2s::LoginStart, s2c::{EncryptionRequest, LoginDisconnect, LoginSuccess, SetCompression}},
+        status::s2c::StatusResponse,
+    },
     resolver::resolve_host_port,
     updater::has_update,
 };
@@ -167,6 +172,7 @@ __     __            _ ____
     Ok(())
 }
 
+#[inline]
 async fn read_uncompressed(stream: &mut TcpStream) -> anyhow::Result<UncompressedPacket> {
     Ok(RawPacket::read_async(stream).await?.as_uncompressed()?)
 }
@@ -175,16 +181,16 @@ async fn handle_connection(
     mut stream: TcpStream,
     tx: Sender<(TcpStream, i32)>,
 ) -> anyhow::Result<()> {
-    let handshake: c2s::Handshake = read_uncompressed(&mut stream)
+    let handshake: Handshake = read_uncompressed(&mut stream)
         .await?
         .deserialize_payload()?;
 
-    match handshake.intent.0 {
-        1 => process_status(stream, handshake.protocol_version.0).await?,
-        2 => {
+    match Intent::try_from(handshake.intent.0) {
+        Ok(Intent::Status) => process_status(stream, handshake.protocol_version.0).await?,
+        Ok(Intent::Login) => {
             tx.send((stream, handshake.protocol_version.0)).await?;
         }
-        _ => {}
+        Err(_) => {}
     }
 
     Ok(())
@@ -195,7 +201,7 @@ async fn process_status(mut stream: TcpStream, _protocol: i32) -> anyhow::Result
         let packet_id = packet.clone().as_uncompressed()?.packet_id;
 
         if packet_id == 0 {
-            UncompressedPacket::from_packet(&s2c::StatusResponse {
+            UncompressedPacket::from_packet(&StatusResponse {
                 response: json!({
                   "version": {
                     "name": MC_VERSION,
@@ -225,13 +231,13 @@ async fn handle_clients(
     remote_dns: String,
 ) -> anyhow::Result<()> {
     let (mut cheat_stream, cheat_protocol) = rx.recv().await.unwrap();
-    let cheat_login_start: c2s::LoginStart = read_uncompressed(&mut cheat_stream)
+    let cheat_login_start: LoginStart = read_uncompressed(&mut cheat_stream)
         .await?
         .deserialize_payload()?;
     println!("[+] Клиент с читами");
 
     let (mut legit_stream, legit_protocol) = rx.recv().await.unwrap();
-    let _legit_login_start: c2s::LoginStart = read_uncompressed(&mut legit_stream)
+    let _legit_login_start: LoginStart = read_uncompressed(&mut legit_stream)
         .await?
         .deserialize_payload()?;
     println!("[+] Клиент без читов");
@@ -273,11 +279,11 @@ async fn handle_clients(
     };
     println!("Успех");
 
-    let handshake = c2s::Handshake {
+    let handshake = Handshake {
         protocol_version: VarInt(cheat_protocol),
         server_address: remote_dns.clone(),
         server_port: DEFAULT_PORT,
-        intent: VarInt(2),
+        intent: Intent::Login.into(),
     };
 
     UncompressedPacket::from_packet(&handshake)?
@@ -298,16 +304,16 @@ async fn handle_clients(
             .uncompress(threshold)?;
 
         match packet.packet_id {
-            0 => {
+            LoginDisconnect::PACKET_ID => {
                 error_handler(
                     &mut cheat_stream,
                     &mut legit_stream,
-                    packet.deserialize_payload::<s2c::LoginDisconnect>()?.reason,
+                    packet.deserialize_payload::<LoginDisconnect>()?.reason,
                 )
                 .await;
                 return Err(anyhow!("Disconnected"));
             }
-            1 => {
+            EncryptionRequest::PACKET_ID => {
                 error_handler(
                     &mut cheat_stream,
                     &mut legit_stream,
@@ -316,15 +322,15 @@ async fn handle_clients(
                 .await;
                 return Err(anyhow!("Licensed"));
             }
-            2 => {
+            LoginSuccess::PACKET_ID => {
                 let packet = packet.to_raw_packet_compressed(threshold)?;
                 packet.write_async(&mut cheat_stream).await?;
                 packet.write_async(&mut legit_stream).await?;
                 println!("[+] Login success");
                 break;
             }
-            3 => {
-                let compression: s2c::SetCompression = packet.deserialize_payload()?;
+            SetCompression::PACKET_ID => {
+                let compression: SetCompression = packet.deserialize_payload()?;
                 threshold = Some(compression.threshold.0);
 
                 let packet = packet.to_raw_packet()?;
@@ -390,7 +396,7 @@ async fn error_handler<W: AsyncWriteExt + Unpin>(
     legit_stream: &mut W,
     message: String,
 ) {
-    let disconnect = UncompressedPacket::from_packet(&s2c::LoginDisconnect {
+    let disconnect = UncompressedPacket::from_packet(&LoginDisconnect {
         reason: json!({"text": message}).to_string(),
     })
     .unwrap();

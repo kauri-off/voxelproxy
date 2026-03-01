@@ -7,7 +7,7 @@ use tokio::{
     sync::mpsc::{Receiver, Sender},
 };
 
-use crate::packets::v1_16_5::{c2s, s2c};
+use crate::packets::v1_16_5::play::{c2s, s2c};
 
 /// Identifies which of the two connected clients a packet or event belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
