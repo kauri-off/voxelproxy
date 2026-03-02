@@ -12,8 +12,8 @@ use packets::{c2s, s2c};
 // ─── TransactionSync ────────────────────────────────────────────────────────
 
 /// Tracks whether each client has acknowledged a single server-initiated
-/// transaction. Version-agnostic: only the packet IDs and encoding differ
-/// per version, which is handled inside each `VersionData`.
+/// transaction. Version-specific to 1.16.5; uses ContainerAck transactions
+/// instead of Ping/Pong.
 pub struct TransactionSync {
     pub action: i16,
     cheat_sent: bool,
@@ -49,8 +49,6 @@ impl TransactionSync {
     }
 }
 
-/// Version-specific state for Minecraft 1.16.5 (protocol 763).
-/// Owns both the authoritative player position and the pending transaction queue.
 pub struct VersionData {
     pub position: s2c::Position,
     pub transactions: Vec<TransactionSync>,
@@ -75,22 +73,22 @@ impl VersionData {
     /// Update `self.position` from a c2s movement packet.
     fn update_position(&mut self, packet: &UncompressedPacket) -> anyhow::Result<()> {
         match packet.packet_id {
-            c2s::Position::PACKET_ID => {
-                let p: c2s::Position = packet.deserialize_payload()?;
+            c2s::Pos::PACKET_ID => {
+                let p: c2s::Pos = packet.deserialize_payload()?;
                 self.position.x = p.x;
                 self.position.y = p.y;
                 self.position.z = p.z;
             }
-            c2s::PositionLook::PACKET_ID => {
-                let p: c2s::PositionLook = packet.deserialize_payload()?;
+            c2s::PosRot::PACKET_ID => {
+                let p: c2s::PosRot = packet.deserialize_payload()?;
                 self.position.x = p.x;
                 self.position.y = p.y;
                 self.position.z = p.z;
                 self.position.yaw = p.yaw;
                 self.position.pitch = p.pitch;
             }
-            c2s::Look::PACKET_ID => {
-                let p: c2s::Look = packet.deserialize_payload()?;
+            c2s::Rot::PACKET_ID => {
+                let p: c2s::Rot = packet.deserialize_payload()?;
                 self.position.yaw = p.yaw;
                 self.position.pitch = p.pitch;
             }
@@ -107,7 +105,7 @@ impl VersionProtocol for VersionData {
         threshold: Option<i32>,
     ) -> Option<RawPacket> {
         match packet.packet_id {
-            c2s::Look::PACKET_ID | c2s::Position::PACKET_ID | c2s::PositionLook::PACKET_ID => {
+            c2s::Rot::PACKET_ID | c2s::Pos::PACKET_ID | c2s::PosRot::PACKET_ID => {
                 let _ = self.update_position(packet);
                 Some(
                     UncompressedPacket::from_packet(&self.position)
@@ -126,18 +124,18 @@ impl VersionProtocol for VersionData {
         client_id: ClientId,
         both_active: bool,
     ) -> Option<bool> {
-        if packet.packet_id != c2s::Transaction::PACKET_ID {
+        if packet.packet_id != c2s::Ack::PACKET_ID {
             return None;
         }
 
-        let t: c2s::Transaction = packet.deserialize_payload().unwrap();
+        let t: c2s::Ack = packet.deserialize_payload().unwrap();
 
         if both_active {
             // Both clients connected: remove entry once both have acknowledged it.
             if let Some(i) = self
                 .transactions
                 .iter_mut()
-                .position(|s| s.action == t.action && s.sent(client_id))
+                .position(|s| s.action == t.uid && s.sent(client_id))
             {
                 self.transactions.remove(i);
             }
@@ -156,12 +154,12 @@ impl VersionProtocol for VersionData {
     }
 
     fn try_track_s2c_ping(&mut self, packet: &UncompressedPacket) {
-        if packet.packet_id != s2c::Transaction::PACKET_ID {
+        if packet.packet_id != s2c::ContainerAck::PACKET_ID {
             return;
         }
 
-        let t: s2c::Transaction = packet.deserialize_payload().unwrap();
-        self.transactions.push(TransactionSync::new(t.action));
+        let t: s2c::ContainerAck = packet.deserialize_payload().unwrap();
+        self.transactions.push(TransactionSync::new(t.uid));
     }
 
     fn collect_replay(&mut self, new_active: ClientId, threshold: Option<i32>) -> Vec<RawPacket> {
@@ -179,9 +177,9 @@ impl VersionProtocol for VersionData {
             .into_iter()
             .map(|action| {
                 println!("Синхронизация: Отправка: {}", action);
-                let tx = c2s::Transaction {
-                    window_id: 0,
-                    action,
+                let tx = c2s::Ack {
+                    container_id: 0,
+                    uid: action,
                     accepted: true,
                 };
                 UncompressedPacket::from_packet(&tx)

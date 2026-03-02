@@ -4,7 +4,7 @@ pub mod c2s {
     use super::*;
 
     #[derive(Packet, Debug)]
-    #[packet(0x1C)]
+    #[packet(28)] // ServerboundMovePlayerPacket.Pos
     pub struct Pos {
         pub x: f64,
         pub y: f64,
@@ -13,7 +13,7 @@ pub mod c2s {
     }
 
     #[derive(Packet, Debug)]
-    #[packet(0x1D)]
+    #[packet(29)] // ServerboundMovePlayerPacket.PosRot
     pub struct PosRot {
         pub x: f64,
         pub y: f64,
@@ -24,7 +24,7 @@ pub mod c2s {
     }
 
     #[derive(Packet, Debug)]
-    #[packet(0x1E)]
+    #[packet(30)] // ServerboundMovePlayerPacket.Rot
     pub struct Rot {
         pub yaw: f32,
         pub pitch: f32,
@@ -32,7 +32,7 @@ pub mod c2s {
     }
 
     #[derive(Packet, Debug)]
-    #[packet(0x2B)]
+    #[packet(43)] // ServerboundPongPacket
     pub struct Pong {
         pub id: i32,
     }
@@ -42,7 +42,7 @@ pub mod s2c {
     use super::*;
 
     #[derive(Packet, Debug)]
-    #[packet(0x42)]
+    #[packet(66)] // ClientboundPlayerPositionPacket
     pub struct Position {
         pub id: VarInt,
         pub x: f64,
@@ -57,7 +57,7 @@ pub mod s2c {
     }
 
     #[derive(Packet, Debug)]
-    #[packet(0x37)]
+    #[packet(55)] // ClientboundPingPacket
     pub struct Ping {
         pub id: i32,
     }

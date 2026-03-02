@@ -58,16 +58,13 @@ impl VersionData {
     pub fn new() -> Self {
         Self {
             position: s2c::Position {
-                id: VarInt(0),
                 x: 0.0,
                 y: 0.0,
                 z: 0.0,
                 yaw: 0.0,
                 pitch: 0.0,
-                delta_x: 0.0,
-                delta_y: 0.0,
-                delta_z: 0.0,
                 relative_flags: 0,
+                id: VarInt(0),
             },
             pings: vec![],
         }

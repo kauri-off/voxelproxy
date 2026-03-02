@@ -35,7 +35,7 @@ pub enum Event {
 }
 
 /// Central coordinator that routes packets between two clients and the upstream
-/// server. All version-specific logic (position tracking, transaction queue) is
+/// server. All version-specific logic (position tracking, ping queue) is
 /// delegated to the `Version` field, keeping this struct protocol-agnostic.
 pub struct Controller {
     /// Which client is currently the authoritative sender to the server.
@@ -54,7 +54,7 @@ pub struct Controller {
     cheat_active: bool,
     /// Whether the Legit client is still connected.
     legit_active: bool,
-    /// Version-specific state: position tracking and transaction queue.
+    /// Version-specific state: position tracking and sync-packet queue.
     version: Version,
 }
 
@@ -85,9 +85,9 @@ impl Controller {
     /// Main event loop. Runs until the channel closes (both I/O tasks have exited).
     ///
     /// Each iteration handles one of three event types:
-    /// - `ClientData`         — position sync, transaction tracking, relay to server
-    /// - `ClientDisconnected` — update state, optionally switch active client & replay transactions
-    /// - `ServerData`         — track new transactions, broadcast to active clients
+    /// - `ClientData`         — position sync, ping tracking, relay to server
+    /// - `ClientDisconnected` — update state, optionally switch active client & replay sync packets
+    /// - `ServerData`         — track new pings, broadcast to active clients
     pub async fn run(mut self) {
         while let Some(event) = self.event_rx.recv().await {
             match event {
@@ -110,15 +110,11 @@ impl Controller {
                         }
                     }
 
-                    // ── Transaction tracking ─────────────────────────────────────────────
+                    // ── Ping tracking ─────────────────────────────────────────────
                     // Returns Some(true) when the packet must not be relayed to the server.
                     let skip_relay = if let Ok(uncompressed) = packet.uncompress(self.threshold) {
                         self.version
-                            .try_handle_c2s_transaction(
-                                &uncompressed,
-                                client_id,
-                                self.both_active(),
-                            )
+                            .try_handle_c2s_pong(&uncompressed, client_id, self.both_active())
                             .unwrap_or(false)
                     } else {
                         false
@@ -155,7 +151,7 @@ impl Controller {
                         self.active_client = client_id.opposite();
                         println!("Переключился на {:?}", self.active_client);
 
-                        // Replay transactions the new active client already acknowledged,
+                        // Replay pings the new active client already acknowledged,
                         // so the server receives their acks (they were never forwarded before).
                         for pkt in self
                             .version
@@ -167,9 +163,9 @@ impl Controller {
                 }
 
                 Event::ServerData(packet) => {
-                    // Track every new transaction so we can wait for both client acks.
+                    // Track every new sync packet so we can wait for both client acks.
                     if let Ok(uncompressed) = packet.uncompress(self.threshold) {
-                        self.version.try_track_s2c_transaction(&uncompressed);
+                        self.version.try_track_s2c_ping(&uncompressed);
                     }
                     // Broadcast the raw packet to whichever clients are still active.
                     if self.cheat_active {
