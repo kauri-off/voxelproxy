@@ -4,7 +4,7 @@ use tokio::{
     sync::mpsc::{Receiver, Sender},
 };
 
-use crate::protocols::{Version, VersionProtocol};
+use crate::protocols::{ServerBoundEvent, Version, VersionProtocol};
 
 /// Identifies which of the two connected clients a packet or event belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,8 +48,6 @@ pub struct Controller {
     remote_tx: Sender<RawPacket>,
     /// Receives events (client data, disconnections, server data) from I/O tasks.
     event_rx: Receiver<Event>,
-    /// Compression threshold negotiated during login; `None` means no compression.
-    threshold: Option<i32>,
     /// Whether the Cheat client is still connected.
     cheat_active: bool,
     /// Whether the Legit client is still connected.
@@ -66,7 +64,6 @@ impl Controller {
         legit_tx: Sender<RawPacket>,
         remote_tx: Sender<RawPacket>,
         event_rx: Receiver<Event>,
-        threshold: Option<i32>,
         version: Version,
     ) -> Self {
         Self {
@@ -75,7 +72,6 @@ impl Controller {
             legit_tx,
             remote_tx,
             event_rx,
-            threshold,
             cheat_active: true,
             legit_active: true,
             version,
@@ -92,35 +88,34 @@ impl Controller {
         while let Some(event) = self.event_rx.recv().await {
             match event {
                 Event::ClientData(client_id, packet) => {
-                    // ── Position sync ────────────────────────────────────────────────────
-                    // Only the active client drives the authoritative position. When both
-                    // clients are connected, forward a synthetic position packet to the
-                    // inactive client so its state stays in sync.
-                    if client_id == self.active_client && self.both_active() {
-                        if let Ok(uncompressed) = packet.uncompress(self.threshold) {
-                            if let Some(sync) = self
-                                .version
-                                .try_sync_position(&uncompressed, self.threshold)
-                            {
-                                match self.active_client.opposite() {
-                                    ClientId::Cheat => self.cheat_tx.send(sync).await.ok(),
-                                    ClientId::Legit => self.legit_tx.send(sync).await.ok(),
-                                };
+                    let event = self.version.handle_c2s(
+                        &packet,
+                        client_id,
+                        client_id == self.active_client,
+                        self.both_active(),
+                    );
+
+                    let mut skip = false;
+
+                    if let Some(event) = event {
+                        match event {
+                            ServerBoundEvent::SendToInactive(raw_packet) => {
+                                if self.both_active() {
+                                    match self.active_client.opposite() {
+                                        ClientId::Cheat => {
+                                            self.cheat_tx.send(raw_packet).await.ok();
+                                        }
+                                        ClientId::Legit => {
+                                            self.legit_tx.send(raw_packet).await.ok();
+                                        }
+                                    }
+                                }
                             }
+                            ServerBoundEvent::SkipRelay => skip = true,
                         }
                     }
 
-                    // ── Ping tracking ─────────────────────────────────────────────
-                    // Returns Some(true) when the packet must not be relayed to the server.
-                    let skip_relay = if let Ok(uncompressed) = packet.uncompress(self.threshold) {
-                        self.version
-                            .try_handle_c2s_pong(&uncompressed, client_id, self.both_active())
-                            .unwrap_or(false)
-                    } else {
-                        false
-                    };
-
-                    if skip_relay {
+                    if skip {
                         continue;
                     }
 
@@ -151,22 +146,25 @@ impl Controller {
                         self.active_client = client_id.opposite();
                         println!("Переключился на {:?}", self.active_client);
 
-                        // Replay pings the new active client already acknowledged,
-                        // so the server receives their acks (they were never forwarded before).
-                        for pkt in self
-                            .version
-                            .collect_replay(self.active_client, self.threshold)
+                        if let Some(event) =
+                            self.version.handle_client_disconnect(self.active_client)
                         {
-                            self.remote_tx.send(pkt).await.unwrap();
+                            match event {
+                                crate::protocols::ClientDisconnectEvent::SendToServer(packets) => {
+                                    for packet in packets {
+                                        self.remote_tx.send(packet).await.unwrap();
+                                    }
+                                }
+                            }
                         }
                     }
                 }
 
                 Event::ServerData(packet) => {
-                    // Track every new sync packet so we can wait for both client acks.
-                    if let Ok(uncompressed) = packet.uncompress(self.threshold) {
-                        self.version.try_track_s2c_ping(&uncompressed);
+                    if let Some(event) = self.version.handle_s2c(&packet, self.both_active()) {
+                        match event {}
                     }
+
                     // Broadcast the raw packet to whichever clients are still active.
                     if self.cheat_active {
                         let _ = self.cheat_tx.send(packet.clone()).await;

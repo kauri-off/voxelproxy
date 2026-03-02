@@ -5,152 +5,228 @@ use mc_protocol::{
     varint::VarInt,
 };
 
-use super::{PingSync, VersionProtocol};
-use crate::controller::ClientId;
+use super::VersionProtocol;
+use crate::{
+    controller::ClientId,
+    protocols::{ClientBoundEvent, ClientDisconnectEvent, ServerBoundEvent},
+};
 use packets::{c2s, s2c};
 
+const TELEPORT_ID: i32 = 1000;
+
 pub struct VersionData {
-    pub position: s2c::Position,
+    pub position: s2c::game::Position,
     pub pings: Vec<PingSync>,
+    pub threshold: Option<i32>,
 }
 
 impl VersionData {
     pub fn new() -> Self {
         Self {
-            position: s2c::Position {
+            position: s2c::game::Position {
+                id: VarInt(TELEPORT_ID),
                 x: 0.0,
                 y: 0.0,
                 z: 0.0,
                 yaw: 0.0,
                 pitch: 0.0,
-                flags: 0,
-                teleport_id: VarInt(0),
+                relative_flags: 0,
             },
             pings: vec![],
+            threshold: None,
         }
-    }
-
-    /// Update `self.position` from a c2s movement packet.
-    fn update_position(&mut self, packet: &UncompressedPacket) -> anyhow::Result<()> {
-        match packet.packet_id {
-            c2s::Pos::PACKET_ID => {
-                let p: c2s::Pos = packet.deserialize_payload()?;
-                self.position.x = p.x;
-                self.position.y = p.y;
-                self.position.z = p.z;
-            }
-            c2s::PosRot::PACKET_ID => {
-                let p: c2s::PosRot = packet.deserialize_payload()?;
-                self.position.x = p.x;
-                self.position.y = p.y;
-                self.position.z = p.z;
-                self.position.yaw = p.yaw;
-                self.position.pitch = p.pitch;
-            }
-            c2s::Rot::PACKET_ID => {
-                let p: c2s::Rot = packet.deserialize_payload()?;
-                self.position.yaw = p.yaw;
-                self.position.pitch = p.pitch;
-            }
-            _ => {}
-        }
-        Ok(())
     }
 }
 
 impl VersionProtocol for VersionData {
-    fn try_sync_position(
+    fn handle_c2s(
         &mut self,
-        packet: &UncompressedPacket,
-        threshold: Option<i32>,
-    ) -> Option<RawPacket> {
-        match packet.packet_id {
-            c2s::Rot::PACKET_ID | c2s::Pos::PACKET_ID | c2s::PosRot::PACKET_ID => {
-                let _ = self.update_position(packet);
-                Some(
-                    UncompressedPacket::from_packet(&self.position)
-                        .unwrap()
-                        .to_raw_packet_compressed(threshold)
-                        .unwrap(),
-                )
-            }
-            _ => None,
-        }
-    }
-
-    fn try_handle_c2s_pong(
-        &mut self,
-        packet: &UncompressedPacket,
+        packet: &RawPacket,
         client_id: ClientId,
+        is_active: bool,
         both_active: bool,
-    ) -> Option<bool> {
-        if packet.packet_id != c2s::Ack::PACKET_ID {
-            return None;
-        }
-
-        let Ok(t): Result<c2s::Ack, _> = packet.deserialize_payload() else {
-            return None;
-        };
-
-        if both_active {
-            // Both clients connected: remove entry once both have acknowledged it.
-            if let Some(i) = self
-                .pings
-                .iter_mut()
-                .position(|s| s.id == t.uid as i32 && s.sent(client_id))
-            {
-                self.pings.remove(i);
-            }
-            Some(false)
-        } else {
-            // One client gone: skip relay if the absent client already acked this.
-            if let Some(head) = self.pings.get(0) {
-                if head.is_sent(client_id.opposite()) {
-                    println!("Синхронизация: Пропуск: {}", head.id);
-                    self.pings.remove(0);
-                    return Some(true); // caller must `continue` (skip relay to server)
-                }
-            }
-            Some(false)
-        }
+    ) -> Option<ServerBoundEvent> {
+        self.handle_c2s_game(packet, client_id, is_active, both_active)
+            .unwrap_or_default()
     }
 
-    fn try_track_s2c_ping(&mut self, packet: &UncompressedPacket) {
-        if packet.packet_id != s2c::ContainerAck::PACKET_ID {
-            return;
-        }
-
-        let Ok(t): Result<s2c::ContainerAck, _> = packet.deserialize_payload() else {
-            return;
-        };
-        self.pings.push(PingSync::new(t.uid as i32));
+    fn handle_s2c(&mut self, packet: &RawPacket, both_active: bool) -> Option<ClientBoundEvent> {
+        self.handle_s2c_game(packet, both_active)
+            .unwrap_or_default()
     }
 
-    fn collect_replay(&mut self, new_active: ClientId, threshold: Option<i32>) -> Vec<RawPacket> {
-        let mut to_send = vec![];
+    fn update_threshold(&mut self, threshould: Option<i32>) {
+        self.threshold = threshould;
+    }
+
+    fn handle_client_disconnect(&mut self, new_active: ClientId) -> Option<ClientDisconnectEvent> {
+        let mut packets = vec![];
+
         self.pings.retain(|t| {
             if t.is_sent(new_active) {
-                to_send.push(t.id);
-                true
-            } else {
+                println!("Синхронизация: Отправка: {}", t.uid);
+                let tx = c2s::game::Ack {
+                    container_id: t.container_id,
+                    uid: t.uid,
+                    accepted: true,
+                };
+                packets.push(
+                    UncompressedPacket::from_packet(&tx)
+                        .unwrap()
+                        .to_raw_packet_compressed(self.threshold)
+                        .unwrap(),
+                );
                 false
+            } else {
+                true
             }
         });
 
-        to_send
-            .into_iter()
-            .map(|id| {
-                println!("Синхронизация: Отправка: {}", id);
-                let tx = c2s::Ack {
-                    container_id: 0,
-                    uid: id as i16,
-                    accepted: true,
-                };
-                UncompressedPacket::from_packet(&tx)
-                    .unwrap()
-                    .to_raw_packet_compressed(threshold)
-                    .unwrap()
-            })
-            .collect()
+        if packets.is_empty() {
+            None
+        } else {
+            Some(ClientDisconnectEvent::SendToServer(packets))
+        }
+    }
+}
+
+impl VersionData {
+    fn handle_s2c_game(
+        &mut self,
+        packet: &RawPacket,
+        both_active: bool,
+    ) -> anyhow::Result<Option<ClientBoundEvent>> {
+        let packet = packet.uncompress(self.threshold)?;
+
+        match packet.packet_id {
+            s2c::game::ContainerAck::PACKET_ID => {
+                if both_active {
+                    let ping: s2c::game::ContainerAck = packet.deserialize_payload()?;
+                    self.pings.push(PingSync::new(ping.container_id, ping.uid));
+                }
+            }
+            _ => {}
+        }
+
+        Ok(None)
+    }
+
+    fn handle_c2s_game(
+        &mut self,
+        packet: &RawPacket,
+        client_id: ClientId,
+        is_active: bool,
+        both_active: bool,
+    ) -> anyhow::Result<Option<ServerBoundEvent>> {
+        let packet = packet.uncompress(self.threshold)?;
+
+        match packet.packet_id {
+            c2s::game::AcceptTeleportation::PACKET_ID => {
+                if !both_active {
+                    let teleport: c2s::game::AcceptTeleportation = packet.deserialize_payload()?;
+
+                    if teleport.id.0 == TELEPORT_ID {
+                        return Ok(Some(ServerBoundEvent::SkipRelay));
+                    }
+                }
+            }
+            c2s::game::Pos::PACKET_ID => {
+                if is_active {
+                    let pos: c2s::game::Pos = packet.deserialize_payload()?;
+
+                    self.position.x = pos.x;
+                    self.position.y = pos.y;
+                    self.position.z = pos.z;
+                    return self.send_position_to_inactive();
+                }
+            }
+            c2s::game::PosRot::PACKET_ID => {
+                if is_active {
+                    let pos_rot: c2s::game::PosRot = packet.deserialize_payload()?;
+
+                    self.position.x = pos_rot.x;
+                    self.position.y = pos_rot.y;
+                    self.position.z = pos_rot.z;
+                    self.position.yaw = pos_rot.yaw;
+                    self.position.pitch = pos_rot.pitch;
+
+                    return self.send_position_to_inactive();
+                }
+            }
+            c2s::game::Rot::PACKET_ID => {
+                if is_active {
+                    let rot: c2s::game::Rot = packet.deserialize_payload()?;
+
+                    self.position.yaw = rot.yaw;
+                    self.position.pitch = rot.pitch;
+                    return self.send_position_to_inactive();
+                }
+            }
+            c2s::game::Ack::PACKET_ID => {
+                let packet: c2s::game::Ack = packet.deserialize_payload()?;
+
+                if both_active {
+                    if let Some(i) = self.pings.iter_mut().position(|s| {
+                        s.uid == packet.uid
+                            && s.container_id == packet.container_id
+                            && s.sent(client_id)
+                    }) {
+                        self.pings.remove(i);
+                    }
+                } else {
+                    if let Some(head) = self.pings.get(0) {
+                        if head.is_sent(client_id.opposite()) {
+                            println!("Синхронизация: Пропуск: {}", head.uid);
+                            self.pings.remove(0);
+                            return Ok(Some(ServerBoundEvent::SkipRelay));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        };
+
+        Ok(None)
+    }
+
+    fn send_position_to_inactive(&self) -> anyhow::Result<Option<ServerBoundEvent>> {
+        Ok(Some(ServerBoundEvent::SendToInactive(
+            UncompressedPacket::from_packet(&self.position)?
+                .to_raw_packet_compressed(self.threshold)?,
+        )))
+    }
+}
+
+#[derive(Debug)]
+pub struct PingSync {
+    pub container_id: i8,
+    pub uid: i16,
+    cheat_sent: bool,
+    legit_sent: bool,
+}
+
+impl PingSync {
+    pub fn new(container_id: i8, uid: i16) -> Self {
+        Self {
+            container_id,
+            uid,
+            cheat_sent: false,
+            legit_sent: false,
+        }
+    }
+
+    pub fn sent(&mut self, client: ClientId) -> bool {
+        match client {
+            ClientId::Cheat => self.cheat_sent = true,
+            ClientId::Legit => self.legit_sent = true,
+        }
+        self.cheat_sent && self.legit_sent
+    }
+
+    pub fn is_sent(&self, client: ClientId) -> bool {
+        match client {
+            ClientId::Cheat => self.cheat_sent,
+            ClientId::Legit => self.legit_sent,
+        }
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "voxelproxy"
-version = "3.2.1"
+version = "4.0.0"
 edition = "2024"
 authors = ["kauri-off <https://github.com/kauri-off>"]
 description = "Бесплатный аналог takker.ru"
@@ -10,7 +10,7 @@ readme = "README.md"
 license = "GPL-3.0-only"
 
 [dependencies]
-tokio = { version = "1.49.0", features = ["full"] }
+tokio = { version = "1.50.0", features = ["full"] }
 serde_json = "1.0.149"
 trust-dns-resolver = "0.23.2"
 dialoguer = "0.12.0"
