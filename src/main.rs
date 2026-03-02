@@ -19,20 +19,18 @@ use tokio::{
 use crate::{
     controller::{ClientId, Controller, run_client, run_server},
     local_ip::get_local_ip,
-    packets::v1_16_5::{
+    packets::universal::{
         Intent,
         handshaking::c2s::Handshake,
-        login::{c2s::LoginStart, s2c::{EncryptionRequest, LoginDisconnect, LoginSuccess, SetCompression}},
-        status::s2c::StatusResponse,
+        login::s2c::{EncryptionRequest, LoginDisconnect, LoginSuccess, SetCompression},
     },
+    protocols::Version,
     resolver::resolve_host_port,
     updater::has_update,
 };
 
 const DEFAULT_PORT: u16 = 25565;
-const REQUIRED_PROTOCOL: i32 = 754;
-const MC_VERSION: &str = "1.16.5";
-const STATUS_MAX_PLAYERS: u32 = 20;
+const BIND_PORT: u16 = 25565;
 const HANDSHAKE_CHANNEL_CAPACITY: usize = 32;
 const IO_CHANNEL_CAPACITY: usize = 100;
 
@@ -42,6 +40,7 @@ mod keybind;
 mod local_ip;
 #[allow(dead_code)]
 mod packets;
+mod protocols;
 mod resolver;
 mod updater;
 
@@ -143,7 +142,7 @@ __     __            _ ____
         }
     };
 
-    let listener = match TcpListener::bind(format!("0.0.0.0:{}", DEFAULT_PORT)).await {
+    let listener = match TcpListener::bind(format!("0.0.0.0:{}", BIND_PORT)).await {
         Ok(t) => t,
         Err(e) => {
             println!("Ошибка при создании сокета. {}", e);
@@ -163,7 +162,7 @@ __     __            _ ____
 
     tokio::spawn(async move {
         while let Ok((stream, _addr)) = listener.accept().await {
-            tokio::spawn(handle_connection(stream, tx.clone()));
+            tokio::spawn(handle_connection(stream, tx.clone(), remote_addr.clone()));
         }
     });
 
@@ -180,13 +179,14 @@ async fn read_uncompressed(stream: &mut TcpStream) -> anyhow::Result<Uncompresse
 async fn handle_connection(
     mut stream: TcpStream,
     tx: Sender<(TcpStream, i32)>,
+    remote_addr: SocketAddr,
 ) -> anyhow::Result<()> {
     let handshake: Handshake = read_uncompressed(&mut stream)
         .await?
         .deserialize_payload()?;
 
     match Intent::try_from(handshake.intent.0) {
-        Ok(Intent::Status) => process_status(stream, handshake.protocol_version.0).await?,
+        Ok(Intent::Status) => process_status(stream, remote_addr, handshake).await?,
         Ok(Intent::Login) => {
             tx.send((stream, handshake.protocol_version.0)).await?;
         }
@@ -196,31 +196,38 @@ async fn handle_connection(
     Ok(())
 }
 
-async fn process_status(mut stream: TcpStream, _protocol: i32) -> anyhow::Result<()> {
-    while let Ok(packet) = RawPacket::read_async(&mut stream).await {
-        let packet_id = packet.clone().as_uncompressed()?.packet_id;
+async fn process_status(
+    mut stream: TcpStream,
+    remote_addr: SocketAddr,
+    handshake: Handshake,
+) -> anyhow::Result<()> {
+    let mut remote_stream = TcpStream::connect(remote_addr).await?;
 
-        if packet_id == 0 {
-            UncompressedPacket::from_packet(&StatusResponse {
-                response: json!({
-                  "version": {
-                    "name": MC_VERSION,
-                    "protocol": REQUIRED_PROTOCOL
-                  },
-                  "players": {
-                    "max": STATUS_MAX_PLAYERS,
-                    "online": 0
-                  },
-                  "description": "A Minecraft Server",
-                })
-                .to_string(),
-            })?
-            .write_async(&mut stream)
-            .await?;
-        } else if packet_id == 1 {
-            packet.write_async(&mut stream).await?;
-        }
-    }
+    UncompressedPacket::from_packet(&handshake)?
+        .write_async(&mut remote_stream)
+        .await?;
+
+    // STATUS
+    RawPacket::read_async(&mut stream)
+        .await?
+        .write_async(&mut remote_stream)
+        .await?;
+
+    RawPacket::read_async(&mut remote_stream)
+        .await?
+        .write_async(&mut stream)
+        .await?;
+
+    // PING
+    RawPacket::read_async(&mut stream)
+        .await?
+        .write_async(&mut remote_stream)
+        .await?;
+
+    RawPacket::read_async(&mut remote_stream)
+        .await?
+        .write_async(&mut stream)
+        .await?;
 
     Ok(())
 }
@@ -231,15 +238,11 @@ async fn handle_clients(
     remote_dns: String,
 ) -> anyhow::Result<()> {
     let (mut cheat_stream, cheat_protocol) = rx.recv().await.unwrap();
-    let cheat_login_start: LoginStart = read_uncompressed(&mut cheat_stream)
-        .await?
-        .deserialize_payload()?;
+    let cheat_login_start = RawPacket::read_async(&mut cheat_stream).await?;
     println!("[+] Клиент с читами");
 
     let (mut legit_stream, legit_protocol) = rx.recv().await.unwrap();
-    let _legit_login_start: LoginStart = read_uncompressed(&mut legit_stream)
-        .await?
-        .deserialize_payload()?;
+    let _ = RawPacket::read_async(&mut legit_stream).await?;
     println!("[+] Клиент без читов");
 
     if cheat_protocol != legit_protocol {
@@ -252,17 +255,18 @@ async fn handle_clients(
         return Ok(());
     }
 
-    if cheat_protocol != REQUIRED_PROTOCOL {
-        error_handler(
-            &mut cheat_stream,
-            &mut legit_stream,
-            "Для стабильности поддерживается только 1.16.5\nЕсли вы не можете выбрать версию в клиенте, то используйте ViaProxy".to_string(),
-        )
-        .await;
-        return Ok(());
-    }
-
-    println!("Ник: {}", &cheat_login_start.name);
+    let version = match Version::from_protocol(cheat_protocol) {
+        Some(v) => v,
+        None => {
+            error_handler(
+                &mut cheat_stream,
+                &mut legit_stream,
+                "Данная версия не поддерживается".to_string(),
+            )
+            .await;
+            return Ok(());
+        }
+    };
 
     println!("Подключение к {}", &remote_addr);
     let mut remote_stream = match TcpStream::connect(remote_addr).await {
@@ -291,9 +295,7 @@ async fn handle_clients(
         .await?;
     println!("[+] Handshake");
 
-    UncompressedPacket::from_packet(&cheat_login_start)?
-        .write_async(&mut remote_stream)
-        .await?;
+    cheat_login_start.write_async(&mut remote_stream).await?;
     println!("[+] Login start");
 
     let mut threshold = None;
@@ -360,6 +362,7 @@ async fn handle_clients(
         remote_tx,
         event_rx,
         threshold,
+        version,
     );
 
     tokio::spawn(run_client(
