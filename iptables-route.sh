@@ -1,7 +1,6 @@
 #!/bin/bash
 # VoxelProxy Lite — Перенаправление диапазона 25560-25570 на указанный адрес
 
-ROUTES_FILE="/etc/voxelproxy-routes.conf"
 PORT_RANGE="25560:25570"
 
 # Цвета
@@ -38,29 +37,31 @@ enable_proxy() {
     echo -e "Включение: любой IP [${PORT_RANGE}] → ${CYAN}${dst}${NC}"
     
     iptables -t nat -A OUTPUT -p tcp --match multiport --dports "$PORT_RANGE" -j DNAT --to-destination "$dst"
-    
-    echo "$dst" > "$ROUTES_FILE"
     echo -e "${GREEN}Прокси активирован.${NC}"
+}
+
+get_current_dst() {
+    iptables -t nat -S OUTPUT | grep "multiport --dports $PORT_RANGE" | sed 's/.*--to-destination //'
 }
 
 # Выключить перенаправление
 disable_proxy() {
-    if [[ ! -f "$ROUTES_FILE" ]]; then
+    local dst
+    dst=$(get_current_dst)
+    if [[ -z "$dst" ]]; then
         echo -e "${YELLOW}Маршрутов не найдено.${NC}"
         return 1
     fi
 
-    local dst=$(cat "$ROUTES_FILE")
     iptables -t nat -D OUTPUT -p tcp --match multiport --dports "$PORT_RANGE" -j DNAT --to-destination "$dst" 2>/dev/null
-    rm -f "$ROUTES_FILE"
     echo -e "${GREEN}Прокси отключен.${NC}"
 }
 
 disable_proxy_silent() {
-    if [[ -f "$ROUTES_FILE" ]]; then
-        local dst=$(cat "$ROUTES_FILE")
+    local dst
+    dst=$(get_current_dst)
+    if [[ -n "$dst" ]]; then
         iptables -t nat -D OUTPUT -p tcp --match multiport --dports "$PORT_RANGE" -j DNAT --to-destination "$dst" 2>/dev/null
-        rm -f "$ROUTES_FILE"
     fi
 }
 
