@@ -4,7 +4,7 @@ use tokio::{
     sync::mpsc::{Receiver, Sender},
 };
 
-use crate::protocols::Version;
+use crate::protocols::{Version, VersionProtocol};
 
 /// Identifies which of the two connected clients a packet or event belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -5,49 +5,9 @@ use mc_protocol::{
     varint::VarInt,
 };
 
-use super::VersionProtocol;
+use super::{PingSync, VersionProtocol};
 use crate::controller::ClientId;
 use packets::{c2s, s2c};
-
-// ─── PingSync ────────────────────────────────────────────────────────
-
-/// Tracks whether each client has acknowledged a single server-initiated
-/// ping. Version-agnostic: only the packet IDs and encoding differ
-/// per version, which is handled inside each `VersionData`.
-pub struct PingSync {
-    pub id: i32,
-    cheat_sent: bool,
-    legit_sent: bool,
-}
-
-impl PingSync {
-    /// Creates a tracker for a ping, with both clients unconfirmed.
-    pub fn new(id: i32) -> Self {
-        Self {
-            id,
-            cheat_sent: false,
-            legit_sent: false,
-        }
-    }
-
-    /// Marks `client` as having confirmed this ping.
-    /// Returns `true` once both clients have confirmed (ready to remove).
-    pub fn sent(&mut self, client: ClientId) -> bool {
-        match client {
-            ClientId::Cheat => self.cheat_sent = true,
-            ClientId::Legit => self.legit_sent = true,
-        }
-        self.cheat_sent && self.legit_sent
-    }
-
-    /// Returns whether `client` has already sent its confirmation (non-mutating).
-    pub fn is_sent(&self, client: ClientId) -> bool {
-        match client {
-            ClientId::Cheat => self.cheat_sent,
-            ClientId::Legit => self.legit_sent,
-        }
-    }
-}
 
 pub struct VersionData {
     pub position: s2c::Position,
@@ -128,7 +88,9 @@ impl VersionProtocol for VersionData {
             return None;
         }
 
-        let t: c2s::Pong = packet.deserialize_payload().unwrap();
+        let Ok(t): Result<c2s::Pong, _> = packet.deserialize_payload() else {
+            return None;
+        };
 
         if both_active {
             // Both clients connected: remove entry once both have acknowledged it.
@@ -158,7 +120,9 @@ impl VersionProtocol for VersionData {
             return;
         }
 
-        let t: s2c::Ping = packet.deserialize_payload().unwrap();
+        let Ok(t): Result<s2c::Ping, _> = packet.deserialize_payload() else {
+            return;
+        };
         self.pings.push(PingSync::new(t.id));
     }
 

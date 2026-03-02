@@ -5,53 +5,13 @@ use mc_protocol::{
     varint::VarInt,
 };
 
-use super::VersionProtocol;
+use super::{PingSync, VersionProtocol};
 use crate::controller::ClientId;
 use packets::{c2s, s2c};
 
-// ─── TransactionSync ────────────────────────────────────────────────────────
-
-/// Tracks whether each client has acknowledged a single server-initiated
-/// transaction. Version-specific to 1.16.5; uses ContainerAck transactions
-/// instead of Ping/Pong.
-pub struct TransactionSync {
-    pub action: i16,
-    cheat_sent: bool,
-    legit_sent: bool,
-}
-
-impl TransactionSync {
-    /// Creates a tracker for a transaction, with both clients unconfirmed.
-    pub fn new(action: i16) -> Self {
-        Self {
-            action,
-            cheat_sent: false,
-            legit_sent: false,
-        }
-    }
-
-    /// Marks `client` as having confirmed this transaction.
-    /// Returns `true` once both clients have confirmed (ready to remove).
-    pub fn sent(&mut self, client: ClientId) -> bool {
-        match client {
-            ClientId::Cheat => self.cheat_sent = true,
-            ClientId::Legit => self.legit_sent = true,
-        }
-        self.cheat_sent && self.legit_sent
-    }
-
-    /// Returns whether `client` has already sent its confirmation (non-mutating).
-    pub fn is_sent(&self, client: ClientId) -> bool {
-        match client {
-            ClientId::Cheat => self.cheat_sent,
-            ClientId::Legit => self.legit_sent,
-        }
-    }
-}
-
 pub struct VersionData {
     pub position: s2c::Position,
-    pub transactions: Vec<TransactionSync>,
+    pub pings: Vec<PingSync>,
 }
 
 impl VersionData {
@@ -66,7 +26,7 @@ impl VersionData {
                 flags: 0,
                 teleport_id: VarInt(0),
             },
-            transactions: vec![],
+            pings: vec![],
         }
     }
 
@@ -128,24 +88,26 @@ impl VersionProtocol for VersionData {
             return None;
         }
 
-        let t: c2s::Ack = packet.deserialize_payload().unwrap();
+        let Ok(t): Result<c2s::Ack, _> = packet.deserialize_payload() else {
+            return None;
+        };
 
         if both_active {
             // Both clients connected: remove entry once both have acknowledged it.
             if let Some(i) = self
-                .transactions
+                .pings
                 .iter_mut()
-                .position(|s| s.action == t.uid && s.sent(client_id))
+                .position(|s| s.id == t.uid as i32 && s.sent(client_id))
             {
-                self.transactions.remove(i);
+                self.pings.remove(i);
             }
             Some(false)
         } else {
             // One client gone: skip relay if the absent client already acked this.
-            if let Some(head) = self.transactions.get(0) {
+            if let Some(head) = self.pings.get(0) {
                 if head.is_sent(client_id.opposite()) {
-                    println!("Синхронизация: Пропуск: {}", head.action);
-                    self.transactions.remove(0);
+                    println!("Синхронизация: Пропуск: {}", head.id);
+                    self.pings.remove(0);
                     return Some(true); // caller must `continue` (skip relay to server)
                 }
             }
@@ -158,15 +120,17 @@ impl VersionProtocol for VersionData {
             return;
         }
 
-        let t: s2c::ContainerAck = packet.deserialize_payload().unwrap();
-        self.transactions.push(TransactionSync::new(t.uid));
+        let Ok(t): Result<s2c::ContainerAck, _> = packet.deserialize_payload() else {
+            return;
+        };
+        self.pings.push(PingSync::new(t.uid as i32));
     }
 
     fn collect_replay(&mut self, new_active: ClientId, threshold: Option<i32>) -> Vec<RawPacket> {
         let mut to_send = vec![];
-        self.transactions.retain(|t| {
+        self.pings.retain(|t| {
             if t.is_sent(new_active) {
-                to_send.push(t.action);
+                to_send.push(t.id);
                 true
             } else {
                 false
@@ -175,11 +139,11 @@ impl VersionProtocol for VersionData {
 
         to_send
             .into_iter()
-            .map(|action| {
-                println!("Синхронизация: Отправка: {}", action);
+            .map(|id| {
+                println!("Синхронизация: Отправка: {}", id);
                 let tx = c2s::Ack {
                     container_id: 0,
-                    uid: action,
+                    uid: id as i16,
                     accepted: true,
                 };
                 UncompressedPacket::from_packet(&tx)
