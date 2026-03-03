@@ -21,13 +21,16 @@ enum_dispatch = "0.3.13"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [
-    "Win32_Networking_WinSock", 
-    "Win32_NetworkManagement_IpHelper", 
+    "Win32_Networking_WinSock",
+    "Win32_NetworkManagement_IpHelper",
     "Win32_NetworkManagement_Ndis",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
-    "Win32_System_Console"
+    "Win32_System_Console",
+    "Win32_Security",
+    "Win32_System_Threading",
 ] }
+windivert = { version = "0.6.0", features = ["vendored"] }
 
 [target.'cfg(not(windows))'.dependencies]
 get_if_addrs = "0.5.3"

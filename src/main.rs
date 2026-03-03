@@ -1,4 +1,4 @@
-use std::{net::Ipv4Addr, process::Command};
+use std::{collections::HashMap, net::Ipv4Addr, process::Command, sync::Arc};
 
 use dialoguer::theme::ColorfulTheme;
 use mc_protocol::{
@@ -20,6 +20,8 @@ use crate::{
 };
 
 mod controller;
+#[cfg(target_os = "windows")]
+mod hotspot_redirect;
 #[cfg(target_os = "windows")]
 #[cfg(not(debug_assertions))]
 mod keybind;
@@ -74,21 +76,25 @@ async fn run() -> anyhow::Result<()> {
         println!("{}", rx.recv()?);
     }
 
-    run_manual_mode().await
-
     // ── Mode selection ────────────────────────────────────────────────────────
-    // let mode = dialoguer::Select::with_theme(&ColorfulTheme::default())
-    //     .with_prompt("Выберите режим")
-    //     .item("Ручной (ввести адрес сервера)")
-    //     .item("Автоматический (WinDivert)")
-    //     .default(0)
-    //     .interact()?;
+    #[cfg(target_os = "windows")]
+    {
+        let mode = dialoguer::Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("Выберите режим")
+            .item("Ручной (ввести адрес сервера)")
+            .item("Автоматический (WinDivert, хотспот)")
+            .default(0)
+            .interact()?;
 
-    // match mode {
-    //     0 => run_manual_mode().await,
-    //     1 => run_automatic_mode().await,
-    //     _ => unreachable!(),
-    // }
+        return match mode {
+            0 => run_manual_mode().await,
+            1 => run_automatic_mode().await,
+            _ => unreachable!(),
+        };
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    run_manual_mode().await
 }
 
 // ── Manual mode ───────────────────────────────────────────────────────────────
@@ -197,15 +203,164 @@ async fn run_manual_mode() -> anyhow::Result<()> {
 // ── Automatic mode ────────────────────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
-async fn _run_automatic_mode() -> anyhow::Result<()> {
-    // TODO: intercept outgoing handshake packets with WinDivert, extract
-    // remote_addr + remote_dns + protocol_version, then call run_proxy_session.
-    anyhow::bail!("Автоматический режим ещё не реализован.")
+async fn run_automatic_mode() -> anyhow::Result<()> {
+    // 1. Require Administrator privileges (WinDivert kernel driver requires them)
+    if !hotspot_redirect::is_admin() {
+        anyhow::bail!(
+            "Автоматический режим требует прав администратора.\n\
+             Запустите программу от имени администратора."
+        );
+    }
+
+    // 2. Detect the Windows Mobile Hotspot adapter (192.168.137.x)
+    let subnet = hotspot_redirect::detect_hotspot_subnet().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Адаптер мобильной точки доступа не найден.\n\
+             Убедитесь, что мобильная точка доступа Windows включена."
+        )
+    })?;
+    println!("Обнаружена точка доступа: {}/{}", subnet.host_ip, subnet.mask);
+
+    // 3. Start WinDivert interception. Fall back to manual mode if unavailable.
+    let nat_table = match hotspot_redirect::start_redirect(&subnet, BIND_PORT) {
+        Ok(t) => t,
+        Err(e) => {
+            println!(
+                "WinDivert недоступен: {}\n\
+                 Убедитесь, что WinDivert.dll и WinDivert64.sys находятся рядом с программой.\n\
+                 Переключение в ручной режим...",
+                e
+            );
+            return run_manual_mode().await;
+        }
+    };
+    hotspot_redirect::start_nat_cleanup(Arc::clone(&nat_table));
+    println!("WinDivert перехват активен.");
+
+    // 4. Bind listener
+    let listener = match TcpListener::bind(format!("0.0.0.0:{}", BIND_PORT)).await {
+        Ok(l) => l,
+        Err(e) => anyhow::bail!("Ошибка при создании сокета: {}", e),
+    };
+    println!(
+        "Ожидание подключений на порту {} (порты 25560–25570 → перехват).",
+        BIND_PORT
+    );
+
+    // 5. Accept clients and pair them by (server_host, server_port)
+    let (tx, mut rx) = mpsc::channel::<proxy::AutoClientInfo>(HANDSHAKE_CHANNEL_CAPACITY);
+    tokio::spawn(proxy::listen_and_dispatch_auto(listener, tx));
+
+    let mut pending: HashMap<(String, u16), proxy::AutoClientInfo> = HashMap::new();
+
+    while let Some(client) = rx.recv().await {
+        let key = (client.server_host.clone(), client.server_port);
+        if let Some(first) = pending.remove(&key) {
+            println!(
+                "[+] Пара найдена для {}:{}. Запуск сессии...",
+                key.0, key.1
+            );
+            tokio::spawn(run_auto_session(first, client));
+        } else {
+            println!(
+                "Первый клиент для {}:{}. Ожидание второго...",
+                key.0, key.1
+            );
+            pending.insert(key, client);
+        }
+    }
+
+    Ok(())
 }
 
-#[cfg(not(target_os = "windows"))]
-async fn _run_automatic_mode() -> anyhow::Result<()> {
-    anyhow::bail!("Автоматический режим поддерживается только на Windows (WinDivert).")
+/// Handles a paired (cheat + legit) session in automatic mode.
+/// Resolves the real server from the Handshake data, connects to it,
+/// performs the login exchange, and runs the proxy session.
+#[cfg(target_os = "windows")]
+async fn run_auto_session(
+    mut cheat: proxy::AutoClientInfo,
+    mut legit: proxy::AutoClientInfo,
+) -> anyhow::Result<()> {
+    // Read LoginStart from both clients
+    let cheat_login_start = RawPacket::read_async(&mut cheat.stream).await?;
+    let _ = RawPacket::read_async(&mut legit.stream).await?;
+
+    // Both clients must use the same protocol version
+    if cheat.protocol_version != legit.protocol_version {
+        proxy::send_login_error(
+            &mut cheat.stream,
+            &mut legit.stream,
+            "Версии клиентов различаются".to_string(),
+        )
+        .await;
+        return Ok(());
+    }
+
+    let version = match Version::from_protocol(cheat.protocol_version) {
+        Some(v) => v,
+        None => {
+            proxy::send_login_error(
+                &mut cheat.stream,
+                &mut legit.stream,
+                "Данная версия не поддерживается".to_string(),
+            )
+            .await;
+            return Ok(());
+        }
+    };
+
+    // Resolve the real server address from the Handshake
+    let remote_addr = match resolve_host_port(
+        &cheat.server_host,
+        cheat.server_port,
+        "minecraft",
+        "tcp",
+    )
+    .await
+    {
+        Some(a) => a,
+        None => {
+            proxy::send_login_error(
+                &mut cheat.stream,
+                &mut legit.stream,
+                format!("Не удалось разрешить адрес: {}", cheat.server_host),
+            )
+            .await;
+            return Ok(());
+        }
+    };
+
+    println!("Подключение к {}", remote_addr);
+    let mut remote_stream = match TcpStream::connect(remote_addr).await {
+        Ok(s) => s,
+        Err(_) => {
+            proxy::send_login_error(
+                &mut cheat.stream,
+                &mut legit.stream,
+                "Ошибка при подключении к удалённому серверу".to_string(),
+            )
+            .await;
+            return Ok(());
+        }
+    };
+    println!("Успех");
+
+    // Forward the Handshake + LoginStart to the real server
+    let handshake = Handshake {
+        protocol_version: VarInt(cheat.protocol_version),
+        server_address: cheat.server_host.clone(),
+        server_port: cheat.server_port,
+        intent: Intent::Login.into(),
+    };
+    UncompressedPacket::from_packet(&handshake)?
+        .write_async(&mut remote_stream)
+        .await?;
+    println!("[+] Handshake");
+
+    cheat_login_start.write_async(&mut remote_stream).await?;
+    println!("[+] Login start");
+
+    proxy::run_proxy_session(cheat.stream, legit.stream, remote_stream, version).await
 }
 
 // ── Startup helpers ───────────────────────────────────────────────────────────

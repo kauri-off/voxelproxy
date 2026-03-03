@@ -9,6 +9,8 @@ use tokio::{
     sync::mpsc::{self, Sender},
 };
 
+use crate::resolver::resolve_host_port;
+
 use crate::{
     controller::{ClientId, Controller, run_client, run_server},
     packets::universal::{
@@ -23,6 +25,15 @@ pub const DEFAULT_PORT: u16 = 25565;
 pub const BIND_PORT: u16 = 25565;
 pub const HANDSHAKE_CHANNEL_CAPACITY: usize = 32;
 const IO_CHANNEL_CAPACITY: usize = 100;
+
+/// Information extracted from a client's Minecraft Handshake packet.
+/// Used in automatic mode to determine the real remote server without manual input.
+pub struct AutoClientInfo {
+    pub stream: TcpStream,
+    pub protocol_version: i32,
+    pub server_host: String,
+    pub server_port: u16,
+}
 
 #[inline]
 pub async fn read_uncompressed(stream: &mut TcpStream) -> anyhow::Result<UncompressedPacket> {
@@ -46,6 +57,58 @@ pub async fn listen_and_dispatch(
             remote_addr,
         ));
     }
+}
+
+/// Auto-mode variant of `listen_and_dispatch`.
+/// Reads the Minecraft Handshake from each connection, handles status pings directly
+/// (resolving the server from the Handshake), and sends login-intent clients as
+/// `AutoClientInfo` so the caller can pair and proxy them dynamically.
+pub async fn listen_and_dispatch_auto(listener: TcpListener, tx: Sender<AutoClientInfo>) {
+    while let Ok((stream, _addr)) = listener.accept().await {
+        tokio::spawn(handle_connection_auto(stream, tx.clone()));
+    }
+}
+
+async fn handle_connection_auto(
+    mut stream: TcpStream,
+    tx: Sender<AutoClientInfo>,
+) -> anyhow::Result<()> {
+    let handshake: Handshake = read_uncompressed(&mut stream)
+        .await?
+        .deserialize_payload()?;
+
+    match Intent::try_from(handshake.intent.0) {
+        Ok(Intent::Status) => {
+            // Resolve the server from the handshake and proxy the ping directly
+            if let Some(remote_addr) = resolve_host_port(
+                &handshake.server_address,
+                handshake.server_port,
+                "minecraft",
+                "tcp",
+            )
+            .await
+            {
+                process_status(
+                    stream,
+                    remote_addr,
+                    handshake.server_address.clone(),
+                    handshake,
+                )
+                .await?;
+            }
+        }
+        Ok(Intent::Login) => {
+            tx.send(AutoClientInfo {
+                protocol_version: handshake.protocol_version.0,
+                server_host: handshake.server_address,
+                server_port: handshake.server_port,
+                stream,
+            })
+            .await?;
+        }
+        Err(_) => {}
+    }
+    Ok(())
 }
 
 async fn handle_connection(
