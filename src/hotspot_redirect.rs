@@ -5,8 +5,6 @@ use std::time::Instant;
 
 use windivert::prelude::*;
 
-// ── Public types ──────────────────────────────────────────────────────────────
-
 pub struct HotspotSubnet {
     pub host_ip: Ipv4Addr,
     pub network: Ipv4Addr,
@@ -23,11 +21,10 @@ pub(crate) type NatTable = Arc<Mutex<HashMap<(Ipv4Addr, u16), NatEntry>>>;
 
 // ── Admin check ───────────────────────────────────────────────────────────────
 
-/// Returns true if the current process is running with elevated (Administrator) privileges.
 pub fn is_admin() -> bool {
     use windows::Win32::{
         Foundation::{CloseHandle, HANDLE},
-        Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY},
+        Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation},
         System::Threading::{GetCurrentProcess, OpenProcessToken},
     };
 
@@ -54,8 +51,8 @@ pub fn is_admin() -> bool {
 
 // ── Hotspot subnet detection ──────────────────────────────────────────────────
 
-/// Detects the Windows Mobile Hotspot adapter by looking for a 192.168.137.x address.
-/// Returns None if no hotspot adapter is active.
+/// Finds the Windows Mobile Hotspot adapter (192.168.137.x).
+/// Returns `None` if no hotspot adapter is active.
 pub fn detect_hotspot_subnet() -> Option<HotspotSubnet> {
     use windows::{
         Win32::Foundation::ERROR_BUFFER_OVERFLOW,
@@ -63,10 +60,8 @@ pub fn detect_hotspot_subnet() -> Option<HotspotSubnet> {
         Win32::Networking::WinSock::{AF_INET, AF_UNSPEC},
     };
 
-    const INITIAL_BUFFER_SIZE: u32 = 15000;
-
     unsafe {
-        let mut buf_len: u32 = INITIAL_BUFFER_SIZE;
+        let mut buf_len: u32 = 15_000;
         let mut buf: Vec<u8> = vec![0; buf_len as usize];
 
         let mut result = GetAdaptersAddresses(
@@ -120,82 +115,71 @@ pub fn detect_hotspot_subnet() -> Option<HotspotSubnet> {
 
 // ── WinDivert redirect ────────────────────────────────────────────────────────
 
-/// Opens WinDivert handles and spawns two OS threads to:
-/// - Intercept inbound TCP packets from hotspot clients targeting ports 25560–25570
-///   and rewrite their destination to 127.0.0.1:bind_port.
-/// - Intercept outbound TCP packets from the proxy back to hotspot clients
-///   and rewrite the source back to the original server address.
-///
-/// Both handles are opened here so any WinDivert errors are propagated immediately.
+/// Opens two WinDivert handles (driver installation runs on the calling thread),
+/// then spawns minimal-stack worker threads that only run the packet recv/send loop.
 pub(crate) fn start_redirect(subnet: &HotspotSubnet, bind_port: u16) -> anyhow::Result<NatTable> {
     let nat: NatTable = Arc::new(Mutex::new(HashMap::new()));
 
     let net = subnet.network.octets();
 
-    // Intercept outgoing connections from hotspot clients to Minecraft port range.
-    // These arrive as inbound packets on the hotspot adapter before ICS NATs them.
     let client_filter = format!(
         "ip and tcp and inbound and \
          (tcp.DstPort >= 25560 and tcp.DstPort <= 25570) and \
          ip.SrcAddr >= {}.{}.{}.1 and ip.SrcAddr <= {}.{}.{}.254",
-        net[0], net[1], net[2],
-        net[0], net[1], net[2],
+        net[0], net[1], net[2], net[0], net[1], net[2],
     );
 
-    // Intercept return packets from our proxy (127.0.0.1:bind_port) back to hotspot clients.
     let return_filter = format!(
         "ip and tcp and outbound and ip.SrcAddr == 127.0.0.1 and tcp.SrcPort == {}",
         bind_port
     );
 
-    let client_wd = WinDivert::network(&client_filter, 0, Default::default())
-        .map_err(|e| anyhow::anyhow!("WinDivert (перехват клиентов) не удалось открыть: {}", e))?;
-
-    let return_wd = WinDivert::network(&return_filter, 0, Default::default())
-        .map_err(|e| anyhow::anyhow!("WinDivert (обратный путь) не удалось открыть: {}", e))?;
+    let wd_client = WinDivert::network(&client_filter, 0, Default::default())
+        .map_err(|e| anyhow::anyhow!("WinDivert (клиенты): {}", e))?;
+    let wd_return = WinDivert::network(&return_filter, 0, Default::default())
+        .map_err(|e| anyhow::anyhow!("WinDivert (обратный): {}", e))?;
 
     let nat_client = Arc::clone(&nat);
-    let nat_return = Arc::clone(&nat);
+    std::thread::Builder::new()
+        .name("wd-client".to_string())
+        .stack_size(512 * 1024)
+        .spawn(move || run_client_intercept_loop(wd_client, bind_port, nat_client))?;
 
-    std::thread::spawn(move || run_client_intercept_loop(client_wd, bind_port, nat_client));
-    std::thread::spawn(move || run_return_intercept_loop(return_wd, nat_return));
+    let nat_return = Arc::clone(&nat);
+    std::thread::Builder::new()
+        .name("wd-return".to_string())
+        .stack_size(512 * 1024)
+        .spawn(move || run_return_intercept_loop(wd_return, nat_return))?;
 
     Ok(nat)
 }
 
-/// Spawns a background cleanup thread that removes NAT entries older than 5 minutes.
+/// Spawns a background thread that prunes NAT entries older than 5 minutes.
 pub(crate) fn start_nat_cleanup(nat: NatTable) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_secs(60));
-        let cutoff = Instant::now()
-            .checked_sub(std::time::Duration::from_secs(300))
-            .unwrap_or_else(Instant::now);
-        let mut table = nat.lock().unwrap();
-        table.retain(|_, v| v.timestamp > cutoff);
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+            let cutoff = Instant::now()
+                .checked_sub(std::time::Duration::from_secs(300))
+                .unwrap_or_else(Instant::now);
+            nat.lock().unwrap().retain(|_, v| v.timestamp > cutoff);
+        }
     });
 }
 
-// ── WinDivert worker threads ──────────────────────────────────────────────────
+// ── Packet loops ──────────────────────────────────────────────────────────────
 
-/// Intercepts TCP packets from hotspot clients destined for ports 25560–25570.
-/// Saves the original destination in the NAT table, then rewrites the destination
-/// to 127.0.0.1:bind_port and reinjects the packet.
-fn run_client_intercept_loop(
-    wd: WinDivert<NetworkLayer>,
-    bind_port: u16,
-    nat: NatTable,
-) {
+fn run_client_intercept_loop(wd: WinDivert<NetworkLayer>, bind_port: u16, nat: NatTable) {
     let mut buf = vec![0u8; 65535];
     loop {
         let mut packet = match wd.recv(Some(&mut buf)) {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("[WinDivert] Ошибка recv (клиент): {}", e);
+                eprintln!("[WinDivert] recv error (client): {}", e);
                 break;
             }
         };
 
-        // Parse IP+TCP headers from borrowed data
         let (src_ip, dst_ip, src_port, dst_port, ihl) = {
             let data = packet.data.as_ref();
             if data.len() < 20 {
@@ -214,20 +198,15 @@ fn run_client_intercept_loop(
             (src_ip, dst_ip, src_port, dst_port, ihl)
         };
 
-        // Record original destination so the return path can restore it
-        {
-            let mut table = nat.lock().unwrap();
-            table.insert(
-                (src_ip, src_port),
-                NatEntry {
-                    original_dst_ip: dst_ip,
-                    original_dst_port: dst_port,
-                    timestamp: Instant::now(),
-                },
-            );
-        }
+        nat.lock().unwrap().insert(
+            (src_ip, src_port),
+            NatEntry {
+                original_dst_ip: dst_ip,
+                original_dst_port: dst_port,
+                timestamp: Instant::now(),
+            },
+        );
 
-        // Rewrite dst → 127.0.0.1:bind_port (claims ownership of data, triggers clone)
         let data = packet.data.to_mut();
         data[16] = 127;
         data[17] = 0;
@@ -238,31 +217,26 @@ fn run_client_intercept_loop(
         data[ihl + 3] = bp[1];
 
         if let Err(e) = packet.recalculate_checksums(Default::default()) {
-            eprintln!("[WinDivert] Ошибка контрольной суммы (клиент): {}", e);
+            eprintln!("[WinDivert] checksum error (client): {}", e);
             continue;
         }
-
         if let Err(e) = wd.send(&packet) {
-            eprintln!("[WinDivert] Ошибка send (клиент): {}", e);
+            eprintln!("[WinDivert] send error (client): {}", e);
         }
     }
 }
 
-/// Intercepts return packets from our proxy (127.0.0.1:bind_port) going back to
-/// hotspot clients. Looks up the NAT table to find the original server address and
-/// rewrites the source IP/port accordingly, so the hotspot client sees the real server.
 fn run_return_intercept_loop(wd: WinDivert<NetworkLayer>, nat: NatTable) {
     let mut buf = vec![0u8; 65535];
     loop {
         let mut packet = match wd.recv(Some(&mut buf)) {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("[WinDivert] Ошибка recv (обратный): {}", e);
+                eprintln!("[WinDivert] recv error (return): {}", e);
                 break;
             }
         };
 
-        // Parse headers: src=127.0.0.1:bind_port, dst=client_ip:client_ephemeral_port
         let (dst_ip, dst_port, ihl) = {
             let data = packet.data.as_ref();
             if data.len() < 20 {
@@ -279,24 +253,20 @@ fn run_return_intercept_loop(wd: WinDivert<NetworkLayer>, nat: NatTable) {
             (dst_ip, dst_port, ihl)
         };
 
-        // Look up: (client_ip, client_ephemeral_port) → original server (ip, port)
-        let entry = {
-            let table = nat.lock().unwrap();
-            table
-                .get(&(dst_ip, dst_port))
-                .map(|e| (e.original_dst_ip, e.original_dst_port))
-        };
+        let entry = nat
+            .lock()
+            .unwrap()
+            .get(&(dst_ip, dst_port))
+            .map(|e| (e.original_dst_ip, e.original_dst_port));
 
         let (orig_ip, orig_port) = match entry {
             Some(e) => e,
             None => {
-                // Not a tracked connection, pass through unchanged
                 let _ = wd.send(&packet);
                 continue;
             }
         };
 
-        // Rewrite src → original server IP:port
         let data = packet.data.to_mut();
         let orig_octets = orig_ip.octets();
         data[12] = orig_octets[0];
@@ -308,12 +278,11 @@ fn run_return_intercept_loop(wd: WinDivert<NetworkLayer>, nat: NatTable) {
         data[ihl + 1] = op[1];
 
         if let Err(e) = packet.recalculate_checksums(Default::default()) {
-            eprintln!("[WinDivert] Ошибка контрольной суммы (обратный): {}", e);
+            eprintln!("[WinDivert] checksum error (return): {}", e);
             continue;
         }
-
         if let Err(e) = wd.send(&packet) {
-            eprintln!("[WinDivert] Ошибка send (обратный): {}", e);
+            eprintln!("[WinDivert] send error (return): {}", e);
         }
     }
 }

@@ -30,7 +30,7 @@ windows = { version = "0.62.2", features = [
     "Win32_Security",
     "Win32_System_Threading",
 ] }
-windivert = { version = "0.6.0", features = ["vendored"] }
+windivert = "0.6.0"
 
 [target.'cfg(not(windows))'.dependencies]
 get_if_addrs = "0.5.3"
