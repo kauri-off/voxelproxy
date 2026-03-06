@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::Ipv4Addr, process::Command, sync::Arc};
+use std::{net::Ipv4Addr, process::Command, sync::Arc};
 
 use dialoguer::theme::ColorfulTheme;
 use mc_protocol::{
@@ -212,17 +212,8 @@ async fn run_automatic_mode() -> anyhow::Result<()> {
         );
     }
 
-    // 2. Detect the Windows Mobile Hotspot adapter (192.168.137.x)
-    let subnet = hotspot_redirect::detect_hotspot_subnet().ok_or_else(|| {
-        anyhow::anyhow!(
-            "Адаптер мобильной точки доступа не найден.\n\
-             Убедитесь, что мобильная точка доступа Windows включена."
-        )
-    })?;
-    println!("Обнаружена точка доступа: {}/{}", subnet.host_ip, subnet.mask);
-
-    // 3. Start WinDivert interception. Fall back to manual mode if unavailable.
-    let nat_table = match hotspot_redirect::start_redirect(&subnet, BIND_PORT) {
+    // 2. Start WinDivert interception. Fall back to manual mode if unavailable.
+    let nat_table = match hotspot_redirect::start_redirect(BIND_PORT) {
         Ok(t) => t,
         Err(e) => {
             println!(
@@ -243,30 +234,24 @@ async fn run_automatic_mode() -> anyhow::Result<()> {
         Err(e) => anyhow::bail!("Ошибка при создании сокета: {}", e),
     };
     println!(
-        "Ожидание подключений на порту {} (порты 25560–25570 → перехват).",
+        "Ожидание подключений на порту {} (порты 25560–25570 → перехват).\n СНАЧАЛА ЛЕГИТ ПОТОМ ЧИТ\n Подключайтесь как обычно на легите (например mc.funtime.su)",
         BIND_PORT
     );
 
     // 5. Accept clients and pair them by (server_host, server_port)
-    let (tx, mut rx) = mpsc::channel::<proxy::AutoClientInfo>(HANDSHAKE_CHANNEL_CAPACITY);
+    let (tx, mut rx) = mpsc::channel(HANDSHAKE_CHANNEL_CAPACITY);
     tokio::spawn(proxy::listen_and_dispatch_auto(listener, tx));
 
-    let mut pending: HashMap<(String, u16), proxy::AutoClientInfo> = HashMap::new();
+    let mut pending = Vec::new();
 
     while let Some(client) = rx.recv().await {
         let key = (client.server_host.clone(), client.server_port);
-        if let Some(first) = pending.remove(&key) {
-            println!(
-                "[+] Пара найдена для {}:{}. Запуск сессии...",
-                key.0, key.1
-            );
-            tokio::spawn(run_auto_session(first, client));
+        if let Some(legit) = pending.pop() {
+            println!("[+] Пара найдена. Запуск сессии...");
+            tokio::spawn(run_auto_session(client, legit));
         } else {
-            println!(
-                "Первый клиент для {}:{}. Ожидание второго...",
-                key.0, key.1
-            );
-            pending.insert(key, client);
+            println!("Первый клиент для {}:{}. Ожидание второго...", key.0, key.1);
+            pending.push(client);
         }
     }
 
@@ -310,25 +295,19 @@ async fn run_auto_session(
     };
 
     // Resolve the real server address from the Handshake
-    let remote_addr = match resolve_host_port(
-        &cheat.server_host,
-        cheat.server_port,
-        "minecraft",
-        "tcp",
-    )
-    .await
-    {
-        Some(a) => a,
-        None => {
-            proxy::send_login_error(
-                &mut cheat.stream,
-                &mut legit.stream,
-                format!("Не удалось разрешить адрес: {}", cheat.server_host),
-            )
-            .await;
-            return Ok(());
-        }
-    };
+    let remote_addr =
+        match resolve_host_port(&legit.server_host, legit.server_port, "minecraft", "tcp").await {
+            Some(a) => a,
+            None => {
+                proxy::send_login_error(
+                    &mut cheat.stream,
+                    &mut legit.stream,
+                    format!("Не удалось разрешить адрес: {}", legit.server_host),
+                )
+                .await;
+                return Ok(());
+            }
+        };
 
     println!("Подключение к {}", remote_addr);
     let mut remote_stream = match TcpStream::connect(remote_addr).await {

@@ -3,17 +3,21 @@ use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use windivert::prelude::*;
-
-pub struct HotspotSubnet {
-    pub host_ip: Ipv4Addr,
-    pub network: Ipv4Addr,
-    pub mask: u8,
-}
+use etherparse::SlicedPacket;
+use windivert::{
+    WinDivert,
+    layer::{ForwardLayer, NetworkLayer},
+    packet::WinDivertPacket,
+    prelude::WinDivertFlags,
+};
 
 pub(crate) struct NatEntry {
+    client_addr: Ipv4Addr,
+    client_port: u16,
     original_dst_ip: Ipv4Addr,
     original_dst_port: u16,
+    interface_id: u32,
+    subinterface_id: u32,
     timestamp: Instant,
 }
 
@@ -49,107 +53,57 @@ pub fn is_admin() -> bool {
     }
 }
 
-// ── Hotspot subnet detection ──────────────────────────────────────────────────
+// ── Packet rewriting helpers ──────────────────────────────────────────────────
 
-/// Finds the Windows Mobile Hotspot adapter (192.168.137.x).
-/// Returns `None` if no hotspot adapter is active.
-pub fn detect_hotspot_subnet() -> Option<HotspotSubnet> {
-    use windows::{
-        Win32::Foundation::ERROR_BUFFER_OVERFLOW,
-        Win32::NetworkManagement::IpHelper::*,
-        Win32::Networking::WinSock::{AF_INET, AF_UNSPEC},
-    };
+fn rewrite_dst(data: &mut [u8], ip_header_len: usize, new_addr: Ipv4Addr, new_port: u16) {
+    data[16..20].copy_from_slice(&new_addr.octets());
+    data[ip_header_len + 2..ip_header_len + 4].copy_from_slice(&new_port.to_be_bytes());
+}
 
-    unsafe {
-        let mut buf_len: u32 = 15_000;
-        let mut buf: Vec<u8> = vec![0; buf_len as usize];
-
-        let mut result = GetAdaptersAddresses(
-            AF_UNSPEC.0 as u32,
-            GAA_FLAG_INCLUDE_GATEWAYS,
-            None,
-            Some(buf.as_mut_ptr() as *mut IP_ADAPTER_ADDRESSES_LH),
-            &mut buf_len,
-        );
-
-        if result == ERROR_BUFFER_OVERFLOW.0 {
-            buf.resize(buf_len as usize, 0);
-            result = GetAdaptersAddresses(
-                AF_UNSPEC.0 as u32,
-                GAA_FLAG_INCLUDE_GATEWAYS,
-                None,
-                Some(buf.as_mut_ptr() as *mut IP_ADAPTER_ADDRESSES_LH),
-                &mut buf_len,
-            );
-        }
-
-        if result != 0 {
-            return None;
-        }
-
-        let mut adapter = buf.as_ptr() as *const IP_ADAPTER_ADDRESSES_LH;
-        while !adapter.is_null() {
-            let mut addr = (*adapter).FirstUnicastAddress;
-            while !addr.is_null() {
-                let sockaddr = (*addr).Address.lpSockaddr;
-                if !sockaddr.is_null() && (*sockaddr).sa_family == AF_INET {
-                    let octets = std::slice::from_raw_parts(sockaddr as *const u8, 16);
-                    let ip = Ipv4Addr::new(octets[4], octets[5], octets[6], octets[7]);
-                    let o = ip.octets();
-                    if o[0] == 192 && o[1] == 168 && o[2] == 137 {
-                        return Some(HotspotSubnet {
-                            host_ip: ip,
-                            network: Ipv4Addr::new(192, 168, 137, 0),
-                            mask: 24,
-                        });
-                    }
-                }
-                addr = (*addr).Next;
-            }
-            adapter = (*adapter).Next;
-        }
-    }
-
-    None
+fn rewrite_src(data: &mut [u8], ip_header_len: usize, new_addr: Ipv4Addr, new_port: u16) {
+    data[12..16].copy_from_slice(&new_addr.octets());
+    data[ip_header_len..ip_header_len + 2].copy_from_slice(&new_port.to_be_bytes());
 }
 
 // ── WinDivert redirect ────────────────────────────────────────────────────────
 
-/// Opens two WinDivert handles (driver installation runs on the calling thread),
-/// then spawns minimal-stack worker threads that only run the packet recv/send loop.
-pub(crate) fn start_redirect(subnet: &HotspotSubnet, bind_port: u16) -> anyhow::Result<NatTable> {
+/// Opens WinDivert handles and spawns worker threads for NAT redirect.
+///
+/// Inbound path:  forward layer captures CLIENT→EXTERNAL, rewrites to loopback,
+///                injects via network layer so our proxy receives the connection.
+/// Return path:   network layer captures proxy response, rewrites src/dst back,
+///                injects via network layer with the hotspot interface index.
+pub(crate) fn start_redirect(bind_port: u16) -> anyhow::Result<NatTable> {
     let nat: NatTable = Arc::new(Mutex::new(HashMap::new()));
 
-    let net = subnet.network.octets();
-
-    let client_filter = format!(
-        "ip and tcp and inbound and \
-         (tcp.DstPort >= 25560 and tcp.DstPort <= 25570) and \
-         ip.SrcAddr >= {}.{}.{}.1 and ip.SrcAddr <= {}.{}.{}.254",
-        net[0], net[1], net[2], net[0], net[1], net[2],
-    );
+    let client_filter = "tcp and (tcp.DstPort >= 25560 and tcp.DstPort <= 25570)";
 
     let return_filter = format!(
-        "ip and tcp and outbound and ip.SrcAddr == 127.0.0.1 and tcp.SrcPort == {}",
+        "tcp and ip.SrcAddr == 127.0.0.1 and tcp.SrcPort == {}",
         bind_port
     );
 
-    let wd_client = WinDivert::network(&client_filter, 0, Default::default())
-        .map_err(|e| anyhow::anyhow!("WinDivert (клиенты): {}", e))?;
-    let wd_return = WinDivert::network(&return_filter, 0, Default::default())
-        .map_err(|e| anyhow::anyhow!("WinDivert (обратный): {}", e))?;
+    let flags = WinDivertFlags::new();
+
+    // Forward layer: captures routed hotspot client traffic
+    let wd_forward = WinDivert::forward(&client_filter, 0, flags)
+        .map_err(|e| anyhow::anyhow!("WinDivert (forward): {}", e))?;
+
+    // Network layer: inject-only handle (filter = "false" captures nothing)
+    let wd_inject = WinDivert::network("false", 0, flags)
+        .map_err(|e| anyhow::anyhow!("WinDivert (network inject): {}", e))?;
+
+    // Network layer: captures proxy responses on loopback going back to clients
+    let wd_return = WinDivert::network(&return_filter, 0, flags)
+        .map_err(|e| anyhow::anyhow!("WinDivert (return): {}", e))?;
 
     let nat_client = Arc::clone(&nat);
-    std::thread::Builder::new()
-        .name("wd-client".to_string())
-        .stack_size(512 * 1024)
-        .spawn(move || run_client_intercept_loop(wd_client, bind_port, nat_client))?;
+    std::thread::spawn(move || {
+        run_client_intercept_loop(wd_forward, wd_inject, bind_port, nat_client)
+    });
 
     let nat_return = Arc::clone(&nat);
-    std::thread::Builder::new()
-        .name("wd-return".to_string())
-        .stack_size(512 * 1024)
-        .spawn(move || run_return_intercept_loop(wd_return, nat_return))?;
+    std::thread::spawn(move || run_return_intercept_loop(wd_return, nat_return));
 
     Ok(nat)
 }
@@ -169,10 +123,15 @@ pub(crate) fn start_nat_cleanup(nat: NatTable) {
 
 // ── Packet loops ──────────────────────────────────────────────────────────────
 
-fn run_client_intercept_loop(wd: WinDivert<NetworkLayer>, bind_port: u16, nat: NatTable) {
+fn run_client_intercept_loop(
+    wd_forward: WinDivert<ForwardLayer>,
+    wd_inject: WinDivert<NetworkLayer>,
+    bind_port: u16,
+    nat: NatTable,
+) {
     let mut buf = vec![0u8; 65535];
     loop {
-        let mut packet = match wd.recv(Some(&mut buf)) {
+        let packet = match wd_forward.recv(Some(&mut buf)) {
             Ok(p) => p,
             Err(e) => {
                 eprintln!("[WinDivert] recv error (client): {}", e);
@@ -180,47 +139,70 @@ fn run_client_intercept_loop(wd: WinDivert<NetworkLayer>, bind_port: u16, nat: N
             }
         };
 
-        let (src_ip, dst_ip, src_port, dst_port, ihl) = {
-            let data = packet.data.as_ref();
-            if data.len() < 20 {
-                let _ = wd.send(&packet);
+        let packet_slice = match SlicedPacket::from_ip(&packet.data) {
+            Ok(s) => s,
+            Err(_) => {
+                let _ = wd_forward.send(&packet);
                 continue;
             }
-            let ihl = (data[0] & 0x0F) as usize * 4;
-            if data.len() < ihl + 4 {
-                let _ = wd.send(&packet);
-                continue;
-            }
-            let src_ip = Ipv4Addr::new(data[12], data[13], data[14], data[15]);
-            let dst_ip = Ipv4Addr::new(data[16], data[17], data[18], data[19]);
-            let src_port = u16::from_be_bytes([data[ihl], data[ihl + 1]]);
-            let dst_port = u16::from_be_bytes([data[ihl + 2], data[ihl + 3]]);
-            (src_ip, dst_ip, src_port, dst_port, ihl)
         };
 
+        let ip_slice = match packet_slice.net.as_ref() {
+            Some(etherparse::NetSlice::Ipv4(s)) => s,
+            _ => {
+                drop(packet_slice);
+                let _ = wd_forward.send(&packet);
+                continue;
+            }
+        };
+
+        let tcp_slice = match packet_slice.transport.as_ref() {
+            Some(etherparse::TransportSlice::Tcp(s)) => s,
+            _ => {
+                drop(packet_slice);
+                let _ = wd_forward.send(&packet);
+                continue;
+            }
+        };
+
+        let ip_header_len = ip_slice.header().ihl() as usize * 4;
+        let src_addr = ip_slice.header().source_addr();
+        let src_port = tcp_slice.source_port();
+        let dst_addr = ip_slice.header().destination_addr();
+        let dst_port = tcp_slice.destination_port();
+        let interface_id = packet.address.interface_index();
+        let subinterface_id = packet.address.subinterface_index();
+
+        drop(packet_slice);
+
+        // Key by (127.0.0.1, client_port) — matches the dst of the proxy's response
         nat.lock().unwrap().insert(
-            (src_ip, src_port),
+            (Ipv4Addr::LOCALHOST, src_port),
             NatEntry {
-                original_dst_ip: dst_ip,
+                client_addr: src_addr,
+                client_port: src_port,
+                original_dst_ip: dst_addr,
                 original_dst_port: dst_port,
+                interface_id,
+                subinterface_id,
                 timestamp: Instant::now(),
             },
         );
 
-        let data = packet.data.to_mut();
-        data[16] = 127;
-        data[17] = 0;
-        data[18] = 0;
-        data[19] = 1;
-        let bp = bind_port.to_be_bytes();
-        data[ihl + 2] = bp[0];
-        data[ihl + 3] = bp[1];
+        // CLIENT:port → EXTERNAL:MC_PORT  =>  127.0.0.1:port → 127.0.0.1:bind_port
+        let mut data = packet.data.to_vec();
+        rewrite_src(&mut data, ip_header_len, Ipv4Addr::LOCALHOST, src_port);
+        rewrite_dst(&mut data, ip_header_len, Ipv4Addr::LOCALHOST, bind_port);
 
-        if let Err(e) = packet.recalculate_checksums(Default::default()) {
+        let mut net_packet = unsafe { WinDivertPacket::<NetworkLayer>::new(data) };
+        net_packet.address.set_outbound(true);
+        net_packet.address.as_mut().set_loopback(true);
+
+        if let Err(e) = net_packet.recalculate_checksums(Default::default()) {
             eprintln!("[WinDivert] checksum error (client): {}", e);
             continue;
         }
-        if let Err(e) = wd.send(&packet) {
+        if let Err(e) = wd_inject.send(&net_packet) {
             eprintln!("[WinDivert] send error (client): {}", e);
         }
     }
@@ -229,7 +211,7 @@ fn run_client_intercept_loop(wd: WinDivert<NetworkLayer>, bind_port: u16, nat: N
 fn run_return_intercept_loop(wd: WinDivert<NetworkLayer>, nat: NatTable) {
     let mut buf = vec![0u8; 65535];
     loop {
-        let mut packet = match wd.recv(Some(&mut buf)) {
+        let packet = match wd.recv(Some(&mut buf)) {
             Ok(p) => p,
             Err(e) => {
                 eprintln!("[WinDivert] recv error (return): {}", e);
@@ -237,51 +219,74 @@ fn run_return_intercept_loop(wd: WinDivert<NetworkLayer>, nat: NatTable) {
             }
         };
 
-        let (dst_ip, dst_port, ihl) = {
-            let data = packet.data.as_ref();
-            if data.len() < 20 {
-                let _ = wd.send(&packet);
-                continue;
-            }
-            let ihl = (data[0] & 0x0F) as usize * 4;
-            if data.len() < ihl + 4 {
-                let _ = wd.send(&packet);
-                continue;
-            }
-            let dst_ip = Ipv4Addr::new(data[16], data[17], data[18], data[19]);
-            let dst_port = u16::from_be_bytes([data[ihl + 2], data[ihl + 3]]);
-            (dst_ip, dst_port, ihl)
-        };
-
-        let entry = nat
-            .lock()
-            .unwrap()
-            .get(&(dst_ip, dst_port))
-            .map(|e| (e.original_dst_ip, e.original_dst_port));
-
-        let (orig_ip, orig_port) = match entry {
-            Some(e) => e,
-            None => {
+        let packet_slice = match SlicedPacket::from_ip(&packet.data) {
+            Ok(s) => s,
+            Err(_) => {
                 let _ = wd.send(&packet);
                 continue;
             }
         };
 
-        let data = packet.data.to_mut();
-        let orig_octets = orig_ip.octets();
-        data[12] = orig_octets[0];
-        data[13] = orig_octets[1];
-        data[14] = orig_octets[2];
-        data[15] = orig_octets[3];
-        let op = orig_port.to_be_bytes();
-        data[ihl] = op[0];
-        data[ihl + 1] = op[1];
+        let ip_slice = match packet_slice.net.as_ref() {
+            Some(etherparse::NetSlice::Ipv4(s)) => s,
+            _ => {
+                drop(packet_slice);
+                let _ = wd.send(&packet);
+                continue;
+            }
+        };
 
-        if let Err(e) = packet.recalculate_checksums(Default::default()) {
+        let tcp_slice = match packet_slice.transport.as_ref() {
+            Some(etherparse::TransportSlice::Tcp(s)) => s,
+            _ => {
+                drop(packet_slice);
+                let _ = wd.send(&packet);
+                continue;
+            }
+        };
+
+        let ip_header_len = ip_slice.header().ihl() as usize * 4;
+        let dst_addr = ip_slice.header().destination_addr();
+        let dst_port = tcp_slice.destination_port();
+
+        drop(packet_slice);
+
+        let entry = nat.lock().unwrap().get(&(dst_addr, dst_port)).map(|e| {
+            (
+                e.client_addr,
+                e.client_port,
+                e.original_dst_ip,
+                e.original_dst_port,
+                e.interface_id,
+                e.subinterface_id,
+            )
+        });
+
+        let (client_addr, client_port, orig_ip, orig_port, interface_id, subinterface_id) =
+            match entry {
+                Some(e) => e,
+                None => {
+                    let _ = wd.send(&packet);
+                    continue;
+                }
+            };
+
+        // 127.0.0.1:bind_port → 127.0.0.1:client_port
+        //  =>  EXTERNAL:MC_PORT → CLIENT:client_port
+        let mut data = packet.data.to_vec();
+        rewrite_src(&mut data, ip_header_len, orig_ip, orig_port);
+        rewrite_dst(&mut data, ip_header_len, client_addr, client_port);
+
+        let mut net_packet = unsafe { WinDivertPacket::<NetworkLayer>::new(data) };
+        net_packet.address.set_outbound(true);
+        net_packet.address.set_interface_index(interface_id);
+        net_packet.address.set_subinterface_index(subinterface_id);
+
+        if let Err(e) = net_packet.recalculate_checksums(Default::default()) {
             eprintln!("[WinDivert] checksum error (return): {}", e);
             continue;
         }
-        if let Err(e) = wd.send(&packet) {
+        if let Err(e) = wd.send(&net_packet) {
             eprintln!("[WinDivert] send error (return): {}", e);
         }
     }
