@@ -4,21 +4,24 @@ use tokio::{
     sync::mpsc::{Receiver, Sender},
 };
 
-use crate::protocols::{ServerBoundEvent, Version, VersionProtocol};
+use crate::{
+    logger::Logger,
+    protocols::{ServerBoundEvent, Version, VersionProtocol},
+};
 
 /// Identifies which of the two connected clients a packet or event belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientId {
-    Cheat,
-    Legit,
+    Primary,
+    Secondary,
 }
 
 impl ClientId {
     /// Returns the other client variant.
     pub fn opposite(&self) -> ClientId {
         match self {
-            ClientId::Cheat => ClientId::Legit,
-            ClientId::Legit => ClientId::Cheat,
+            ClientId::Primary => ClientId::Secondary,
+            ClientId::Secondary => ClientId::Primary,
         }
     }
 }
@@ -40,41 +43,45 @@ pub enum Event {
 pub struct Controller {
     /// Which client is currently the authoritative sender to the server.
     active_client: ClientId,
-    /// Channel for sending packets to the Cheat client.
-    cheat_tx: Sender<RawPacket>,
-    /// Channel for sending packets to the Legit client.
-    legit_tx: Sender<RawPacket>,
+    /// Channel for sending packets to the Primary client.
+    primary_tx: Sender<RawPacket>,
+    /// Channel for sending packets to the Secondary client.
+    secondary_tx: Sender<RawPacket>,
     /// Channel for sending packets to the upstream server.
     remote_tx: Sender<RawPacket>,
     /// Receives events (client data, disconnections, server data) from I/O tasks.
     event_rx: Receiver<Event>,
-    /// Whether the Cheat client is still connected.
-    cheat_active: bool,
-    /// Whether the Legit client is still connected.
-    legit_active: bool,
+    /// Whether the Primary client is still connected.
+    primary_active: bool,
+    /// Whether the Secondary client is still connected.
+    secondary_active: bool,
     /// Version-specific state: position tracking and sync-packet queue.
     version: Version,
+    /// Logger for emitting status events to the GUI.
+    log: Logger,
 }
 
 impl Controller {
     /// Constructs a new Controller. Both clients are assumed to be active on creation.
     pub fn new(
         active_client: ClientId,
-        cheat_tx: Sender<RawPacket>,
-        legit_tx: Sender<RawPacket>,
+        primary_tx: Sender<RawPacket>,
+        secondary_tx: Sender<RawPacket>,
         remote_tx: Sender<RawPacket>,
         event_rx: Receiver<Event>,
         version: Version,
+        log: Logger,
     ) -> Self {
         Self {
             active_client,
-            cheat_tx,
-            legit_tx,
+            primary_tx,
+            secondary_tx,
             remote_tx,
             event_rx,
-            cheat_active: true,
-            legit_active: true,
+            primary_active: true,
+            secondary_active: true,
             version,
+            log,
         }
     }
 
@@ -102,11 +109,11 @@ impl Controller {
                             ServerBoundEvent::SendToInactive(raw_packet) => {
                                 if self.both_active() {
                                     match self.active_client.opposite() {
-                                        ClientId::Cheat => {
-                                            self.cheat_tx.send(raw_packet).await.ok();
+                                        ClientId::Primary => {
+                                            self.primary_tx.send(raw_packet).await.ok();
                                         }
-                                        ClientId::Legit => {
-                                            self.legit_tx.send(raw_packet).await.ok();
+                                        ClientId::Secondary => {
+                                            self.secondary_tx.send(raw_packet).await.ok();
                                         }
                                     }
                                 }
@@ -123,31 +130,40 @@ impl Controller {
                     // Only the active client's packets are forwarded to the server.
                     if client_id == self.active_client {
                         if let Err(e) = self.remote_tx.send(packet).await {
-                            println!("[!] Ошибка отправки пакета на сервер: {}", e);
+                            self.log
+                                .error(format!("Ошибка отправки пакета на сервер: {}", e));
                             return;
                         }
                     }
                 }
 
                 Event::ClientDisconnected(client_id) => {
-                    // If both_active() is already false, the second client just disconnected.
-                    if !self.both_active() {
-                        println!("[-] Оба клиента отключились, сессия завершена");
-                        return;
+                    match client_id {
+                        ClientId::Primary => {
+                            self.primary_active = false;
+                            self.log.client_status("primary", false);
+                        }
+                        ClientId::Secondary => {
+                            self.secondary_active = false;
+                            self.log.client_status("secondary", false);
+                        }
                     }
 
-                    match client_id {
-                        ClientId::Cheat => self.cheat_active = false,
-                        ClientId::Legit => self.legit_active = false,
+                    if !(self.primary_active || self.secondary_active) {
+                        self.log.info("Оба клиента отключились, сессия завершена");
+                        return;
                     }
 
                     if self.active_client == client_id {
                         // Active client disconnected — switch control to the other one.
                         self.active_client = client_id.opposite();
-                        println!("[-] Активный клиент отключился, управление передано: {}", match self.active_client {
-                            ClientId::Cheat => "чит",
-                            ClientId::Legit => "легит",
-                        });
+                        self.log.info(format!(
+                            "Активный клиент отключился, управление передано: {}",
+                            match self.active_client {
+                                ClientId::Primary => "основной",
+                                ClientId::Secondary => "дополнительный",
+                            }
+                        ));
 
                         if let Some(event) =
                             self.version.handle_client_disconnect(self.active_client)
@@ -169,11 +185,11 @@ impl Controller {
                     }
 
                     // Broadcast the raw packet to whichever clients are still active.
-                    if self.cheat_active {
-                        let _ = self.cheat_tx.send(packet.clone()).await;
+                    if self.primary_active {
+                        let _ = self.primary_tx.send(packet.clone()).await;
                     }
-                    if self.legit_active {
-                        let _ = self.legit_tx.send(packet).await;
+                    if self.secondary_active {
+                        let _ = self.secondary_tx.send(packet).await;
                     }
                 }
             }
@@ -182,7 +198,7 @@ impl Controller {
 
     /// Returns `true` only when both clients are currently connected.
     fn both_active(&self) -> bool {
-        self.cheat_active && self.legit_active
+        self.primary_active && self.secondary_active
     }
 }
 

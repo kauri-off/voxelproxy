@@ -10,6 +10,7 @@ fn main() {
 
     // Copy WinDivert runtime files to the exe output directory
     copy_windivert_files();
+    tauri_build::build()
 }
 
 fn copy_windivert_files() {
@@ -30,7 +31,12 @@ fn copy_windivert_files() {
         let dst = profile_dir.join(file);
         if src.exists() {
             std::fs::copy(&src, &dst).unwrap_or_else(|e| {
-                panic!("Failed to copy {} to {}: {}", src.display(), dst.display(), e)
+                panic!(
+                    "Failed to copy {} to {}: {}",
+                    src.display(),
+                    dst.display(),
+                    e
+                )
             });
         }
     }

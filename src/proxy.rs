@@ -13,6 +13,7 @@ use crate::resolver::resolve_host_port;
 
 use crate::{
     controller::{ClientId, Controller, run_client, run_server},
+    logger::Logger,
     packets::universal::{
         Intent,
         handshaking::c2s::Handshake,
@@ -172,14 +173,15 @@ async fn process_status(
 ///
 /// # Preconditions
 /// - The Minecraft `Handshake` + `LoginStart` have been **read** from both
-///   `cheat` and `legit` streams.
+///   `primary` and `secondary` streams.
 /// - The Minecraft `Handshake` + `LoginStart` have been **sent** to `remote`.
 /// - `version` has been constructed from the shared protocol number.
 pub async fn run_proxy_session(
-    mut cheat: TcpStream,
-    mut legit: TcpStream,
+    mut primary: TcpStream,
+    mut secondary: TcpStream,
     mut remote: TcpStream,
     mut version: Version,
+    log: Logger,
 ) -> anyhow::Result<()> {
     let mut threshold = None;
 
@@ -191,8 +193,8 @@ pub async fn run_proxy_session(
         match packet.packet_id {
             LoginDisconnect::PACKET_ID => {
                 send_login_error(
-                    &mut cheat,
-                    &mut legit,
+                    &mut primary,
+                    &mut secondary,
                     packet.deserialize_payload::<LoginDisconnect>()?.reason,
                 )
                 .await;
@@ -200,8 +202,8 @@ pub async fn run_proxy_session(
             }
             EncryptionRequest::PACKET_ID => {
                 send_login_error(
-                    &mut cheat,
-                    &mut legit,
+                    &mut primary,
+                    &mut secondary,
                     "Лицензионный сервер не поддерживается\nИспользуйте ViaProxy".to_string(),
                 )
                 .await;
@@ -209,9 +211,9 @@ pub async fn run_proxy_session(
             }
             LoginSuccess::PACKET_ID => {
                 let packet = packet.to_raw_packet_compressed(threshold)?;
-                packet.write_async(&mut cheat).await?;
-                packet.write_async(&mut legit).await?;
-                println!("[+] Успешный вход");
+                packet.write_async(&mut primary).await?;
+                packet.write_async(&mut secondary).await?;
+                log.success("Успешный вход");
                 break;
             }
             SetCompression::PACKET_ID => {
@@ -219,61 +221,62 @@ pub async fn run_proxy_session(
                 threshold = Some(compression.threshold.0);
 
                 let packet = packet.to_raw_packet()?;
-                packet.write_async(&mut cheat).await?;
-                packet.write_async(&mut legit).await?;
-                println!(
-                    "[+] Сжатие установлено (порог: {} байт)",
+                packet.write_async(&mut primary).await?;
+                packet.write_async(&mut secondary).await?;
+                log.info(format!(
+                    "Сжатие: порог {} байт",
                     compression.threshold.0
-                );
+                ));
             }
             _ => unreachable!(),
         }
     }
 
-    let (cheat_read, cheat_write) = cheat.into_split();
-    let (legit_read, legit_write) = legit.into_split();
+    let (primary_read, primary_write) = primary.into_split();
+    let (secondary_read, secondary_write) = secondary.into_split();
     let (remote_read, remote_write) = remote.into_split();
 
     let (event_tx, event_rx) = mpsc::channel(IO_CHANNEL_CAPACITY);
-    let (cheat_tx, cheat_rx) = mpsc::channel(IO_CHANNEL_CAPACITY);
-    let (legit_tx, legit_rx) = mpsc::channel(IO_CHANNEL_CAPACITY);
+    let (primary_tx, primary_rx) = mpsc::channel(IO_CHANNEL_CAPACITY);
+    let (secondary_tx, secondary_rx) = mpsc::channel(IO_CHANNEL_CAPACITY);
     let (remote_tx, remote_rx) = mpsc::channel(IO_CHANNEL_CAPACITY);
 
     version.update_threshold(threshold);
     let controller = Controller::new(
-        ClientId::Cheat,
-        cheat_tx,
-        legit_tx,
+        ClientId::Primary,
+        primary_tx,
+        secondary_tx,
         remote_tx,
         event_rx,
         version,
+        log.clone(),
     );
 
     tokio::spawn(run_client(
-        cheat_read,
-        cheat_write,
-        ClientId::Cheat,
+        primary_read,
+        primary_write,
+        ClientId::Primary,
         event_tx.clone(),
-        cheat_rx,
+        primary_rx,
     ));
     tokio::spawn(run_client(
-        legit_read,
-        legit_write,
-        ClientId::Legit,
+        secondary_read,
+        secondary_write,
+        ClientId::Secondary,
         event_tx.clone(),
-        legit_rx,
+        secondary_rx,
     ));
     tokio::spawn(run_server(remote_read, remote_write, event_tx, remote_rx));
 
-    println!("[+] VoxelProxy запущен!");
+    log.success("VoxelProxy запущен!");
     controller.run().await;
     Ok(())
 }
 
 /// Sends a `LoginDisconnect` packet to both clients.
 pub async fn send_login_error<W: AsyncWriteExt + Unpin>(
-    cheat: &mut W,
-    legit: &mut W,
+    primary: &mut W,
+    secondary: &mut W,
     message: String,
 ) {
     let disconnect = UncompressedPacket::from_packet(&LoginDisconnect {
@@ -281,6 +284,6 @@ pub async fn send_login_error<W: AsyncWriteExt + Unpin>(
     })
     .unwrap();
 
-    disconnect.write_async(cheat).await.unwrap();
-    disconnect.write_async(legit).await.unwrap();
+    disconnect.write_async(primary).await.unwrap();
+    disconnect.write_async(secondary).await.unwrap();
 }
