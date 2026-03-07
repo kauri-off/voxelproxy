@@ -1,6 +1,6 @@
 use std::{net::Ipv4Addr, process::Command, sync::Arc};
 
-use dialoguer::theme::ColorfulTheme;
+use dialoguer::theme::{ColorfulTheme, SimpleTheme};
 use mc_protocol::{
     packet::{RawPacket, UncompressedPacket},
     varint::VarInt,
@@ -80,7 +80,7 @@ async fn run() -> anyhow::Result<()> {
     // ── Mode selection ────────────────────────────────────────────────────────
     #[cfg(target_os = "windows")]
     {
-        let mode = dialoguer::Select::with_theme(&ColorfulTheme::default())
+        let mode = dialoguer::Select::with_theme(&SimpleTheme)
             .with_prompt("Выберите режим")
             .item("Ручной (ввести адрес сервера)")
             .item("Автоматический (WinDivert, хотспот)")
@@ -236,7 +236,11 @@ async fn run_automatic_mode() -> anyhow::Result<()> {
     };
     println!("[~] Ожидание подключений на порту {}", BIND_PORT);
     println!("    Порты 25560–25570 перехватываются WinDivert");
-    println!("    Порядок: сначала легит, затем чит (подключайтесь как обычно)");
+    println!("    Порядок: сначала легит, затем чит");
+    println!(
+        "    На легите подключайтесь к серверу как обычно (mc.funtime.su) (не забудьте сначала подключиться к хот-спот)"
+    );
+    println!("    На чите подключайтесь к 127.0.0.1:{}", BIND_PORT);
 
     // 5. Accept clients and pair them by (server_host, server_port)
     let (tx, mut rx) = mpsc::channel(HANDSHAKE_CHANNEL_CAPACITY);
@@ -364,6 +368,9 @@ __     __            _ ____
     } else {
         println!(" Версия: v{}", version);
     }
+
+    let repo = env!("CARGO_PKG_REPOSITORY");
+    println!(" Ссылка на проект: {}", repo);
 }
 
 async fn check_for_updates() -> anyhow::Result<()> {
