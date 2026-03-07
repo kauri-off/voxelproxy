@@ -1,0 +1,4 @@
+[env]
+# Path to directory containing WinDivert.dll, WinDivert64.sys
+# Used by the windivert-sys build script to link against pre-built binaries.
+WINDIVERT_PATH = { value = "windivert", relative = true }

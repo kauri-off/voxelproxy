@@ -37,12 +37,22 @@ jobs:
           msg=$(git log -1 --pretty=format:"%s")
           echo "msg=$msg" >> $GITHUB_OUTPUT
 
+      - name: Create release archive
+        shell: bash
+        run: |
+          mkdir -p release_pkg
+          cp target/release/voxelproxy.exe release_pkg/
+          cp windivert/WinDivert.dll release_pkg/
+          cp windivert/WinDivert64.sys release_pkg/
+          cd release_pkg
+          7z a ../voxelproxy-${{ steps.version.outputs.version }}.zip .
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: Release ${{ steps.version.outputs.version }}
           body: ${{ steps.changelog.outputs.msg }}
-          files: target/release/voxelproxy.exe
+          files: voxelproxy-${{ steps.version.outputs.version }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
