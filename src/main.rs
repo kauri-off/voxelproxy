@@ -219,7 +219,9 @@ async fn run_automatic_mode() -> anyhow::Result<()> {
         Ok(t) => t,
         Err(e) => {
             println!("[!] WinDivert недоступен: {}", e);
-            println!("    Убедитесь, что WinDivert.dll и WinDivert64.sys находятся рядом с программой");
+            println!(
+                "    Убедитесь, что WinDivert.dll и WinDivert64.sys находятся рядом с программой"
+            );
             println!("[~] Переключение в ручной режим...");
             return run_manual_mode().await;
         }
@@ -248,7 +250,10 @@ async fn run_automatic_mode() -> anyhow::Result<()> {
             println!("[+] Пара найдена для {}:{}, запуск сессии...", key.0, key.1);
             tokio::spawn(run_auto_session(client, legit));
         } else {
-            println!("[~] Первый клиент для {}:{}, ожидание второго...", key.0, key.1);
+            println!(
+                "[~] Первый клиент для {}:{}, ожидание второго...",
+                key.0, key.1
+            );
             pending.push(client);
         }
     }
@@ -325,8 +330,8 @@ async fn run_auto_session(
     // Forward the Handshake + LoginStart to the real server
     let handshake = Handshake {
         protocol_version: VarInt(cheat.protocol_version),
-        server_address: cheat.server_host.clone(),
-        server_port: cheat.server_port,
+        server_address: legit.server_host.clone(),
+        server_port: legit.server_port,
         intent: Intent::Login.into(),
     };
     UncompressedPacket::from_packet(&handshake)?

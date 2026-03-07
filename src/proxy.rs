@@ -221,7 +221,10 @@ pub async fn run_proxy_session(
                 let packet = packet.to_raw_packet()?;
                 packet.write_async(&mut cheat).await?;
                 packet.write_async(&mut legit).await?;
-                println!("[+] Сжатие установлено (порог: {} байт)", compression.threshold.0);
+                println!(
+                    "[+] Сжатие установлено (порог: {} байт)",
+                    compression.threshold.0
+                );
             }
             _ => unreachable!(),
         }
