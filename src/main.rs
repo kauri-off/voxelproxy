@@ -62,6 +62,7 @@ async fn run() -> anyhow::Result<()> {
     }
 
     print_banner();
+    #[cfg(target_os = "windows")]
     check_for_updates().await?;
 
     // ── Global keybind listener (Windows only) ────────────────────────────────

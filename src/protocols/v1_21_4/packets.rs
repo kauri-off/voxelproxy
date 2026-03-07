@@ -61,6 +61,12 @@ pub mod c2s {
         pub struct Pong {
             pub id: i32,
         }
+
+        #[derive(Packet, Debug)]
+        #[packet(17)] // ServerboundContainerClosePacket
+        pub struct ContainerClose {
+            pub container_id: VarInt,
+        }
     }
 }
 
@@ -102,5 +108,11 @@ pub mod s2c {
         #[derive(Packet, Debug)]
         #[packet(112)] // ClientboundStartConfigurationPacket
         pub struct StartConfiguration {}
+
+        #[derive(Packet, Debug)]
+        #[packet(18)] // ClientboundContainerClosePacket
+        pub struct ContainerClose {
+            pub container_id: VarInt,
+        }
     }
 }
