@@ -8,6 +8,7 @@ use mc_protocol::{
 use super::VersionProtocol;
 use crate::{
     controller::ClientId,
+    logger::Logger,
     protocols::{ClientBoundEvent, ClientDisconnectEvent, ServerBoundEvent},
 };
 use packets::{c2s, s2c};
@@ -18,10 +19,11 @@ pub struct VersionData {
     pub position: s2c::game::Position,
     pub pings: Vec<PingSync>,
     pub threshold: Option<i32>,
+    log: Logger,
 }
 
 impl VersionData {
-    pub fn new() -> Self {
+    pub fn new(log: Logger) -> Self {
         Self {
             position: s2c::game::Position {
                 id: VarInt(TELEPORT_ID),
@@ -34,6 +36,7 @@ impl VersionData {
             },
             pings: vec![],
             threshold: None,
+            log,
         }
     }
 }
@@ -62,9 +65,10 @@ impl VersionProtocol for VersionData {
     fn handle_client_disconnect(&mut self, new_active: ClientId) -> Option<ClientDisconnectEvent> {
         let mut packets = vec![];
 
+        let log = self.log.clone();
         self.pings.retain(|t| {
             if t.is_sent(new_active) {
-                println!("Синхронизация: Отправка: {}", t.uid);
+                log.info(format!("Синхронизация: Отправка: {}", t.uid));
                 let tx = c2s::game::Ack {
                     container_id: t.container_id,
                     uid: t.uid,
@@ -176,7 +180,7 @@ impl VersionData {
                 } else {
                     if let Some(head) = self.pings.get(0) {
                         if head.is_sent(client_id.opposite()) {
-                            println!("Синхронизация: Пропуск: {}", head.uid);
+                            self.log.info(format!("Синхронизация: Пропуск: {}", head.uid));
                             self.pings.remove(0);
                             return Ok(Some(ServerBoundEvent::SkipRelay));
                         }

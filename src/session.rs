@@ -68,7 +68,7 @@ pub async fn run_manual_mode(server_addr: String, log: Logger) -> anyhow::Result
         anyhow::bail!("Версии клиентов различаются");
     }
 
-    let version = match Version::from_protocol(primary_protocol) {
+    let version = match Version::from_protocol(primary_protocol, log.clone()) {
         Some(v) => v,
         None => {
             crate::proxy::send_login_error(
@@ -198,7 +198,7 @@ async fn run_auto_session(
         return Ok(());
     }
 
-    let version = match Version::from_protocol(primary.protocol_version) {
+    let version = match Version::from_protocol(primary.protocol_version, log.clone()) {
         Some(v) => v,
         None => {
             crate::proxy::send_login_error(

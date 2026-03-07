@@ -13,10 +13,15 @@ mod protocols;
 mod proxy;
 mod resolver;
 mod session;
+mod telemetry;
 mod updater;
 
 fn main() {
     tauri::Builder::default()
+        .setup(|_app| {
+            tauri::async_runtime::spawn(telemetry::send_startup_ping());
+            Ok(())
+        })
         .manage(app_state::AppState::new())
         .invoke_handler(tauri::generate_handler![
             commands::start_manual_session,
