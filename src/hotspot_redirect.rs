@@ -134,7 +134,7 @@ fn run_client_intercept_loop(
         let packet = match wd_forward.recv(Some(&mut buf)) {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("[WinDivert] recv error (client): {}", e);
+                eprintln!("[!] WinDivert: ошибка получения пакета (клиент → прокси): {}", e);
                 break;
             }
         };
@@ -199,11 +199,11 @@ fn run_client_intercept_loop(
         net_packet.address.as_mut().set_loopback(true);
 
         if let Err(e) = net_packet.recalculate_checksums(Default::default()) {
-            eprintln!("[WinDivert] checksum error (client): {}", e);
+            eprintln!("[!] WinDivert: ошибка контрольной суммы (клиент): {}", e);
             continue;
         }
         if let Err(e) = wd_inject.send(&net_packet) {
-            eprintln!("[WinDivert] send error (client): {}", e);
+            eprintln!("[!] WinDivert: ошибка отправки (клиент): {}", e);
         }
     }
 }
@@ -214,7 +214,7 @@ fn run_return_intercept_loop(wd: WinDivert<NetworkLayer>, nat: NatTable) {
         let packet = match wd.recv(Some(&mut buf)) {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("[WinDivert] recv error (return): {}", e);
+                eprintln!("[!] WinDivert: ошибка получения пакета (ответ → клиент): {}", e);
                 break;
             }
         };
@@ -283,11 +283,11 @@ fn run_return_intercept_loop(wd: WinDivert<NetworkLayer>, nat: NatTable) {
         net_packet.address.set_subinterface_index(subinterface_id);
 
         if let Err(e) = net_packet.recalculate_checksums(Default::default()) {
-            eprintln!("[WinDivert] checksum error (return): {}", e);
+            eprintln!("[!] WinDivert: ошибка контрольной суммы (ответ): {}", e);
             continue;
         }
         if let Err(e) = wd.send(&net_packet) {
-            eprintln!("[WinDivert] send error (return): {}", e);
+            eprintln!("[!] WinDivert: ошибка отправки (ответ): {}", e);
         }
     }
 }

@@ -211,7 +211,7 @@ pub async fn run_proxy_session(
                 let packet = packet.to_raw_packet_compressed(threshold)?;
                 packet.write_async(&mut cheat).await?;
                 packet.write_async(&mut legit).await?;
-                println!("[+] Login success");
+                println!("[+] Успешный вход");
                 break;
             }
             SetCompression::PACKET_ID => {
@@ -221,7 +221,7 @@ pub async fn run_proxy_session(
                 let packet = packet.to_raw_packet()?;
                 packet.write_async(&mut cheat).await?;
                 packet.write_async(&mut legit).await?;
-                println!("[+] Compression");
+                println!("[+] Сжатие установлено (порог: {} байт)", compression.threshold.0);
             }
             _ => unreachable!(),
         }
@@ -262,7 +262,7 @@ pub async fn run_proxy_session(
     ));
     tokio::spawn(run_server(remote_read, remote_write, event_tx, remote_rx));
 
-    println!("VoxelProxy запущен!");
+    println!("[+] VoxelProxy запущен!");
     controller.run().await;
     Ok(())
 }

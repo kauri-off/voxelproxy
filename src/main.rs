@@ -36,7 +36,7 @@ mod updater;
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
-        println!("Ошибка: {}", e);
+        println!("[!] Ошибка: {}", e);
 
         #[cfg(target_os = "windows")]
         #[cfg(not(debug_assertions))]
@@ -109,14 +109,14 @@ async fn run_manual_mode() -> anyhow::Result<()> {
         if let Some(addr) = resolve_host_port(&input, DEFAULT_PORT, "minecraft", "tcp").await {
             break (addr, input);
         } else {
-            println!("Ошибка");
+            println!("[!] Не удалось разрешить адрес: \"{}\"", input);
         }
     };
 
     let listener = match TcpListener::bind(format!("0.0.0.0:{}", BIND_PORT)).await {
         Ok(t) => t,
         Err(e) => {
-            println!("Ошибка при создании сокета. {}", e);
+            println!("[!] Ошибка при создании сокета: {}", e);
             loop {
                 let _: String = dialoguer::Input::new().interact_text()?;
             }
@@ -124,7 +124,8 @@ async fn run_manual_mode() -> anyhow::Result<()> {
     };
 
     let addr = get_local_ip().unwrap_or(Ipv4Addr::new(127, 0, 0, 1));
-    println!("Адрес для подключения (сначала чит, потом легит): {}", addr);
+    println!("[~] Ожидание подключений на {}:{}", addr, BIND_PORT);
+    println!("    Порядок: сначала чит, потом легит");
 
     let (tx, mut rx) = mpsc::channel(HANDSHAKE_CHANNEL_CAPACITY);
     tokio::spawn(proxy::listen_and_dispatch(
@@ -169,7 +170,7 @@ async fn run_manual_mode() -> anyhow::Result<()> {
 
     // ── Connect to remote and perform login handshake ─────────────────────────
 
-    println!("Подключение к {}", remote_addr);
+    println!("[~] Подключение к {}...", remote_addr);
     let mut remote_stream = match TcpStream::connect(remote_addr).await {
         Ok(t) => t,
         Err(_) => {
@@ -182,7 +183,7 @@ async fn run_manual_mode() -> anyhow::Result<()> {
             return Ok(());
         }
     };
-    println!("Успех");
+    println!("[+] Подключено к {}", remote_addr);
 
     let handshake = Handshake {
         protocol_version: VarInt(cheat_protocol),
@@ -193,10 +194,10 @@ async fn run_manual_mode() -> anyhow::Result<()> {
     UncompressedPacket::from_packet(&handshake)?
         .write_async(&mut remote_stream)
         .await?;
-    println!("[+] Handshake");
+    println!("[+] Отправлен Handshake");
 
     cheat_login_start.write_async(&mut remote_stream).await?;
-    println!("[+] Login start");
+    println!("[+] Отправлен Login Start");
 
     proxy::run_proxy_session(cheat_stream, legit_stream, remote_stream, version).await
 }
@@ -217,27 +218,23 @@ async fn run_automatic_mode() -> anyhow::Result<()> {
     let nat_table = match hotspot_redirect::start_redirect(BIND_PORT) {
         Ok(t) => t,
         Err(e) => {
-            println!(
-                "WinDivert недоступен: {}\n\
-                 Убедитесь, что WinDivert.dll и WinDivert64.sys находятся рядом с программой.\n\
-                 Переключение в ручной режим...",
-                e
-            );
+            println!("[!] WinDivert недоступен: {}", e);
+            println!("    Убедитесь, что WinDivert.dll и WinDivert64.sys находятся рядом с программой");
+            println!("[~] Переключение в ручной режим...");
             return run_manual_mode().await;
         }
     };
     hotspot_redirect::start_nat_cleanup(Arc::clone(&nat_table));
-    println!("WinDivert перехват активен.");
+    println!("[+] WinDivert перехват активен");
 
     // 4. Bind listener
     let listener = match TcpListener::bind(format!("0.0.0.0:{}", BIND_PORT)).await {
         Ok(l) => l,
         Err(e) => anyhow::bail!("Ошибка при создании сокета: {}", e),
     };
-    println!(
-        "Ожидание подключений на порту {} (порты 25560–25570 → перехват).\n СНАЧАЛА ЛЕГИТ ПОТОМ ЧИТ\n Подключайтесь как обычно на легите (например mc.funtime.su)",
-        BIND_PORT
-    );
+    println!("[~] Ожидание подключений на порту {}", BIND_PORT);
+    println!("    Порты 25560–25570 перехватываются WinDivert");
+    println!("    Порядок: сначала легит, затем чит (подключайтесь как обычно)");
 
     // 5. Accept clients and pair them by (server_host, server_port)
     let (tx, mut rx) = mpsc::channel(HANDSHAKE_CHANNEL_CAPACITY);
@@ -248,10 +245,10 @@ async fn run_automatic_mode() -> anyhow::Result<()> {
     while let Some(client) = rx.recv().await {
         let key = (client.server_host.clone(), client.server_port);
         if let Some(legit) = pending.pop() {
-            println!("[+] Пара найдена. Запуск сессии...");
+            println!("[+] Пара найдена для {}:{}, запуск сессии...", key.0, key.1);
             tokio::spawn(run_auto_session(client, legit));
         } else {
-            println!("Первый клиент для {}:{}. Ожидание второго...", key.0, key.1);
+            println!("[~] Первый клиент для {}:{}, ожидание второго...", key.0, key.1);
             pending.push(client);
         }
     }
@@ -310,7 +307,7 @@ async fn run_auto_session(
             }
         };
 
-    println!("Подключение к {}", remote_addr);
+    println!("[~] Подключение к {}...", remote_addr);
     let mut remote_stream = match TcpStream::connect(remote_addr).await {
         Ok(s) => s,
         Err(_) => {
@@ -323,7 +320,7 @@ async fn run_auto_session(
             return Ok(());
         }
     };
-    println!("Успех");
+    println!("[+] Подключено к {}", remote_addr);
 
     // Forward the Handshake + LoginStart to the real server
     let handshake = Handshake {
@@ -335,10 +332,10 @@ async fn run_auto_session(
     UncompressedPacket::from_packet(&handshake)?
         .write_async(&mut remote_stream)
         .await?;
-    println!("[+] Handshake");
+    println!("[+] Отправлен Handshake");
 
     cheat_login_start.write_async(&mut remote_stream).await?;
-    println!("[+] Login start");
+    println!("[+] Отправлен Login Start");
 
     proxy::run_proxy_session(cheat.stream, legit.stream, remote_stream, version).await
 }
@@ -372,11 +369,8 @@ async fn check_for_updates() -> anyhow::Result<()> {
     let version = env!("CARGO_PKG_VERSION");
     match has_update(version).await {
         Ok(Some(new_version)) => {
-            println!(
-                " Доступна новая версия, пожалуйста обновитесь: {}",
-                &new_version.tag
-            );
-            println!(" Ссылка: {}", &new_version.link);
+            println!("[!] Доступна новая версия: {}", &new_version.tag);
+            println!("    Ссылка: {}", &new_version.link);
 
             #[cfg(target_os = "windows")]
             let _ = Command::new("cmd")
@@ -389,10 +383,10 @@ async fn check_for_updates() -> anyhow::Result<()> {
                 let _: String = dialoguer::Input::new().interact_text()?;
             }
         }
-        Ok(None) => println!(" У вас последняя версия!"),
+        Ok(None) => println!("[+] У вас последняя версия"),
         Err(e) => {
-            println!("При проверки обновлений произошла ошибка: {}", e);
-            println!("Проверьте соединение к интернету");
+            println!("[!] Ошибка при проверке обновлений: {}", e);
+            println!("    Проверьте подключение к интернету");
         }
     }
 

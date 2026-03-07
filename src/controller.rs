@@ -123,7 +123,7 @@ impl Controller {
                     // Only the active client's packets are forwarded to the server.
                     if client_id == self.active_client {
                         if let Err(e) = self.remote_tx.send(packet).await {
-                            println!("Ошибка отправки пакета на сервер: {}", e);
+                            println!("[!] Ошибка отправки пакета на сервер: {}", e);
                             return;
                         }
                     }
@@ -132,7 +132,7 @@ impl Controller {
                 Event::ClientDisconnected(client_id) => {
                     // If both_active() is already false, the second client just disconnected.
                     if !self.both_active() {
-                        println!("Оба клиента отключились");
+                        println!("[-] Оба клиента отключились, сессия завершена");
                         return;
                     }
 
@@ -144,7 +144,10 @@ impl Controller {
                     if self.active_client == client_id {
                         // Active client disconnected — switch control to the other one.
                         self.active_client = client_id.opposite();
-                        println!("Переключился на {:?}", self.active_client);
+                        println!("[-] Активный клиент отключился, управление передано: {}", match self.active_client {
+                            ClientId::Cheat => "чит",
+                            ClientId::Legit => "легит",
+                        });
 
                         if let Some(event) =
                             self.version.handle_client_disconnect(self.active_client)
