@@ -131,7 +131,7 @@ pub async fn run_automatic_mode(log: Logger) -> anyhow::Result<()> {
         anyhow::bail!("Автоматический режим требует прав администратора.");
     }
 
-    let nat_table = match hotspot_redirect::start_redirect(BIND_PORT, log.clone()) {
+    let (nat_table, _redirect) = match hotspot_redirect::start_redirect(BIND_PORT, log.clone()) {
         Ok(t) => t,
         Err(e) => anyhow::bail!("WinDivert недоступен: {}", e),
     };

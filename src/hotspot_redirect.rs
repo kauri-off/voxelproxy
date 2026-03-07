@@ -6,12 +6,58 @@ use std::time::Instant;
 use etherparse::SlicedPacket;
 use windivert::{
     WinDivert,
-    layer::{ForwardLayer, NetworkLayer},
+    layer::{ForwardLayer, NetworkLayer, WinDivertLayerTrait},
     packet::WinDivertPacket,
     prelude::WinDivertFlags,
 };
+use windows::Win32::Foundation::HANDLE;
 
 use crate::logger::Logger;
+
+// Re-declare WinDivert FFI functions so we can call them from a different thread
+// than the one doing recv() — the Rust wrapper requires &mut self which prevents
+// sharing, but the underlying Windows API is fully thread-safe for these operations.
+unsafe extern "C" {
+    fn WinDivertShutdown(handle: HANDLE, how: u32) -> u32;
+    fn WinDivertClose(handle: HANDLE) -> u32;
+}
+
+/// Reads the raw Windows HANDLE out of a `WinDivert<L>`.
+///
+/// # Safety
+/// `WinDivert<L>` has `handle: HANDLE` as its first declared field.
+/// With Rust's default repr, HANDLE (a pointer, align 8 on 64-bit) sorts first
+/// — confirmed by reading windivert-0.6.0 source code. The struct is not
+/// `repr(C)` but this layout is stable for this field combination.
+unsafe fn wd_raw_handle<L: WinDivertLayerTrait>(wd: &WinDivert<L>) -> HANDLE {
+    unsafe { (wd as *const WinDivert<L> as *const HANDLE).read() }
+}
+
+/// Drops the WinDivert intercept handles, unblocking any threads blocked in `recv()`.
+///
+/// When dropped, calls `WinDivertShutdown` + `WinDivertClose` on each stored handle.
+/// This causes any pending `WinDivertRecv` call to return with an error, which makes
+/// the worker thread loops break and exit cleanly.
+pub(crate) struct RedirectHandle {
+    // Store handle as usize (the raw pointer value) to avoid !Send from *mut c_void.
+    handles: Vec<usize>,
+}
+
+// SAFETY: HANDLE is an opaque pointer used only as a kernel object reference;
+// WinDivertShutdown/Close are thread-safe per WinDivert documentation.
+unsafe impl Send for RedirectHandle {}
+
+impl Drop for RedirectHandle {
+    fn drop(&mut self) {
+        for &h in &self.handles {
+            let handle = HANDLE(h as *mut _);
+            unsafe {
+                WinDivertShutdown(handle, 3); // 3 = WinDivertShutdownMode::Both
+                WinDivertClose(handle);
+            }
+        }
+    }
+}
 
 pub(crate) struct NatEntry {
     client_addr: Ipv4Addr,
@@ -75,7 +121,7 @@ fn rewrite_src(data: &mut [u8], ip_header_len: usize, new_addr: Ipv4Addr, new_po
 ///                injects via network layer so our proxy receives the connection.
 /// Return path:   network layer captures proxy response, rewrites src/dst back,
 ///                injects via network layer with the hotspot interface index.
-pub(crate) fn start_redirect(bind_port: u16, log: Logger) -> anyhow::Result<NatTable> {
+pub(crate) fn start_redirect(bind_port: u16, log: Logger) -> anyhow::Result<(NatTable, RedirectHandle)> {
     let nat: NatTable = Arc::new(Mutex::new(HashMap::new()));
 
     let client_filter = "tcp and (tcp.DstPort >= 25560 and tcp.DstPort <= 25570)";
@@ -99,6 +145,13 @@ pub(crate) fn start_redirect(bind_port: u16, log: Logger) -> anyhow::Result<NatT
     let wd_return = WinDivert::network(&return_filter, 0, flags)
         .map_err(|e| anyhow::anyhow!("WinDivert (return): {}", e))?;
 
+    // Extract raw HANDLEs before moving handles into threads.
+    // RedirectHandle will close them on drop, unblocking any pending recv() calls.
+    let raw_forward = unsafe { wd_raw_handle(&wd_forward).0 } as usize;
+    let raw_inject  = unsafe { wd_raw_handle(&wd_inject).0 } as usize;
+    let raw_return  = unsafe { wd_raw_handle(&wd_return).0 } as usize;
+    let redirect = RedirectHandle { handles: vec![raw_forward, raw_inject, raw_return] };
+
     let nat_client = Arc::clone(&nat);
     let log_client = log.clone();
     std::thread::spawn(move || {
@@ -109,7 +162,7 @@ pub(crate) fn start_redirect(bind_port: u16, log: Logger) -> anyhow::Result<NatT
     let log_return = log.clone();
     std::thread::spawn(move || run_return_intercept_loop(wd_return, nat_return, log_return));
 
-    Ok(nat)
+    Ok((nat, redirect))
 }
 
 /// Spawns a background thread that prunes NAT entries older than 5 minutes.

@@ -1,6 +1,6 @@
 [package]
 name = "voxelproxy"
-version = "6.0.0"
+version = "6.0.1"
 edition = "2024"
 authors = ["kauri-off <https://github.com/kauri-off>"]
 description = "Бесплатный аналог takker.ru"
@@ -10,8 +10,8 @@ readme = "README.md"
 license = "GPL-3.0-only"
 
 [dependencies]
-tauri = { version = "2", features = [] }
-serde = { version = "1", features = ["derive"] }
+tauri = { version = "2.10.3", features = [] }
+serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1.50.0", features = ["full"] }
 serde_json = "1.0.149"
 trust-dns-resolver = "0.23.2"
@@ -35,7 +35,7 @@ etherparse = "0.19.0"
 get_if_addrs = "0.5.3"
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2.5.6", features = [] }
 
 [profile.release]
 opt-level = 3
