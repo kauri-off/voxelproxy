@@ -47,6 +47,12 @@ pub mod c2s {
             pub uid: i16,
             pub accepted: bool,
         }
+
+        #[derive(Packet, Debug)]
+        #[packet(10)] // ServerboundContainerClosePacket
+        pub struct ContainerClose {
+            pub container_id: u8,
+        }
     }
 }
 
@@ -73,6 +79,12 @@ pub mod s2c {
             pub container_id: i8,
             pub uid: i16,
             pub accepted: bool,
+        }
+
+        #[derive(Packet, Debug)]
+        #[packet(18)] // ClientboundContainerClosePacket
+        pub struct ContainerClose {
+            pub container_id: u8,
         }
     }
 }

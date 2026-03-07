@@ -183,6 +183,19 @@ impl VersionData {
                     }
                 }
             }
+            c2s::game::ContainerClose::PACKET_ID => {
+                if is_active {
+                    let container_close: c2s::game::ContainerClose =
+                        packet.deserialize_payload()?;
+
+                    return Ok(Some(ServerBoundEvent::SendToInactive(
+                        UncompressedPacket::from_packet(&s2c::game::ContainerClose {
+                            container_id: container_close.container_id,
+                        })?
+                        .to_raw_packet_compressed(self.threshold)?,
+                    )));
+                }
+            }
             _ => {}
         };
 
