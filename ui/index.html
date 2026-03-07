@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VoxelProxy</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+
+    <!-- Title bar -->
+    <header class="titlebar">
+      <span class="logo">VoxelProxy</span>
+      <span class="version" id="appVersion"></span>
+      <a class="update-badge" id="updateBadge" hidden href="#" target="_blank"></a>
+    </header>
+
+    <main class="main-layout">
+
+      <!-- ── Left panel: configuration ─────────────────────────────── -->
+      <aside class="config-panel">
+
+        <section>
+          <label class="section-label">Режим</label>
+          <div class="mode-tabs">
+            <button class="tab active" id="tabManual" onclick="setMode('manual')">Ручной</button>
+            <button class="tab" id="tabAuto" onclick="setMode('auto')">Авто</button>
+          </div>
+        </section>
+
+        <section id="serverSection">
+          <label class="section-label">Адрес сервера</label>
+          <input
+            type="text"
+            class="text-input"
+            id="serverAddr"
+            placeholder="mc.example.com"
+            spellcheck="false"
+          />
+        </section>
+
+        <section id="autoInfo" hidden>
+          <p class="hint">
+            WinDivert автоматически перехватывает порты 25560–25570.
+          </p>
+        </section>
+
+        <section>
+          <label class="section-label">Ваш адрес</label>
+          <div class="addr-row">
+            <code class="local-ip" id="localIp">…</code>
+            <span class="port-sep">:</span>
+            <code class="port">25565</code>
+          </div>
+        </section>
+
+        <section>
+          <label class="section-label">Клиенты</label>
+          <div class="client-row">
+            <span class="client-dot" id="primaryDot"></span>
+            <span class="client-label">Основной</span>
+            <span class="client-status" id="primaryStatus">offline</span>
+          </div>
+          <div class="client-row">
+            <span class="client-dot" id="secondaryDot"></span>
+            <span class="client-label">Дополнительный</span>
+            <span class="client-status" id="secondaryStatus">offline</span>
+          </div>
+        </section>
+
+        <div class="spacer"></div>
+
+        <div class="btn-row">
+          <button class="btn-primary" id="startBtn" onclick="startSession()">
+            Запустить
+          </button>
+          <button class="btn-danger" id="stopBtn" onclick="stopSession()" hidden>
+            Остановить
+          </button>
+        </div>
+
+      </aside>
+
+      <!-- ── Right panel: log ───────────────────────────────────────── -->
+      <div class="log-panel">
+        <div class="log-header">
+          <span>Лог</span>
+          <button class="btn-clear" onclick="clearLog()">Очистить</button>
+        </div>
+        <div class="log-output" id="logOutput">
+          <div class="log-entry info">Готов к запуску…</div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

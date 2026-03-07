@@ -209,31 +209,31 @@ impl VersionData {
 #[derive(Debug)]
 pub struct PingSync {
     pub id: i32,
-    cheat_sent: bool,
-    legit_sent: bool,
+    primary_sent: bool,
+    secondary_sent: bool,
 }
 
 impl PingSync {
     pub fn new(id: i32) -> Self {
         Self {
             id,
-            cheat_sent: false,
-            legit_sent: false,
+            primary_sent: false,
+            secondary_sent: false,
         }
     }
 
     pub fn sent(&mut self, client: ClientId) -> bool {
         match client {
-            ClientId::Cheat => self.cheat_sent = true,
-            ClientId::Legit => self.legit_sent = true,
+            ClientId::Primary => self.primary_sent = true,
+            ClientId::Secondary => self.secondary_sent = true,
         }
-        self.cheat_sent && self.legit_sent
+        self.primary_sent && self.secondary_sent
     }
 
     pub fn is_sent(&self, client: ClientId) -> bool {
         match client {
-            ClientId::Cheat => self.cheat_sent,
-            ClientId::Legit => self.legit_sent,
+            ClientId::Primary => self.primary_sent,
+            ClientId::Secondary => self.secondary_sent,
         }
     }
 }

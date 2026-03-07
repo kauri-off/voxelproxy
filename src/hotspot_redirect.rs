@@ -11,6 +11,8 @@ use windivert::{
     prelude::WinDivertFlags,
 };
 
+use crate::logger::Logger;
+
 pub(crate) struct NatEntry {
     client_addr: Ipv4Addr,
     client_port: u16,
@@ -73,7 +75,7 @@ fn rewrite_src(data: &mut [u8], ip_header_len: usize, new_addr: Ipv4Addr, new_po
 ///                injects via network layer so our proxy receives the connection.
 /// Return path:   network layer captures proxy response, rewrites src/dst back,
 ///                injects via network layer with the hotspot interface index.
-pub(crate) fn start_redirect(bind_port: u16) -> anyhow::Result<NatTable> {
+pub(crate) fn start_redirect(bind_port: u16, log: Logger) -> anyhow::Result<NatTable> {
     let nat: NatTable = Arc::new(Mutex::new(HashMap::new()));
 
     let client_filter = "tcp and (tcp.DstPort >= 25560 and tcp.DstPort <= 25570)";
@@ -98,12 +100,14 @@ pub(crate) fn start_redirect(bind_port: u16) -> anyhow::Result<NatTable> {
         .map_err(|e| anyhow::anyhow!("WinDivert (return): {}", e))?;
 
     let nat_client = Arc::clone(&nat);
+    let log_client = log.clone();
     std::thread::spawn(move || {
-        run_client_intercept_loop(wd_forward, wd_inject, bind_port, nat_client)
+        run_client_intercept_loop(wd_forward, wd_inject, bind_port, nat_client, log_client)
     });
 
     let nat_return = Arc::clone(&nat);
-    std::thread::spawn(move || run_return_intercept_loop(wd_return, nat_return));
+    let log_return = log.clone();
+    std::thread::spawn(move || run_return_intercept_loop(wd_return, nat_return, log_return));
 
     Ok(nat)
 }
@@ -128,13 +132,14 @@ fn run_client_intercept_loop(
     wd_inject: WinDivert<NetworkLayer>,
     bind_port: u16,
     nat: NatTable,
+    log: Logger,
 ) {
     let mut buf = vec![0u8; 65535];
     loop {
         let packet = match wd_forward.recv(Some(&mut buf)) {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("[!] WinDivert: ошибка получения пакета (клиент → прокси): {}", e);
+                log.error(format!("WinDivert: ошибка получения пакета (клиент → прокси): {}", e));
                 break;
             }
         };
@@ -199,22 +204,22 @@ fn run_client_intercept_loop(
         net_packet.address.as_mut().set_loopback(true);
 
         if let Err(e) = net_packet.recalculate_checksums(Default::default()) {
-            eprintln!("[!] WinDivert: ошибка контрольной суммы (клиент): {}", e);
+            log.warn(format!("WinDivert: ошибка контрольной суммы (клиент): {}", e));
             continue;
         }
         if let Err(e) = wd_inject.send(&net_packet) {
-            eprintln!("[!] WinDivert: ошибка отправки (клиент): {}", e);
+            log.warn(format!("WinDivert: ошибка отправки (клиент): {}", e));
         }
     }
 }
 
-fn run_return_intercept_loop(wd: WinDivert<NetworkLayer>, nat: NatTable) {
+fn run_return_intercept_loop(wd: WinDivert<NetworkLayer>, nat: NatTable, log: Logger) {
     let mut buf = vec![0u8; 65535];
     loop {
         let packet = match wd.recv(Some(&mut buf)) {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("[!] WinDivert: ошибка получения пакета (ответ → клиент): {}", e);
+                log.error(format!("WinDivert: ошибка получения пакета (ответ → клиент): {}", e));
                 break;
             }
         };
@@ -283,11 +288,11 @@ fn run_return_intercept_loop(wd: WinDivert<NetworkLayer>, nat: NatTable) {
         net_packet.address.set_subinterface_index(subinterface_id);
 
         if let Err(e) = net_packet.recalculate_checksums(Default::default()) {
-            eprintln!("[!] WinDivert: ошибка контрольной суммы (ответ): {}", e);
+            log.warn(format!("WinDivert: ошибка контрольной суммы (ответ): {}", e));
             continue;
         }
         if let Err(e) = wd.send(&net_packet) {
-            eprintln!("[!] WinDivert: ошибка отправки (ответ): {}", e);
+            log.warn(format!("WinDivert: ошибка отправки (ответ): {}", e));
         }
     }
 }

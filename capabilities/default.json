@@ -1,0 +1,10 @@
+{
+  "identifier": "default",
+  "description": "Default capabilities for VoxelProxy",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:app:default"
+  ]
+}
