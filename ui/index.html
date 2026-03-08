@@ -11,7 +11,7 @@
 
     <!-- Title bar -->
     <header class="titlebar">
-      <span class="logo">VoxelProxy</span>
+      <a class="logo" href="#" onclick="invoke('open_url', { url: 'https://github.com/kauri-off/voxelproxy' })">VoxelProxy</a>
       <span class="version" id="appVersion"></span>
       <a class="update-badge" id="updateBadge" hidden href="#" target="_blank"></a>
     </header>
@@ -42,12 +42,17 @@
 
         <section id="autoInfo" hidden>
           <label class="checkbox-label">
-            <input type="checkbox" id="windivertCheck" checked />
+            <input type="checkbox" id="windivertCheck" checked onchange="togglePortRange()" />
             <span>WinDivert (перехват хотспота)</span>
           </label>
-          <p class="hint" id="windivertHint" style="margin-top:8px">
-            Перехватывает порты 25560–25570 с хотспота.
-          </p>
+          <div class="port-range-row" id="portRangeRow" style="margin-top:10px">
+            <span class="hint">Перехватывать порты:</span>
+            <div class="port-range-inputs">
+              <input type="number" id="portMin" value="25560" min="1" max="65534" class="port-input" />
+              <span class="hint">–</span>
+              <input type="number" id="portMax" value="25570" min="2" max="65535" class="port-input" />
+            </div>
+          </div>
         </section>
 
         <section>

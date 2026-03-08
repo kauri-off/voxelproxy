@@ -124,7 +124,7 @@ pub async fn run_manual_mode(server_addr: String, log: Logger) -> anyhow::Result
 // ── Automatic mode (Windows only) ─────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
-pub async fn run_automatic_mode(use_windivert: bool, log: Logger) -> anyhow::Result<()> {
+pub async fn run_automatic_mode(use_windivert: bool, port_min: u16, port_max: u16, log: Logger) -> anyhow::Result<()> {
     use crate::hotspot_redirect;
 
     // Keep the redirect handle alive for the duration of the session.
@@ -135,7 +135,7 @@ pub async fn run_automatic_mode(use_windivert: bool, log: Logger) -> anyhow::Res
             anyhow::bail!("Автоматический режим требует прав администратора.");
         }
 
-        let (nat_table, redirect) = match hotspot_redirect::start_redirect(BIND_PORT, log.clone()) {
+        let (nat_table, redirect) = match hotspot_redirect::start_redirect(BIND_PORT, port_min, port_max, log.clone()) {
             Ok(t) => t,
             Err(e) => anyhow::bail!("WinDivert недоступен: {}", e),
         };
@@ -153,7 +153,7 @@ pub async fn run_automatic_mode(use_windivert: bool, log: Logger) -> anyhow::Res
     };
     log.info(format!("Ожидание подключений на порту {}", BIND_PORT));
     if use_windivert {
-        log.info("Порты 25560–25570 перехватываются WinDivert");
+        log.info(format!("Порты {}–{} перехватываются WinDivert", port_min, port_max));
     }
     log.info("Порядок: сначала дополнительный клиент, затем основной");
     log.info(format!(

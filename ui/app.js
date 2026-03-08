@@ -33,6 +33,9 @@ window.addEventListener('DOMContentLoaded', async () => {
         }
     } catch (_) {}
 
+    // Sync port range visibility with initial checkbox state
+    togglePortRange();
+
     // Listen for log entries from the backend
     await listen('proxy-log', (evt) => {
         addLog(evt.payload.level, evt.payload.message);
@@ -62,6 +65,11 @@ function setMode(m) {
     document.getElementById('autoInfo').hidden      = m !== 'auto';
 }
 
+function togglePortRange() {
+    const checked = document.getElementById('windivertCheck').checked;
+    document.getElementById('portRangeRow').style.display = checked ? 'flex' : 'none';
+}
+
 // ── Session control ───────────────────────────────────────────────────────────
 async function startSession() {
     const addr = document.getElementById('serverAddr').value.trim();
@@ -76,7 +84,16 @@ async function startSession() {
             await invoke('start_manual_session', { serverAddr: addr });
         } else {
             const useWindivert = document.getElementById('windivertCheck').checked;
-            await invoke('start_auto_session', { useWindivert });
+            let portMin = 25560, portMax = 25570;
+            if (useWindivert) {
+                portMin = parseInt(document.getElementById('portMin').value, 10);
+                portMax = parseInt(document.getElementById('portMax').value, 10);
+                if (isNaN(portMin) || isNaN(portMax) || portMin < 1 || portMax > 65535 || portMin >= portMax) {
+                    addLog('error', 'Неверный диапазон портов (min < max, 1–65535)');
+                    return;
+                }
+            }
+            await invoke('start_auto_session', { useWindivert, portMin, portMax });
         }
         // Flip the button immediately — don't wait for the event.
         setRunning(true);
@@ -100,9 +117,12 @@ function setRunning(running) {
     isRunning = running;
     document.getElementById('startBtn').hidden = running;
     document.getElementById('stopBtn').hidden  = !running;
-    document.getElementById('serverAddr').disabled   = running;
-    document.getElementById('tabManual').disabled    = running;
-    document.getElementById('tabAuto').disabled      = running;
+    document.getElementById('serverAddr').disabled    = running;
+    document.getElementById('tabManual').disabled     = running;
+    document.getElementById('tabAuto').disabled       = running;
+    document.getElementById('windivertCheck').disabled = running;
+    document.getElementById('portMin').disabled       = running;
+    document.getElementById('portMax').disabled       = running;
 }
 
 function setClientStatus(which, online) {

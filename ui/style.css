@@ -51,7 +51,10 @@ body {
   font-weight: 700;
   font-size: 14px;
   letter-spacing: 0.4px;
+  color: var(--text);
+  text-decoration: none;
 }
+.logo:hover { color: var(--accent-h); }
 
 .version {
   color: var(--text-muted);
@@ -166,6 +169,34 @@ body {
   color: var(--c-info);
   font-family: 'Courier New', monospace;
 }
+
+/* Port range row */
+.port-range-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.port-range-inputs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.port-input {
+  width: 64px;
+  padding: 4px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s;
+  -moz-appearance: textfield;
+}
+.port-input::-webkit-inner-spin-button,
+.port-input::-webkit-outer-spin-button { display: none; }
+.port-input:focus { border-color: var(--accent); }
+.port-input:disabled { opacity: 0.45; }
 
 /* Local IP */
 .addr-row {

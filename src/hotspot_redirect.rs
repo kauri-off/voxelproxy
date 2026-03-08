@@ -121,10 +121,13 @@ fn rewrite_src(data: &mut [u8], ip_header_len: usize, new_addr: Ipv4Addr, new_po
 ///                injects via network layer so our proxy receives the connection.
 /// Return path:   network layer captures proxy response, rewrites src/dst back,
 ///                injects via network layer with the hotspot interface index.
-pub(crate) fn start_redirect(bind_port: u16, log: Logger) -> anyhow::Result<(NatTable, RedirectHandle)> {
+pub(crate) fn start_redirect(bind_port: u16, port_min: u16, port_max: u16, log: Logger) -> anyhow::Result<(NatTable, RedirectHandle)> {
     let nat: NatTable = Arc::new(Mutex::new(HashMap::new()));
 
-    let client_filter = "tcp and (tcp.DstPort >= 25560 and tcp.DstPort <= 25570)";
+    let client_filter = format!(
+        "tcp and (tcp.DstPort >= {} and tcp.DstPort <= {})",
+        port_min, port_max
+    );
 
     let return_filter = format!(
         "tcp and ip.SrcAddr == 127.0.0.1 and tcp.SrcPort == {}",
@@ -134,7 +137,7 @@ pub(crate) fn start_redirect(bind_port: u16, log: Logger) -> anyhow::Result<(Nat
     let flags = WinDivertFlags::new();
 
     // Forward layer: captures routed hotspot client traffic
-    let wd_forward = WinDivert::forward(&client_filter, 0, flags)
+    let wd_forward = WinDivert::forward(client_filter.as_str(), 0, flags)
         .map_err(|e| anyhow::anyhow!("WinDivert (forward): {}", e))?;
 
     // Network layer: inject-only handle (filter = "false" captures nothing)

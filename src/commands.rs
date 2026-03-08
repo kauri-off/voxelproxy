@@ -43,6 +43,8 @@ pub async fn start_manual_session(
 #[tauri::command]
 pub async fn start_auto_session(
     use_windivert: bool,
+    port_min: u16,
+    port_max: u16,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
@@ -55,7 +57,7 @@ pub async fn start_auto_session(
         .map_err(|e| e.to_string())?;
 
     let handle = tokio::spawn(async move {
-        match session::run_automatic_mode(use_windivert, log.clone()).await {
+        match session::run_automatic_mode(use_windivert, port_min, port_max, log.clone()).await {
             Ok(()) => log.info("Автосессия завершена"),
             Err(e) => log.error(format!("{}", e)),
         }
@@ -70,6 +72,8 @@ pub async fn start_auto_session(
 #[tauri::command]
 pub async fn start_auto_session(
     _use_windivert: bool,
+    _port_min: u16,
+    _port_max: u16,
     _app: AppHandle,
     _state: State<'_, AppState>,
 ) -> Result<(), String> {
