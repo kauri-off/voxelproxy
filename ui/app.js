@@ -75,7 +75,8 @@ async function startSession() {
         if (mode === 'manual') {
             await invoke('start_manual_session', { serverAddr: addr });
         } else {
-            await invoke('start_auto_session');
+            const useWindivert = document.getElementById('windivertCheck').checked;
+            await invoke('start_auto_session', { useWindivert });
         }
         // Flip the button immediately — don't wait for the event.
         setRunning(true);

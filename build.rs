@@ -1,4 +1,10 @@
 fn main() {
+    // Forward TELEMETRY_URL from CI secret into the binary via env!() macro.
+    // Falls back to empty string for local builds (telemetry is skipped in debug anyway).
+    println!("cargo:rerun-if-env-changed=TELEMETRY_URL");
+    let telemetry_url = std::env::var("TELEMETRY_URL").unwrap_or_default();
+    println!("cargo:rustc-env=TELEMETRY_URL={}", telemetry_url);
+
     #[cfg(not(debug_assertions))]
     let target = std::env::var("TARGET").unwrap_or_default();
 

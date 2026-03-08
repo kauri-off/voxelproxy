@@ -49,6 +49,9 @@ pids
 *.seed
 *.pid.lock
 
+# telemetry
+telemetry/
+
 # miscellaneous
 /.vs
 .DS_Store

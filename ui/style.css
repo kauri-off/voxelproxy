@@ -139,6 +139,23 @@ body {
 .text-input:focus { border-color: var(--accent); }
 .text-input:disabled { opacity: 0.45; }
 
+/* Checkbox label */
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 13px;
+}
+.checkbox-label input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
 /* Hint text */
 .hint {
   font-size: 11px;

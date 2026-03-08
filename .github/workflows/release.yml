@@ -18,6 +18,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
+        env:
+          TELEMETRY_URL: ${{ secrets.TELEMETRY_URL }}
         run: cargo build --release
 
       - name: Extract version from Cargo.toml

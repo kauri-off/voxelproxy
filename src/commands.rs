@@ -41,7 +41,11 @@ pub async fn start_manual_session(
 
 #[cfg(target_os = "windows")]
 #[tauri::command]
-pub async fn start_auto_session(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn start_auto_session(
+    use_windivert: bool,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     abort_existing(&state).await;
     let log = Logger::new(app.clone());
     let app2 = app.clone();
@@ -51,7 +55,7 @@ pub async fn start_auto_session(app: AppHandle, state: State<'_, AppState>) -> R
         .map_err(|e| e.to_string())?;
 
     let handle = tokio::spawn(async move {
-        match session::run_automatic_mode(log.clone()).await {
+        match session::run_automatic_mode(use_windivert, log.clone()).await {
             Ok(()) => log.info("Автосессия завершена"),
             Err(e) => log.error(format!("{}", e)),
         }
@@ -65,6 +69,7 @@ pub async fn start_auto_session(app: AppHandle, state: State<'_, AppState>) -> R
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
 pub async fn start_auto_session(
+    _use_windivert: bool,
     _app: AppHandle,
     _state: State<'_, AppState>,
 ) -> Result<(), String> {

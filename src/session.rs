@@ -124,26 +124,37 @@ pub async fn run_manual_mode(server_addr: String, log: Logger) -> anyhow::Result
 // ── Automatic mode (Windows only) ─────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
-pub async fn run_automatic_mode(log: Logger) -> anyhow::Result<()> {
+pub async fn run_automatic_mode(use_windivert: bool, log: Logger) -> anyhow::Result<()> {
     use crate::hotspot_redirect;
 
-    if !hotspot_redirect::is_admin() {
-        anyhow::bail!("Автоматический режим требует прав администратора.");
-    }
+    // Keep the redirect handle alive for the duration of the session.
+    let _redirect_handle;
 
-    let (nat_table, _redirect) = match hotspot_redirect::start_redirect(BIND_PORT, log.clone()) {
-        Ok(t) => t,
-        Err(e) => anyhow::bail!("WinDivert недоступен: {}", e),
-    };
-    hotspot_redirect::start_nat_cleanup(Arc::clone(&nat_table));
-    log.success("WinDivert перехват активен");
+    if use_windivert {
+        if !hotspot_redirect::is_admin() {
+            anyhow::bail!("Автоматический режим требует прав администратора.");
+        }
+
+        let (nat_table, redirect) = match hotspot_redirect::start_redirect(BIND_PORT, log.clone()) {
+            Ok(t) => t,
+            Err(e) => anyhow::bail!("WinDivert недоступен: {}", e),
+        };
+        hotspot_redirect::start_nat_cleanup(Arc::clone(&nat_table));
+        _redirect_handle = Some(redirect);
+        log.success("WinDivert перехват активен");
+    } else {
+        _redirect_handle = None;
+        log.info("WinDivert отключён — подключайтесь напрямую");
+    }
 
     let listener = match TcpListener::bind(format!("0.0.0.0:{}", BIND_PORT)).await {
         Ok(l) => l,
         Err(e) => anyhow::bail!("Ошибка при создании сокета: {}", e),
     };
     log.info(format!("Ожидание подключений на порту {}", BIND_PORT));
-    log.info("Порты 25560–25570 перехватываются WinDivert");
+    if use_windivert {
+        log.info("Порты 25560–25570 перехватываются WinDivert");
+    }
     log.info("Порядок: сначала дополнительный клиент, затем основной");
     log.info(format!(
         "Основной клиент подключайтесь к 127.0.0.1:{}",
