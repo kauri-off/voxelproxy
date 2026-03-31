@@ -110,7 +110,6 @@ pub async fn run_manual_mode(server_addr: String, log: Logger) -> anyhow::Result
     primary_login_start.write_async(&mut remote_stream).await?;
     log.info("Login Start отправлен");
 
-    log.success("VoxelProxy запущен!");
     crate::proxy::run_proxy_session(
         primary_stream,
         secondary_stream,
@@ -124,7 +123,12 @@ pub async fn run_manual_mode(server_addr: String, log: Logger) -> anyhow::Result
 // ── Automatic mode (Windows only) ─────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
-pub async fn run_automatic_mode(use_windivert: bool, port_min: u16, port_max: u16, log: Logger) -> anyhow::Result<()> {
+pub async fn run_automatic_mode(
+    use_windivert: bool,
+    port_min: u16,
+    port_max: u16,
+    log: Logger,
+) -> anyhow::Result<()> {
     use crate::hotspot_redirect;
 
     // Keep the redirect handle alive for the duration of the session.
@@ -135,10 +139,11 @@ pub async fn run_automatic_mode(use_windivert: bool, port_min: u16, port_max: u1
             anyhow::bail!("Автоматический режим требует прав администратора.");
         }
 
-        let (nat_table, redirect) = match hotspot_redirect::start_redirect(BIND_PORT, port_min, port_max, log.clone()) {
-            Ok(t) => t,
-            Err(e) => anyhow::bail!("WinDivert недоступен: {}", e),
-        };
+        let (nat_table, redirect) =
+            match hotspot_redirect::start_redirect(BIND_PORT, port_min, port_max, log.clone()) {
+                Ok(t) => t,
+                Err(e) => anyhow::bail!("WinDivert недоступен: {}", e),
+            };
         hotspot_redirect::start_nat_cleanup(Arc::clone(&nat_table));
         _redirect_handle = Some(redirect);
         log.success("WinDivert перехват активен");
@@ -153,7 +158,10 @@ pub async fn run_automatic_mode(use_windivert: bool, port_min: u16, port_max: u1
     };
     log.info(format!("Ожидание подключений на порту {}", BIND_PORT));
     if use_windivert {
-        log.info(format!("Порты {}–{} перехватываются WinDivert", port_min, port_max));
+        log.info(format!(
+            "Порты {}–{} перехватываются WinDivert",
+            port_min, port_max
+        ));
     }
     log.info("Порядок: сначала дополнительный клиент, затем основной");
     log.info(format!(
