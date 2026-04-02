@@ -1,22 +1,21 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
-mod app_state;
-mod commands;
-mod controller;
+pub mod app_state;
+pub mod commands;
+pub mod controller;
 #[cfg(target_os = "windows")]
-mod hotspot_redirect;
-mod local_ip;
-mod logger;
+pub mod hotspot_redirect;
+pub mod local_ip;
+pub mod logger;
 #[allow(dead_code)]
-mod packets;
-mod protocols;
-mod proxy;
-mod resolver;
-mod session;
-mod telemetry;
-mod updater;
+pub mod packets;
+pub mod protocols;
+pub mod proxy;
+pub mod resolver;
+pub mod session;
+pub mod telemetry;
+pub mod updater;
 
-fn main() {
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
     tauri::Builder::default()
         .setup(|_app| {
             tauri::async_runtime::spawn(telemetry::send_startup_ping());

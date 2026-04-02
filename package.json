@@ -1,0 +1,22 @@
+{
+  "name": "voxelproxy-ui",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.10.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.10.1",
+    "@types/node": "^25.5.0",
+    "esbuild": "^0.27.5",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.3"
+  }
+}

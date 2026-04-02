@@ -1,9 +1,12 @@
 {
   "productName": "VoxelProxy",
-  "version": "5.0.2",
+  "version": "6.1.0",
   "identifier": "com.kauri-off.voxelproxy",
   "build": {
-    "frontendDist": "ui"
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://127.0.0.1:5173",
+    "frontendDist": "../dist"
   },
   "app": {
     "withGlobalTauri": true,
@@ -16,11 +19,14 @@
         "minHeight": 500,
         "resizable": true
       }
-    ]
+    ],
+    "security": {
+      "csp": null
+    }
   },
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": []
+    "icon": ["icons/icon.ico"]
   }
 }

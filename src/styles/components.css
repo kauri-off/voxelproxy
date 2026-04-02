@@ -1,0 +1,286 @@
+/* ── Buttons ──────────────────────────────────────────────────── */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 11px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--c-accent);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+
+.btn-primary:hover { background: #4a7de0; }
+.btn-primary:active { transform: scale(0.98); }
+.btn-primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ── Tabs ─────────────────────────────────────────────────────── */
+.mode-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--c-bg);
+  border-radius: 9px;
+  border: 1px solid var(--c-border);
+}
+
+.tab {
+  flex: 1;
+  padding: 7px 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--c-muted);
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.tab:hover:not(.active) { color: var(--c-text); }
+
+.tab.active {
+  color: var(--c-text);
+  background: var(--c-surface2);
+}
+
+.tab:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── Text input ───────────────────────────────────────────────── */
+.text-input {
+  width: 100%;
+  padding: 9px 12px;
+  font-size: 14px;
+  color: var(--c-text);
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: 7px;
+  outline: none;
+  transition: border-color 0.15s;
+  font-family: inherit;
+}
+
+.text-input::placeholder { color: var(--c-muted); opacity: 0.6; }
+.text-input:focus { border-color: var(--c-accent); }
+.text-input:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ── Checkbox label ───────────────────────────────────────────── */
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--c-text);
+}
+
+.checkbox-label input[type="checkbox"] { accent-color: var(--c-accent); cursor: pointer; }
+.checkbox-label.is-disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ── Port range ───────────────────────────────────────────────── */
+.port-range-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.port-range-row .hint {
+  font-size: 12px;
+  color: var(--c-muted);
+  white-space: nowrap;
+}
+
+.port-input {
+  width: 70px;
+  padding: 6px 8px;
+  font-size: 13px;
+  color: var(--c-text);
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  outline: none;
+  text-align: center;
+  transition: border-color 0.15s;
+}
+
+.port-input:focus { border-color: var(--c-accent); }
+.port-input:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ── Idle view layout ─────────────────────────────────────────── */
+.idle-view__body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.config-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 14px;
+  padding: 28px 28px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.config-card__section { display: flex; flex-direction: column; gap: 8px; }
+
+.section-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--c-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+/* ── Running view layout ──────────────────────────────────────── */
+.running-view__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  gap: 28px;
+}
+
+/* ── Connect instruction ──────────────────────────────────────── */
+.connect-instruction {
+  text-align: center;
+}
+
+.connect-instruction__label {
+  font-size: 13px;
+  color: var(--c-muted);
+  margin-bottom: 10px;
+}
+
+.connect-instruction__addr-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.connect-instruction__addr {
+  display: inline-block;
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--c-text);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  padding: 12px 28px;
+  letter-spacing: 0.03em;
+}
+
+.connect-instruction__copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--c-muted);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+
+.connect-instruction__copy-btn:hover {
+  color: var(--c-text);
+  border-color: var(--c-accent);
+}
+
+.connect-instruction__copy-btn.copied {
+  color: var(--c-success);
+  border-color: var(--c-success);
+}
+
+/* ── Client cards ─────────────────────────────────────────────── */
+.client-cards {
+  display: flex;
+  gap: 20px;
+  width: 100%;
+  max-width: 520px;
+}
+
+.client-card {
+  flex: 1;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 14px;
+  padding: 24px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  transition: border-color 0.3s;
+}
+
+.client-card--online {
+  border-color: rgba(var(--c-success-rgb), 0.4);
+}
+
+.client-card__indicator {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--c-surface2);
+  border: 2px solid var(--c-border);
+  transition: background 0.3s, border-color 0.3s, box-shadow 0.3s;
+}
+
+.client-card--waiting .client-card__indicator {
+  border-color: var(--c-warn);
+  background: rgba(var(--c-warn-rgb), 0.15);
+  animation: pulse-ring 1.8s ease-in-out infinite;
+}
+
+.client-card--online .client-card__indicator {
+  background: var(--c-success);
+  border-color: var(--c-success);
+  box-shadow: 0 0 10px rgba(var(--c-success-rgb), 0.55);
+  animation: none;
+}
+
+@keyframes pulse-ring {
+  0%   { box-shadow: 0 0 0 0   rgba(var(--c-warn-rgb), 0.55); }
+  70%  { box-shadow: 0 0 0 9px rgba(var(--c-warn-rgb), 0); }
+  100% { box-shadow: 0 0 0 0   rgba(var(--c-warn-rgb), 0); }
+}
+
+.client-card__name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--c-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.client-card__status {
+  font-size: 13px;
+  color: var(--c-muted);
+  transition: color 0.3s;
+}
+
+.client-card--waiting .client-card__status { color: var(--c-warn); }
+.client-card--online  .client-card__status { color: var(--c-success); }

@@ -1,0 +1,29 @@
+:root {
+  /* Backgrounds */
+  --c-bg:       #0e0e10;
+  --c-surface:  #18181c;
+  --c-surface2: #202026;
+
+  /* Borders */
+  --c-border:   #2c2c34;
+
+  /* Accent */
+  --c-accent:   #5b8dee;
+
+  /* Semantic */
+  --c-danger:   #e05555;
+  --c-text:     #dddde8;
+  --c-muted:    #7878a0;
+
+  /* Status — hex */
+  --c-success:  #4ade80;
+  --c-warn:     #fbbf24;
+  --c-error:    #f87171;
+  --c-info:     #60a5fa;
+
+  /* Status — RGB components (for rgba() usage) */
+  --c-success-rgb: 74, 222, 128;
+  --c-warn-rgb:    251, 191, 36;
+  --c-error-rgb:   248, 113, 113;
+  --c-accent-rgb:  91, 141, 238;
+}

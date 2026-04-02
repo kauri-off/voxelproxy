@@ -1,4 +1,4 @@
-name: Rust Release
+name: Rust Release (Portable)
 
 on:
   workflow_dispatch:
@@ -13,45 +13,48 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install dependencies
+        run: npm install
 
       - name: Build
         env:
           TELEMETRY_URL: ${{ secrets.TELEMETRY_URL }}
-        run: cargo build --release
+        run: npx tauri build --no-bundle
 
-      - name: Extract version from Cargo.toml
+      - name: Extract version
         id: version
         shell: bash
         run: |
-          ver=$(grep '^version =' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          ver=$(grep '^version =' src-tauri/Cargo.toml | head -1 | sed -E 's/version = "(.*)"/\1/')
           echo "version=$ver" >> $GITHUB_OUTPUT
-
-      - name: Get last commit message
-        id: changelog
-        shell: bash
-        run: |
-          msg=$(git log -1 --pretty=format:"%s")
-          echo "msg=$msg" >> $GITHUB_OUTPUT
 
       - name: Create release archive
         shell: bash
         run: |
           mkdir -p release_pkg
-          cp target/release/voxelproxy.exe release_pkg/
-          cp windivert/WinDivert.dll release_pkg/
-          cp windivert/WinDivert64.sys release_pkg/
+          cp src-tauri/target/release/voxelproxy.exe release_pkg/
+          cp src-tauri/windivert/WinDivert.dll release_pkg/
+          cp src-tauri/windivert/WinDivert64.sys release_pkg/
+
           cd release_pkg
           7z a ../voxelproxy-${{ steps.version.outputs.version }}.zip .
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.version }}
+          tag_name: v${{ steps.version.outputs.version }}
           name: Release ${{ steps.version.outputs.version }}
-          body: ${{ steps.changelog.outputs.msg }}
           files: voxelproxy-${{ steps.version.outputs.version }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

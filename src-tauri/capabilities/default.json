@@ -1,10 +1,14 @@
 {
+  "$schema": "../gen/schemas/capabilities.json",
   "identifier": "default",
   "description": "Default capabilities for VoxelProxy",
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:path:default",
     "core:event:default",
-    "core:app:default"
+    "core:window:default",
+    "core:app:default",
+    "core:resources:default"
   ]
 }
