@@ -40,7 +40,8 @@ pub async fn has_update(current_version: &str) -> anyhow::Result<Option<NewVersi
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("Missing or invalid 'tag_name' field"))?;
 
-    if latest_version == current_version {
+    let latest_stripped = latest_version.strip_prefix('v').unwrap_or(latest_version);
+    if latest_stripped == current_version {
         return Ok(None);
     }
 
