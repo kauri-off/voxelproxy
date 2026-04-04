@@ -1,7 +1,7 @@
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
-use crate::{app_state::AppState, logger::Logger, session, updater::has_update};
+use crate::{app_state::AppState, logger::Logger, session, telemetry, updater::has_update};
 
 #[derive(Serialize)]
 pub struct UpdateInfo {
@@ -17,6 +17,7 @@ pub async fn start_manual_session(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    tokio::spawn(telemetry::send_start_manual(server_addr.clone()));
     abort_existing(&state).await;
     let log = Logger::new(app.clone());
     let app2 = app.clone();
@@ -48,6 +49,7 @@ pub async fn start_auto_session(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    tokio::spawn(telemetry::send_start_auto(use_windivert));
     abort_existing(&state).await;
     let log = Logger::new(app.clone());
     let app2 = app.clone();
@@ -108,7 +110,10 @@ pub fn get_local_ip_addr() -> String {
 pub async fn check_updates() -> Result<Option<UpdateInfo>, String> {
     let version = env!("CARGO_PKG_VERSION");
     match has_update(version).await {
-        Ok(Some(info)) => Ok(Some(UpdateInfo { tag: info.tag, link: info.link })),
+        Ok(Some(info)) => Ok(Some(UpdateInfo {
+            tag: info.tag,
+            link: info.link,
+        })),
         Ok(None) => Ok(None),
         Err(e) => Err(e.to_string()),
     }

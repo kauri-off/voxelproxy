@@ -56,7 +56,7 @@ export class TitleBar {
     this.stopBtn.hidden = state.phase === 'idle';
 
     if (state.updateInfo) {
-      this.updateEl.textContent = `↑ ${state.updateInfo.tag}`;
+      this.updateEl.textContent = `Доступно обновление ${state.updateInfo.tag}`;
       this.updateEl.dataset['href'] = state.updateInfo.link;
       this.updateEl.hidden = false;
     } else {
