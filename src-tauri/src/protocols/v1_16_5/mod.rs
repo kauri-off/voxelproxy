@@ -180,7 +180,8 @@ impl VersionData {
                 } else {
                     if let Some(head) = self.pings.get(0) {
                         if head.is_sent(client_id.opposite()) {
-                            self.log.info(format!("Синхронизация: Пропуск: {}", head.uid));
+                            self.log
+                                .info(format!("Синхронизация: Пропуск: {}", head.uid));
                             self.pings.remove(0);
                             return Ok(Some(ServerBoundEvent::SkipRelay));
                         }

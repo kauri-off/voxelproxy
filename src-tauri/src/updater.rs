@@ -1,6 +1,6 @@
 use reqwest::{
-    header::{HeaderMap, HeaderValue},
     Client,
+    header::{HeaderMap, HeaderValue},
 };
 use serde_json::Value;
 

@@ -223,10 +223,7 @@ pub async fn run_proxy_session(
                 let packet = packet.to_raw_packet()?;
                 packet.write_async(&mut primary).await?;
                 packet.write_async(&mut secondary).await?;
-                log.info(format!(
-                    "Сжатие: порог {} байт",
-                    compression.threshold.0
-                ));
+                log.info(format!("Сжатие: порог {} байт", compression.threshold.0));
             }
             _ => unreachable!(),
         }

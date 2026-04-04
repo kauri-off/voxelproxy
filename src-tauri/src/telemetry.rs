@@ -1,66 +1,81 @@
-pub async fn send_startup_ping() {
-    if cfg!(debug_assertions) {
+use lazy_static::lazy_static;
+use serde_json::json;
+use std::time::Duration;
+
+lazy_static! {
+    pub static ref CONFIG: Config = Config::load();
+}
+
+pub struct Config {
+    pub telemetry_url: &'static str,
+    pub version: &'static str,
+    pub os: &'static str,
+    pub username: String,
+}
+
+impl Config {
+    fn load() -> Self {
+        Self {
+            telemetry_url: env!("TELEMETRY_URL"),
+            version: env!("CARGO_PKG_VERSION"),
+            os: std::env::consts::OS,
+            username: std::env::var("USERNAME")
+                .or_else(|_| std::env::var("USER"))
+                .unwrap_or_else(|_| "unknown".to_string()),
+        }
+    }
+
+    pub fn should_send(&self) -> bool {
+        !cfg!(debug_assertions) && !self.telemetry_url.is_empty()
+    }
+}
+
+async fn post_telemetry(path: &str, payload: serde_json::Value) {
+    if !CONFIG.should_send() {
         return;
     }
-    let url = env!("TELEMETRY_URL");
-    if url.is_empty() {
-        return;
-    }
-    let ping_url = format!("{}/v1/ping", url);
-    let _ = reqwest::Client::new()
-        .post(ping_url)
-        .json(&serde_json::json!({
-            "version":  env!("CARGO_PKG_VERSION"),
-            "os":       std::env::consts::OS,
-            "username": std::env::var("USERNAME")
-                            .or_else(|_| std::env::var("USER"))
-                            .unwrap_or_else(|_| "unknown".to_string()),
-        }))
-        .timeout(std::time::Duration::from_secs(5))
+
+    let url = format!("{}/v1/{}", CONFIG.telemetry_url, path);
+    let client = reqwest::Client::new();
+
+    let _ = client
+        .post(url)
+        .json(&payload)
+        .timeout(Duration::from_secs(5))
         .send()
         .await;
+}
+
+pub async fn send_startup_ping() {
+    post_telemetry(
+        "ping",
+        json!({
+            "version": CONFIG.version,
+            "os": CONFIG.os,
+            "username": CONFIG.username,
+        }),
+    )
+    .await;
 }
 
 pub async fn send_start_manual(server_addr: String) {
-    if cfg!(debug_assertions) {
-        return;
-    }
-    let url = env!("TELEMETRY_URL");
-    if url.is_empty() {
-        return;
-    }
-    let ping_url = format!("{}/v1/start_manual", url);
-    let _ = reqwest::Client::new()
-        .post(ping_url)
-        .json(&serde_json::json!({
-            "username": std::env::var("USERNAME")
-                .or_else(|_| std::env::var("USER"))
-                .unwrap_or_else(|_| "unknown".to_string()),
-            "server_addr": server_addr
-        }))
-        .timeout(std::time::Duration::from_secs(5))
-        .send()
-        .await;
+    post_telemetry(
+        "start_manual",
+        json!({
+            "server_addr": server_addr,
+            "username": CONFIG.username,
+        }),
+    )
+    .await;
 }
 
 pub async fn send_start_auto(windivert: bool) {
-    if cfg!(debug_assertions) {
-        return;
-    }
-    let url = env!("TELEMETRY_URL");
-    if url.is_empty() {
-        return;
-    }
-    let ping_url = format!("{}/v1/start_auto", url);
-    let _ = reqwest::Client::new()
-        .post(ping_url)
-        .json(&serde_json::json!({
-            "username": std::env::var("USERNAME")
-                .or_else(|_| std::env::var("USER"))
-                .unwrap_or_else(|_| "unknown".to_string()),
-            "windivert": windivert
-        }))
-        .timeout(std::time::Duration::from_secs(5))
-        .send()
-        .await;
+    post_telemetry(
+        "start_auto",
+        json!({
+            "windivert": windivert,
+            "username": CONFIG.username,
+        }),
+    )
+    .await;
 }

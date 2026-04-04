@@ -1,6 +1,6 @@
 [package]
 name = "voxelproxy"
-version = "6.1.3"
+version = "6.1.4"
 edition = "2024"
 authors = ["kauri-off <https://github.com/kauri-off>"]
 description = "Бесплатный аналог takker.ru"
@@ -24,6 +24,7 @@ anyhow = "1.0.102"
 mc_protocol = "2.1.0"
 enum_dispatch = "0.3.13"
 open = "5.3.3"
+lazy_static = "1.5.0"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [

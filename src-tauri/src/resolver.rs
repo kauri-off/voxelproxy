@@ -1,5 +1,5 @@
 use std::net::{IpAddr, SocketAddr};
-use trust_dns_resolver::{config::*, TokioAsyncResolver};
+use trust_dns_resolver::{TokioAsyncResolver, config::*};
 
 fn parse_host_port(input: &str, default_port: u16) -> (String, u16) {
     if let Some((host, port_str)) = input.rsplit_once(':') {
