@@ -121,10 +121,9 @@ pub async fn check_updates() -> Result<Option<UpdateInfo>, String> {
 
 #[tauri::command]
 pub fn open_url(url: String) {
-    #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd")
-        .args(["/c", "start", "", &url])
-        .spawn();
+    if url.starts_with("http://") || url.starts_with("https://") {
+        let _ = open::that(url);
+    }
 }
 
 // ── Helper ────────────────────────────────────────────────────────────────────
