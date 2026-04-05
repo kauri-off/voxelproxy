@@ -82,6 +82,12 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
     }
   }, [state, isStarting, addLog]);
 
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      start();
+    }
+  };
+
   return (
     <div className="idle-view__body">
       <div className="config-card">
@@ -117,6 +123,7 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                 onChange={(e) =>
                   setState((s) => ({ ...s, manualServerAddr: e.target.value }))
                 }
+                onKeyDown={handleKeyDown}
                 disabled={isStarting}
               />
             </>
