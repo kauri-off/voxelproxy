@@ -31,6 +31,7 @@ pub async fn handle_ping(
 
     match res {
         Ok(_) => {
+            tracing::info!(user = %payload.username, ip = %ip, version = %payload.version, "ping");
             telegram::send(telegram::format_ping(
                 &payload.username,
                 &ip,
@@ -39,7 +40,10 @@ pub async fn handle_ping(
             ));
             StatusCode::OK
         }
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        Err(e) => {
+            tracing::error!(error = %e, "ping insert failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
     }
 }
 
@@ -62,13 +66,17 @@ pub async fn handle_start_manual(
 
     match res {
         Ok(_) => {
+            tracing::info!(user = %payload.username, server = %payload.server_addr, "manual start");
             telegram::send(telegram::format_manual(
                 &payload.username,
                 &payload.server_addr,
             ));
             StatusCode::OK
         }
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        Err(e) => {
+            tracing::error!(error = %e, "manual insert failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
     }
 }
 
@@ -91,9 +99,13 @@ pub async fn handle_start_auto(
 
     match res {
         Ok(_) => {
+            tracing::info!(user = %payload.username, windivert = payload.windivert, "auto start");
             telegram::send(telegram::format_auto(&payload.username, payload.windivert));
             StatusCode::OK
         }
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        Err(e) => {
+            tracing::error!(error = %e, "auto insert failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
     }
 }

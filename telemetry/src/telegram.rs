@@ -35,21 +35,21 @@ pub fn send(_: String) {}
 
 pub fn format_ping(user: &str, ip: &str, version: &str, os: &str) -> String {
     format!(
-        "<b>📡 Ping</b>\n👤 <b>User:</b> {}\n🌐 <b>IP:</b> {}\n🖥 <b>OS:</b> {}\n⚙️ <b>Version:</b> {}",
+        "<b>Ping</b>\n<b>User:</b> <code>{}</code>\n<b>IP:</b> <code>{}</code>\n<b>OS:</b> <code>{}</code>\n<b>Version:</b> <code>{}</code>",
         user, ip, os, version
     )
 }
 
 pub fn format_manual(user: &str, server: &str) -> String {
     format!(
-        "<b>🧭 Manual Start</b>\n👤 <b>User:</b> {}\n🔗 <b>Server:</b> {}",
+        "<b>Manual Start</b>\n<b>User:</b> <code>{}</code>\n<b>Server:</b> <code>{}</code>",
         user, server
     )
 }
 
 pub fn format_auto(user: &str, windivert: bool) -> String {
     format!(
-        "<b>⚡ Auto Start</b>\n👤 <b>User:</b> {}\n🧩 <b>WinDivert:</b> {}",
+        "<b>Auto Start</b>\n<b>User:</b> <code>{}</code>\n<b>WinDivert:</b> <code>{}</code>",
         user, windivert
     )
 }
