@@ -19,8 +19,6 @@ use crate::{
     resolver::resolve_host_port,
 };
 
-// ── Manual mode ───────────────────────────────────────────────────────────────
-
 pub async fn run_manual_mode(server_addr: String, log: Logger) -> anyhow::Result<()> {
     let (remote_addr, remote_dns) =
         match resolve_host_port(&server_addr, DEFAULT_PORT, "minecraft", "tcp").await {
@@ -119,8 +117,6 @@ pub async fn run_manual_mode(server_addr: String, log: Logger) -> anyhow::Result
     )
     .await
 }
-
-// ── Automatic mode (Windows only) ─────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
 pub async fn run_automatic_mode(

@@ -71,8 +71,6 @@ pub(crate) struct NatEntry {
 
 pub(crate) type NatTable = Arc<Mutex<HashMap<(Ipv4Addr, u16), NatEntry>>>;
 
-// ── Admin check ───────────────────────────────────────────────────────────────
-
 pub fn is_admin() -> bool {
     use windows::Win32::{
         Foundation::{CloseHandle, HANDLE},
@@ -101,8 +99,6 @@ pub fn is_admin() -> bool {
     }
 }
 
-// ── Packet rewriting helpers ──────────────────────────────────────────────────
-
 fn rewrite_dst(data: &mut [u8], ip_header_len: usize, new_addr: Ipv4Addr, new_port: u16) {
     data[16..20].copy_from_slice(&new_addr.octets());
     data[ip_header_len + 2..ip_header_len + 4].copy_from_slice(&new_port.to_be_bytes());
@@ -112,8 +108,6 @@ fn rewrite_src(data: &mut [u8], ip_header_len: usize, new_addr: Ipv4Addr, new_po
     data[12..16].copy_from_slice(&new_addr.octets());
     data[ip_header_len..ip_header_len + 2].copy_from_slice(&new_port.to_be_bytes());
 }
-
-// ── WinDivert redirect ────────────────────────────────────────────────────────
 
 /// Opens WinDivert handles and spawns worker threads for NAT redirect.
 ///
@@ -187,8 +181,6 @@ pub(crate) fn start_nat_cleanup(nat: NatTable) {
         }
     });
 }
-
-// ── Packet loops ──────────────────────────────────────────────────────────────
 
 fn run_client_intercept_loop(
     wd_forward: WinDivert<ForwardLayer>,

@@ -13,7 +13,6 @@ pub struct ClientStatusPayload {
     pub online: bool,
 }
 
-/// Emits structured log entries to the frontend via Tauri events.
 #[derive(Clone)]
 pub struct Logger {
     app: AppHandle,

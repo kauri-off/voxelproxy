@@ -9,7 +9,6 @@ use crate::{
     protocols::{ServerBoundEvent, Version, VersionProtocol},
 };
 
-/// Identifies which of the two connected clients a packet or event belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientId {
     Primary,
@@ -17,7 +16,6 @@ pub enum ClientId {
 }
 
 impl ClientId {
-    /// Returns the other client variant.
     pub fn opposite(&self) -> ClientId {
         match self {
             ClientId::Primary => ClientId::Secondary,
@@ -26,22 +24,14 @@ impl ClientId {
     }
 }
 
-/// Events sent to the Controller from the background I/O tasks.
 #[derive(Debug)]
 pub enum Event {
-    /// A packet was received from a client.
     ClientData(ClientId, RawPacket),
-    /// A client's TCP connection was closed or errored.
     ClientDisconnected(ClientId),
-    /// A packet was received from the upstream server.
     ServerData(RawPacket),
 }
 
-/// Central coordinator that routes packets between two clients and the upstream
-/// server. All version-specific logic (position tracking, ping queue) is
-/// delegated to the `Version` field, keeping this struct protocol-agnostic.
 pub struct Controller {
-    /// Which client is currently the authoritative sender to the server.
     active_client: ClientId,
     /// Channel for sending packets to the Primary client.
     primary_tx: Sender<RawPacket>,
@@ -51,18 +41,13 @@ pub struct Controller {
     remote_tx: Sender<RawPacket>,
     /// Receives events (client data, disconnections, server data) from I/O tasks.
     event_rx: Receiver<Event>,
-    /// Whether the Primary client is still connected.
     primary_active: bool,
-    /// Whether the Secondary client is still connected.
     secondary_active: bool,
-    /// Version-specific state: position tracking and sync-packet queue.
     version: Version,
-    /// Logger for emitting status events to the GUI.
     log: Logger,
 }
 
 impl Controller {
-    /// Constructs a new Controller. Both clients are assumed to be active on creation.
     pub fn new(
         active_client: ClientId,
         primary_tx: Sender<RawPacket>,
@@ -126,8 +111,6 @@ impl Controller {
                         continue;
                     }
 
-                    // ── Server relay ─────────────────────────────────────────────────────
-                    // Only the active client's packets are forwarded to the server.
                     if client_id == self.active_client {
                         if let Err(e) = self.remote_tx.send(packet).await {
                             self.log
@@ -155,7 +138,6 @@ impl Controller {
                     }
 
                     if self.active_client == client_id {
-                        // Active client disconnected — switch control to the other one.
                         self.active_client = client_id.opposite();
                         self.log.info(format!(
                             "Активный клиент отключился, управление передано: {}",
@@ -184,7 +166,6 @@ impl Controller {
                         match event {}
                     }
 
-                    // Broadcast the raw packet to whichever clients are still active.
                     if self.primary_active {
                         let _ = self.primary_tx.send(packet.clone()).await;
                     }
@@ -196,7 +177,6 @@ impl Controller {
         }
     }
 
-    /// Returns `true` only when both clients are currently connected.
     fn both_active(&self) -> bool {
         self.primary_active && self.secondary_active
     }

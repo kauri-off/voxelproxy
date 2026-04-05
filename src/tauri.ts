@@ -1,13 +1,6 @@
-// Typed bridge — the only file that touches window.__TAURI__
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-const { invoke } = (window as any).__TAURI__.core;
-const { listen }  = (window as any).__TAURI__.event;
-
-export interface LogEntry {
-  level: 'info' | 'success' | 'warn' | 'error';
-  message: string;
-}
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { LogEntry } from './types';
 
 export interface ClientStatusPayload {
   which: 'primary' | 'secondary';
@@ -18,8 +11,6 @@ export interface UpdateInfo {
   tag: string;
   link: string;
 }
-
-// ── Commands ──────────────────────────────────────────────────────────────────
 
 export async function startManualSession(serverAddr: string): Promise<void> {
   await invoke('start_manual_session', { serverAddr });
@@ -52,8 +43,6 @@ export async function checkUpdates(): Promise<UpdateInfo | null> {
 export async function openUrl(url: string): Promise<void> {
   await invoke('open_url', { url });
 }
-
-// ── Events ────────────────────────────────────────────────────────────────────
 
 type UnlistenFn = () => void;
 

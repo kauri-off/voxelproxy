@@ -9,8 +9,6 @@ pub struct UpdateInfo {
     pub link: String,
 }
 
-// ── Start manual session ──────────────────────────────────────────────────────
-
 #[tauri::command]
 pub async fn start_manual_session(
     server_addr: String,
@@ -22,7 +20,6 @@ pub async fn start_manual_session(
     let log = Logger::new(app.clone());
     let app2 = app.clone();
 
-    // Emit BEFORE spawning to avoid a race where session-ended fires first.
     app.emit("session-started", "manual")
         .map_err(|e| e.to_string())?;
 
@@ -38,8 +35,6 @@ pub async fn start_manual_session(
     Ok(())
 }
 
-// ── Start automatic session (Windows) ─────────────────────────────────────────
-
 #[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn start_auto_session(
@@ -54,7 +49,6 @@ pub async fn start_auto_session(
     let log = Logger::new(app.clone());
     let app2 = app.clone();
 
-    // Emit BEFORE spawning to avoid a race where session-ended fires first.
     app.emit("session-started", "auto")
         .map_err(|e| e.to_string())?;
 
@@ -82,16 +76,12 @@ pub async fn start_auto_session(
     Err("Автоматический режим поддерживается только на Windows".to_string())
 }
 
-// ── Stop session ──────────────────────────────────────────────────────────────
-
 #[tauri::command]
 pub async fn stop_session(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     abort_existing(&state).await;
     app.emit("session-ended", ()).ok();
     Ok(())
 }
-
-// ── Queries ───────────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub fn get_version() -> String {
@@ -125,8 +115,6 @@ pub fn open_url(url: String) {
         let _ = open::that(url);
     }
 }
-
-// ── Helper ────────────────────────────────────────────────────────────────────
 
 async fn abort_existing(state: &State<'_, AppState>) {
     if let Some(h) = state.session.lock().await.take() {
