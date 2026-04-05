@@ -8,7 +8,6 @@ const validateManualAddr = (addr: string): boolean => {
 
   const lastColon = trimmed.lastIndexOf(":");
   let host: string;
-  let port: number | null = null;
 
   if (lastColon !== -1 && lastColon !== 0) {
     host = trimmed.substring(0, lastColon);
@@ -16,7 +15,6 @@ const validateManualAddr = (addr: string): boolean => {
     if (!/^\d+$/.test(portStr)) return false;
     const p = parseInt(portStr, 10);
     if (p < 1 || p > 65535) return false;
-    port = p;
   } else {
     host = trimmed;
   }
