@@ -24,26 +24,36 @@ export function useAppState() {
   }, []);
 
   useEffect(() => {
-    const load = async () => {
+    const loadVersion = async () => {
       try {
-        const [version, ip, updateInfo] = await Promise.all([
-          api.getVersion(),
-          api.getLocalIpAddr(),
-          api.checkUpdates(),
-        ]);
-
-        setState((s) => ({
-          ...s,
-          version,
-          localIp: ip,
-          updateInfo,
-        }));
+        const version = await api.getVersion();
+        setState((prev) => ({ ...prev, version }));
       } catch (err) {
-        addLog("error", `Ошибка инициализации: ${err}`);
+        addLog("error", `Ошибка загрузки версии: ${err}`);
       }
     };
 
-    load();
+    const loadLocalIp = async () => {
+      try {
+        const localIp = await api.getLocalIpAddr();
+        setState((prev) => ({ ...prev, localIp }));
+      } catch (err) {
+        addLog("error", `Ошибка загрузки IP-адреса: ${err}`);
+      }
+    };
+
+    const loadUpdateInfo = async () => {
+      try {
+        const updateInfo = await api.checkUpdates();
+        setState((prev) => ({ ...prev, updateInfo }));
+      } catch (err) {
+        addLog("error", `Ошибка проверки обновлений: ${err}`);
+      }
+    };
+
+    loadVersion();
+    loadLocalIp();
+    loadUpdateInfo();
   }, [addLog]);
 
   return { state, setState, logs, setLogs, addLog };
