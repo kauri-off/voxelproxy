@@ -42,13 +42,13 @@ jobs:
       - name: Create release archive
         shell: bash
         run: |
-          mkdir -p release_pkg
-          cp src-tauri/target/release/voxelproxy.exe release_pkg/
-          cp src-tauri/windivert/WinDivert.dll release_pkg/
-          cp src-tauri/windivert/WinDivert64.sys release_pkg/
+          mkdir -p release_pkg/voxelproxy
+          cp src-tauri/target/release/voxelproxy.exe release_pkg/voxelproxy/
+          cp src-tauri/windivert/WinDivert.dll release_pkg/voxelproxy/
+          cp src-tauri/windivert/WinDivert64.sys release_pkg/voxelproxy/
 
           cd release_pkg
-          7z a ../voxelproxy-${{ steps.version.outputs.version }}.zip .
+          7z a ../voxelproxy-${{ steps.version.outputs.version }}.zip voxelproxy
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
