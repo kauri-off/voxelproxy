@@ -24,17 +24,5 @@ export const TitleBar: React.FC<Props> = ({ state, onStop }) => (
         ■ Остановить
       </button>
     )}
-    {state.updateInfo && (
-      <a
-        className="titlebar__update"
-        href="#"
-        onClick={(e) => {
-          e.preventDefault();
-          openUrl(state.updateInfo!.link);
-        }}
-      >
-        Доступно обновление {state.updateInfo.tag}
-      </a>
-    )}
   </header>
 );

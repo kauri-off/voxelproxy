@@ -21,8 +21,7 @@
   flex: 1;
 }
 
-.titlebar__logo,
-.titlebar__update {
+.titlebar__logo {
   background: none;
   border: none;
   padding: 0;
@@ -42,19 +41,6 @@
 
 .titlebar__logo:hover {
   color: var(--c-accent);
-}
-
-.titlebar__update {
-  font-size: 12px;
-  color: var(--c-warn);
-  padding: 3px 8px;
-  border: 1px solid rgba(var(--c-warn-rgb), 0.35);
-  border-radius: 4px;
-  transition: background 0.15s;
-}
-
-.titlebar__update:hover {
-  background: rgba(var(--c-warn-rgb), 0.12);
 }
 
 .titlebar__stop {

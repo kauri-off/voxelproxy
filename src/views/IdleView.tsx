@@ -86,6 +86,14 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
     }
   };
 
+  const handleUpdateClick = () => {
+    if (state.updateInfo) {
+      api.openUrl(state.updateInfo.link);
+    }
+  };
+
+  const hasUpdate = state.updateInfo !== null;
+
   return (
     <div className="idle-view__body">
       <div className="config-card">
@@ -95,14 +103,14 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
             <button
               className={`tab ${state.mode === "manual" ? "active" : ""}`}
               onClick={() => setState((s) => ({ ...s, mode: "manual" }))}
-              disabled={isStarting}
+              disabled={isStarting || hasUpdate}
             >
               Ручной
             </button>
             <button
               className={`tab ${state.mode === "auto" ? "active" : ""}`}
               onClick={() => setState((s) => ({ ...s, mode: "auto" }))}
-              disabled={isStarting}
+              disabled={isStarting || hasUpdate}
             >
               Авто
             </button>
@@ -122,25 +130,39 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                   setState((s) => ({ ...s, manualServerAddr: e.target.value }))
                 }
                 onKeyDown={handleKeyDown}
-                disabled={isStarting}
+                disabled={isStarting || hasUpdate}
               />
             </>
           ) : (
             <>
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={state.autoUseWindivert}
-                  onChange={(e) =>
-                    setState((s) => ({
-                      ...s,
-                      autoUseWindivert: e.target.checked,
-                    }))
+              <div className="windivert-row">
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={state.autoUseWindivert}
+                    onChange={(e) =>
+                      setState((s) => ({
+                        ...s,
+                        autoUseWindivert: e.target.checked,
+                      }))
+                    }
+                    disabled={isStarting || hasUpdate}
+                  />
+                  Использовать WinDivert
+                </label>
+                <span
+                  className="help-icon"
+                  onClick={() =>
+                    api.openUrl(
+                      "https://github.com/kauri-off/voxelproxy?tab=readme-ov-file#автоматический-режим-windows-хотспот",
+                    )
                   }
-                  disabled={isStarting}
-                />
-                Использовать WinDivert
-              </label>
+                  role="button"
+                  tabIndex={0}
+                >
+                  ?
+                </span>
+              </div>
               {state.autoUseWindivert && (
                 <div className="port-range-row">
                   <span className="hint">Порты:</span>
@@ -156,7 +178,7 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                     }
                     min={1}
                     max={65535}
-                    disabled={isStarting}
+                    disabled={isStarting || hasUpdate}
                   />
                   <span className="hint">–</span>
                   <input
@@ -171,7 +193,7 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                     }
                     min={1}
                     max={65535}
-                    disabled={isStarting}
+                    disabled={isStarting || hasUpdate}
                   />
                 </div>
               )}
@@ -179,8 +201,16 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
           )}
         </div>
 
-        <button className="btn-primary" onClick={start} disabled={isStarting}>
-          {isStarting ? "Запуск..." : "Запустить"}
+        <button
+          className="btn-primary"
+          onClick={hasUpdate ? handleUpdateClick : start}
+          disabled={hasUpdate ? false : isStarting}
+        >
+          {hasUpdate
+            ? `Обновиться ${state.updateInfo?.tag ? `(${state.updateInfo.tag})` : ""}`
+            : isStarting
+              ? "Запуск..."
+              : "Запустить"}
         </button>
       </div>
     </div>

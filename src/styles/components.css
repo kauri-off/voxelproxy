@@ -114,6 +114,12 @@
   transition: border-color 0.15s;
 }
 
+.port-input::-webkit-inner-spin-button,
+.port-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 .port-input:focus { border-color: var(--c-accent); }
 .port-input:disabled { opacity: 0.45; cursor: not-allowed; }
 
@@ -284,3 +290,29 @@
 
 .client-card--waiting .client-card__status { color: var(--c-warn); }
 .client-card--online  .client-card__status { color: var(--c-success); }
+
+/* ── WinDivert row with help icon ─────────────────────────────── */
+.windivert-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.help-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(var(--c-warn-rgb), 0.15);
+  color: var(--c-warn);
+  font-size: 12px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.help-icon:hover {
+  background: rgba(var(--c-warn-rgb), 0.3);
+} 
