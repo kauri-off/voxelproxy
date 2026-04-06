@@ -15,6 +15,8 @@ export interface AppState {
   localIp: string;
   version: string;
   updateInfo: { tag: string; link: string } | null;
+  updateProcessed: boolean;
+  updateError: boolean;
   clients: {
     primary: ClientStatus;
     secondary: ClientStatus;

@@ -12,6 +12,8 @@ const initialState: AppState = {
   localIp: "...",
   version: "",
   updateInfo: null,
+  updateProcessed: false,
+  updateError: false,
   clients: { primary: { online: false }, secondary: { online: false } },
   platform: ''
 };
@@ -46,9 +48,20 @@ export function useAppState() {
     const loadUpdateInfo = async () => {
       try {
         const updateInfo = await api.checkUpdates();
-        setState((prev) => ({ ...prev, updateInfo }));
+        setState((prev) => ({
+          ...prev,
+          updateInfo,
+          updateProcessed: true,
+          updateError: false,
+        }));
       } catch (err) {
         addLog("error", `Ошибка проверки обновлений: ${err}`);
+        setState((prev) => ({
+          ...prev,
+          updateInfo: null,
+          updateProcessed: true,
+          updateError: true,
+        }));
       }
     };
 

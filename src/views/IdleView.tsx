@@ -86,13 +86,35 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
     }
   };
 
-  const handleUpdateClick = () => {
-    if (state.updateInfo) {
-      api.openUrl(state.updateInfo.link);
-    }
-  };
-
   const hasUpdate = state.updateInfo !== null;
+  const isError = state.updateError;
+  const isReady = state.updateProcessed && !hasUpdate && !isError;
+  const isPending = !state.updateProcessed;
+
+  const isBlocked = isPending || hasUpdate || isError || isStarting;
+
+  let buttonText = "";
+  let buttonAction = () => {};
+  let isButtonDisabled = false;
+
+  if (hasUpdate) {
+    buttonText = `Обновиться (${state.updateInfo!.tag})`;
+    buttonAction = () => api.openUrl(state.updateInfo!.link);
+    isButtonDisabled = false;
+  } else if (isError) {
+    buttonText = "Ошибка проверки обновления";
+    buttonAction = () =>
+      api.openUrl("https://github.com/kauri-off/voxelproxy/releases");
+    isButtonDisabled = false;
+  } else if (isPending) {
+    buttonText = "...";
+    buttonAction = () => {};
+    isButtonDisabled = true;
+  } else if (isReady) {
+    buttonText = isStarting ? "Запуск..." : "Запустить";
+    buttonAction = start;
+    isButtonDisabled = isStarting;
+  }
 
   return (
     <div className="idle-view__body">
@@ -103,14 +125,14 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
             <button
               className={`tab ${state.mode === "manual" ? "active" : ""}`}
               onClick={() => setState((s) => ({ ...s, mode: "manual" }))}
-              disabled={isStarting || hasUpdate}
+              disabled={isBlocked}
             >
               Ручной
             </button>
             <button
               className={`tab ${state.mode === "auto" ? "active" : ""}`}
               onClick={() => setState((s) => ({ ...s, mode: "auto" }))}
-              disabled={isStarting || hasUpdate}
+              disabled={isBlocked}
             >
               Авто
             </button>
@@ -130,7 +152,7 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                   setState((s) => ({ ...s, manualServerAddr: e.target.value }))
                 }
                 onKeyDown={handleKeyDown}
-                disabled={isStarting || hasUpdate}
+                disabled={isBlocked}
               />
             </>
           ) : (
@@ -148,9 +170,7 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                         autoUseWindivert: e.target.checked,
                       }))
                     }
-                    disabled={
-                      isStarting || hasUpdate || state.platform !== "windows"
-                    }
+                    disabled={isBlocked || state.platform !== "windows"}
                   />
                   Использовать WinDivert
                 </label>
@@ -190,7 +210,7 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                     }
                     min={1}
                     max={65535}
-                    disabled={isStarting || hasUpdate}
+                    disabled={isBlocked}
                   />
                   <span className="hint">–</span>
                   <input
@@ -205,7 +225,7 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                     }
                     min={1}
                     max={65535}
-                    disabled={isStarting || hasUpdate}
+                    disabled={isBlocked}
                   />
                 </div>
               )}
@@ -215,14 +235,10 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
 
         <button
           className="btn-primary"
-          onClick={hasUpdate ? handleUpdateClick : start}
-          disabled={hasUpdate ? false : isStarting}
+          onClick={buttonAction}
+          disabled={isButtonDisabled}
         >
-          {hasUpdate
-            ? `Обновиться ${state.updateInfo?.tag ? `(${state.updateInfo.tag})` : ""}`
-            : isStarting
-              ? "Запуск..."
-              : "Запустить"}
+          {buttonText}
         </button>
       </div>
     </div>
