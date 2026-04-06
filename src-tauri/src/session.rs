@@ -1,4 +1,4 @@
-use std::{net::Ipv4Addr, sync::Arc};
+use std::net::Ipv4Addr;
 
 use mc_protocol::{
     packet::{RawPacket, UncompressedPacket},
@@ -126,6 +126,7 @@ pub async fn run_automatic_mode(
     log: Logger,
 ) -> anyhow::Result<()> {
     use crate::hotspot_redirect;
+    use std::sync::Arc;
 
     // Keep the redirect handle alive for the duration of the session.
     let _redirect_handle;
