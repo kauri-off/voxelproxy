@@ -55,7 +55,11 @@ export function useAppState() {
     const loadPlatform = async () => {
       try {
         const platform = await api.getPlatform();
-        setState((prev) => ({ ...prev, platform }));
+        setState((prev) => ({
+          ...prev,
+          platform,
+          autoUseWindivert: platform === 'windows' ? prev.autoUseWindivert : false,
+        }));
       } catch (err) {
         addLog("error", `Ошибка получения платформы: ${err}`);
       }
