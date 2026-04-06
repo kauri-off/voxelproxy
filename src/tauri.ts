@@ -63,3 +63,7 @@ export async function onClientStatus(
 ): Promise<UnlistenFn> {
   return listen('client-status', (evt: { payload: ClientStatusPayload }) => cb(evt.payload));
 }
+
+export async function getPlatform(): Promise<string> {
+  return await invoke('get_platform');
+}

@@ -13,6 +13,7 @@ const initialState: AppState = {
   version: "",
   updateInfo: null,
   clients: { primary: { online: false }, secondary: { online: false } },
+  platform: ''
 };
 
 export function useAppState() {
@@ -51,9 +52,19 @@ export function useAppState() {
       }
     };
 
+    const loadPlatform = async () => {
+      try {
+        const platform = await api.getPlatform();
+        setState((prev) => ({ ...prev, platform }));
+      } catch (err) {
+        addLog("error", `Ошибка получения платформы: ${err}`);
+      }
+    };
+
     loadVersion();
     loadLocalIp();
     loadUpdateInfo();
+    loadPlatform();
   }, [addLog]);
 
   return { state, setState, logs, setLogs, addLog };

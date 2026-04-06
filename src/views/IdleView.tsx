@@ -136,7 +136,9 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
           ) : (
             <>
               <div className="windivert-row">
-                <label className="checkbox-label">
+                <label
+                  className={`checkbox-label ${state.platform !== "windows" ? "is-disabled" : ""}`}
+                >
                   <input
                     type="checkbox"
                     checked={state.autoUseWindivert}
@@ -146,10 +148,20 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                         autoUseWindivert: e.target.checked,
                       }))
                     }
-                    disabled={isStarting || hasUpdate}
+                    disabled={
+                      isStarting || hasUpdate || state.platform !== "windows"
+                    }
                   />
                   Использовать WinDivert
                 </label>
+                {state.platform !== "windows" && (
+                  <span
+                    className="hint"
+                    style={{ fontSize: "11px", color: "var(--c-muted)" }}
+                  >
+                    (только для Windows)
+                  </span>
+                )}
                 <span
                   className="help-icon"
                   onClick={() =>
@@ -163,7 +175,7 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                   ?
                 </span>
               </div>
-              {state.autoUseWindivert && (
+              {state.autoUseWindivert && state.platform === "windows" && (
                 <div className="port-range-row">
                   <span className="hint">Порты:</span>
                   <input

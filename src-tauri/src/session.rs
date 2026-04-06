@@ -15,7 +15,7 @@ use crate::{
     logger::Logger,
     packets::universal::{Intent, handshaking::c2s::Handshake},
     protocols::Version,
-    proxy::{BIND_PORT, DEFAULT_PORT, HANDSHAKE_CHANNEL_CAPACITY},
+    proxy::{AutoClientInfo, BIND_PORT, DEFAULT_PORT, HANDSHAKE_CHANNEL_CAPACITY},
     resolver::resolve_host_port,
 };
 
@@ -36,8 +36,6 @@ pub async fn run_manual_mode(server_addr: String, log: Logger) -> anyhow::Result
     log.info("Порядок: сначала основной клиент, потом дополнительный");
 
     let (tx, mut rx) = mpsc::channel(HANDSHAKE_CHANNEL_CAPACITY);
-    // Use JoinSet so the listener task is automatically aborted when this
-    // function returns or is cancelled (releasing the bound port).
     let mut _dispatch_set: JoinSet<()> = JoinSet::new();
     _dispatch_set.spawn(crate::proxy::listen_and_dispatch(
         listener,
@@ -118,87 +116,9 @@ pub async fn run_manual_mode(server_addr: String, log: Logger) -> anyhow::Result
     .await
 }
 
-#[cfg(target_os = "windows")]
-pub async fn run_automatic_mode(
-    use_windivert: bool,
-    port_min: u16,
-    port_max: u16,
-    log: Logger,
-) -> anyhow::Result<()> {
-    use crate::hotspot_redirect;
-    use std::sync::Arc;
-
-    // Keep the redirect handle alive for the duration of the session.
-    let _redirect_handle;
-
-    if use_windivert {
-        if !hotspot_redirect::is_admin() {
-            anyhow::bail!("Автоматический режим требует прав администратора.");
-        }
-
-        let (nat_table, redirect) =
-            match hotspot_redirect::start_redirect(BIND_PORT, port_min, port_max, log.clone()) {
-                Ok(t) => t,
-                Err(e) => anyhow::bail!("WinDivert недоступен: {}", e),
-            };
-        hotspot_redirect::start_nat_cleanup(Arc::clone(&nat_table));
-        _redirect_handle = Some(redirect);
-        log.success("WinDivert перехват активен");
-    } else {
-        _redirect_handle = None;
-        log.info("WinDivert отключён — подключайтесь напрямую");
-    }
-
-    let listener = match TcpListener::bind(format!("0.0.0.0:{}", BIND_PORT)).await {
-        Ok(l) => l,
-        Err(e) => anyhow::bail!("Ошибка при создании сокета: {}", e),
-    };
-    log.info(format!("Ожидание подключений на порту {}", BIND_PORT));
-    if use_windivert {
-        log.info(format!(
-            "Порты {}–{} перехватываются WinDivert",
-            port_min, port_max
-        ));
-    }
-    log.info("Порядок: сначала дополнительный клиент, затем основной");
-    log.info(format!(
-        "Основной клиент подключайтесь к 127.0.0.1:{}",
-        BIND_PORT
-    ));
-
-    let (tx, mut rx) = mpsc::channel(HANDSHAKE_CHANNEL_CAPACITY);
-    // JoinSet: dropping it aborts the listener + all active session tasks,
-    // which releases the bound port when the mode is stopped.
-    let mut session_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
-    session_set.spawn(async move {
-        crate::proxy::listen_and_dispatch_auto(listener, tx).await;
-        Ok(())
-    });
-
-    let mut pending = Vec::new();
-
-    while let Some(client) = rx.recv().await {
-        if let Some(secondary) = pending.pop() {
-            log.client_status("primary", true);
-            session_set.spawn(run_auto_session(client, secondary, log.clone()));
-        } else {
-            let key = (client.server_host.clone(), client.server_port);
-            log.client_status("secondary", true);
-            log.info(format!(
-                "Дополнительный клиент подключён ({}:{}), ожидание основного...",
-                key.0, key.1
-            ));
-            pending.push(client);
-        }
-    }
-
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
 async fn run_auto_session(
-    mut primary: crate::proxy::AutoClientInfo,
-    mut secondary: crate::proxy::AutoClientInfo,
+    mut primary: AutoClientInfo,
+    mut secondary: AutoClientInfo,
     log: Logger,
 ) -> anyhow::Result<()> {
     let primary_login_start = RawPacket::read_async(&mut primary.stream).await?;
@@ -283,4 +203,120 @@ async fn run_auto_session(
         log.clone(),
     )
     .await
+}
+
+#[cfg(target_os = "windows")]
+pub async fn run_automatic_mode(
+    use_windivert: bool,
+    port_min: u16,
+    port_max: u16,
+    log: Logger,
+) -> anyhow::Result<()> {
+    use crate::hotspot_redirect;
+    use std::sync::Arc;
+
+    let _redirect_handle;
+
+    if use_windivert {
+        if !hotspot_redirect::is_admin() {
+            anyhow::bail!("Автоматический режим требует прав администратора.");
+        }
+
+        let (nat_table, redirect) =
+            match hotspot_redirect::start_redirect(BIND_PORT, port_min, port_max, log.clone()) {
+                Ok(t) => t,
+                Err(e) => anyhow::bail!("WinDivert недоступен: {}", e),
+            };
+        hotspot_redirect::start_nat_cleanup(Arc::clone(&nat_table));
+        _redirect_handle = Some(redirect);
+        log.success("WinDivert перехват активен");
+    } else {
+        _redirect_handle = None;
+        log.info("WinDivert отключён — подключайтесь напрямую");
+    }
+
+    let listener = match TcpListener::bind(format!("0.0.0.0:{}", BIND_PORT)).await {
+        Ok(l) => l,
+        Err(e) => anyhow::bail!("Ошибка при создании сокета: {}", e),
+    };
+    log.info(format!("Ожидание подключений на порту {}", BIND_PORT));
+    if use_windivert {
+        log.info(format!(
+            "Порты {}–{} перехватываются WinDivert",
+            port_min, port_max
+        ));
+    }
+    log.info("Порядок: сначала дополнительный клиент, затем основной");
+    log.info(format!(
+        "Основной клиент подключайтесь к 127.0.0.1:{}",
+        BIND_PORT
+    ));
+
+    let (tx, mut rx) = mpsc::channel(HANDSHAKE_CHANNEL_CAPACITY);
+    let mut session_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
+    session_set.spawn(async move {
+        crate::proxy::listen_and_dispatch_auto(listener, tx).await;
+        Ok(())
+    });
+
+    let mut pending = Vec::new();
+
+    while let Some(client) = rx.recv().await {
+        if let Some(secondary) = pending.pop() {
+            log.client_status("primary", true);
+            session_set.spawn(run_auto_session(client, secondary, log.clone()));
+        } else {
+            let key = (client.server_host.clone(), client.server_port);
+            log.client_status("secondary", true);
+            log.info(format!(
+                "Дополнительный клиент подключён ({}:{}), ожидание основного...",
+                key.0, key.1
+            ));
+            pending.push(client);
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub async fn run_automatic_mode(
+    _use_windivert: bool,
+    _port_min: u16,
+    _port_max: u16,
+    log: Logger,
+) -> anyhow::Result<()> {
+    let listener = TcpListener::bind(format!("0.0.0.0:{}", BIND_PORT)).await?;
+    log.info(format!("Ожидание подключений на порту {}", BIND_PORT));
+    log.info("Порядок: сначала дополнительный клиент, затем основной");
+    log.info(format!(
+        "Основной клиент подключайтесь к 127.0.0.1:{}",
+        BIND_PORT
+    ));
+
+    let (tx, mut rx) = mpsc::channel(HANDSHAKE_CHANNEL_CAPACITY);
+    let mut session_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
+    session_set.spawn(async move {
+        crate::proxy::listen_and_dispatch_auto(listener, tx).await;
+        Ok(())
+    });
+
+    let mut pending = Vec::new();
+
+    while let Some(client) = rx.recv().await {
+        if let Some(secondary) = pending.pop() {
+            log.client_status("primary", true);
+            session_set.spawn(run_auto_session(client, secondary, log.clone()));
+        } else {
+            let key = (client.server_host.clone(), client.server_port);
+            log.client_status("secondary", true);
+            log.info(format!(
+                "Дополнительный клиент подключён ({}:{}), ожидание основного...",
+                key.0, key.1
+            ));
+            pending.push(client);
+        }
+    }
+
+    Ok(())
 }

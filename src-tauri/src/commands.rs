@@ -116,6 +116,11 @@ pub fn open_url(url: String) {
     }
 }
 
+#[tauri::command]
+pub fn get_platform() -> String {
+    std::env::consts::OS.to_string()
+}
+
 async fn abort_existing(state: &State<'_, AppState>) {
     if let Some(h) = state.session.lock().await.take() {
         h.abort();

@@ -19,6 +19,7 @@ export interface AppState {
     primary: ClientStatus;
     secondary: ClientStatus;
   };
+  platform: string;
 }
 
 export interface LogEntry {
