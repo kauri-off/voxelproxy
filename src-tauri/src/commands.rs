@@ -35,7 +35,6 @@ pub async fn start_manual_session(
     Ok(())
 }
 
-#[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn start_auto_session(
     use_windivert: bool,
@@ -62,18 +61,6 @@ pub async fn start_auto_session(
 
     *state.session.lock().await = Some(handle.abort_handle());
     Ok(())
-}
-
-#[cfg(not(target_os = "windows"))]
-#[tauri::command]
-pub async fn start_auto_session(
-    _use_windivert: bool,
-    _port_min: u16,
-    _port_max: u16,
-    _app: AppHandle,
-    _state: State<'_, AppState>,
-) -> Result<(), String> {
-    Err("Автоматический режим поддерживается только на Windows".to_string())
 }
 
 #[tauri::command]
