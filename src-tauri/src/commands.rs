@@ -85,6 +85,9 @@ pub fn get_local_ip_addr() -> String {
 
 #[tauri::command]
 pub async fn check_updates() -> Result<Option<UpdateInfo>, String> {
+    if cfg!(debug_assertions) {
+        return Ok(None);
+    }
     let version = env!("CARGO_PKG_VERSION");
     match has_update(version).await {
         Ok(Some(info)) => Ok(Some(UpdateInfo {

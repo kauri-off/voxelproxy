@@ -15,7 +15,10 @@ export function useTauriListeners(
       );
 
       const unstart = await api.onSessionStarted(() => {
-        setState((s) => ({ ...s, phase: "waiting" }));
+        setState((s) => ({ ...s,
+          phase: "waiting",
+          clients: { primary: { online: false }, secondary: { online: false } },
+        }));
         addLog("info", "Сессия запущена, ожидание клиентов...");
       });
 
