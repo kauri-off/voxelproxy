@@ -7,6 +7,17 @@ export const LogPanel: React.FC<{ logs: LogEntry[]; onClear: () => void }> = ({
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const prevErrorCount = useRef(0);
+
+  useEffect(() => {
+    const currentErrorCount = logs.filter(
+      (log) => log.level === "error",
+    ).length;
+    if (currentErrorCount > prevErrorCount.current) {
+      setIsExpanded(true);
+    }
+    prevErrorCount.current = currentErrorCount;
+  }, [logs]);
 
   useEffect(() => {
     if (scrollRef.current) {

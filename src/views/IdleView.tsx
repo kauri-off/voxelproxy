@@ -56,7 +56,6 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
           return;
         }
         await api.startManualSession(state.manualServerAddr);
-        addLog("info", `Запуск ручной сессии к ${state.manualServerAddr}`);
       } else {
         const { autoUseWindivert, autoPortMin, autoPortMax } = state;
         if (
@@ -70,10 +69,6 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
         setState((prev) => ({ ...prev, panicMode: false }));
         await api.setPanicMode(false);
         await api.startAutoSession(autoUseWindivert, autoPortMin, autoPortMax);
-        addLog(
-          "info",
-          `Запуск авто-сессии (WinDivert: ${autoUseWindivert}, порты: ${autoPortMin}-${autoPortMax})`,
-        );
       }
     } catch (err: any) {
       addLog("error", `Ошибка запуска: ${err.message || err}`);
@@ -174,7 +169,7 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                     }
                     disabled={isBlocked || state.platform !== "windows"}
                   />
-                  Использовать WinDivert
+                  Использовать WinDivert (нужны права администратора)
                 </label>
                 {state.platform !== "windows" && (
                   <span
