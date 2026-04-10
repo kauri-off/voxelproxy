@@ -17,6 +17,14 @@ export const App = () => {
     });
   }, [addLog]);
 
+  const togglePanicMode = () => {
+    setState((prev) => {
+      const newMode = !prev.panicMode;
+      api.setPanicMode(newMode);
+      return { ...prev, panicMode: newMode };
+    });
+  };
+
   const isIdle = state.phase === "idle";
 
   return (
@@ -29,7 +37,7 @@ export const App = () => {
         </div>
 
         <div className={`view ${!isIdle ? "is-visible" : ""}`}>
-          <RunningView state={state} />
+          <RunningView state={state} onTogglePanicMode={togglePanicMode} />
         </div>
       </main>
 

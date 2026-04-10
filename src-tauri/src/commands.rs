@@ -47,12 +47,21 @@ pub async fn start_auto_session(
     abort_existing(&state).await;
     let log = Logger::new(app.clone());
     let app2 = app.clone();
+    let panic_mode = state.panic_mode.clone();
 
     app.emit("session-started", "auto")
         .map_err(|e| e.to_string())?;
 
     let handle = tokio::spawn(async move {
-        match session::run_automatic_mode(use_windivert, port_min, port_max, log.clone()).await {
+        match session::run_automatic_mode(
+            use_windivert,
+            port_min,
+            port_max,
+            log.clone(),
+            panic_mode,
+        )
+        .await
+        {
             Ok(()) => log.info("Автосессия завершена"),
             Err(e) => log.error(format!("{}", e)),
         }
@@ -109,6 +118,13 @@ pub fn open_url(url: String) {
 #[tauri::command]
 pub fn get_platform() -> String {
     std::env::consts::OS.to_string()
+}
+
+#[tauri::command]
+pub async fn set_panic_mode(value: bool, state: State<'_, AppState>) -> Result<(), String> {
+    let mut panic_mode = state.panic_mode.lock().await;
+    *panic_mode = value;
+    Ok(())
 }
 
 async fn abort_existing(state: &State<'_, AppState>) {

@@ -22,6 +22,7 @@ export interface AppState {
     secondary: ClientStatus;
   };
   platform: string;
+  panicMode: boolean
 }
 
 export interface LogEntry {

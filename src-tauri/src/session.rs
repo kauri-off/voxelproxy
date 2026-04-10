@@ -1,11 +1,16 @@
 use std::net::Ipv4Addr;
+use std::sync::Arc;
 
 use mc_protocol::{
     packet::{RawPacket, UncompressedPacket},
     varint::VarInt,
 };
+use tokio::sync::Mutex;
 use tokio::{
-    net::{TcpListener, TcpStream},
+    net::{
+        TcpListener, TcpStream,
+        tcp::{OwnedReadHalf, OwnedWriteHalf},
+    },
     sync::mpsc,
     task::JoinSet,
 };
@@ -205,12 +210,58 @@ async fn run_auto_session(
     .await
 }
 
+pub async fn run_panic_mode(client: AutoClientInfo) -> anyhow::Result<()> {
+    let remote_addr = match resolve_host_port(
+        &client.server_host,
+        client.server_port,
+        "minecraft",
+        "tcp",
+    )
+    .await
+    {
+        Some(a) => a,
+        None => {
+            return Ok(());
+        }
+    };
+
+    let mut remote_stream = TcpStream::connect(remote_addr).await?;
+
+    let handshake = Handshake {
+        protocol_version: VarInt(client.protocol_version),
+        server_address: client.server_host.clone(),
+        server_port: client.server_port,
+        intent: Intent::Login.into(),
+    };
+    UncompressedPacket::from_packet(&handshake)?
+        .write_async(&mut remote_stream)
+        .await?;
+
+    async fn proxy(mut read: OwnedReadHalf, mut write: OwnedWriteHalf) -> anyhow::Result<()> {
+        loop {
+            let packet = RawPacket::read_async(&mut read).await?;
+            packet.write_async(&mut write).await?;
+        }
+    }
+
+    let (client_read, client_write) = client.stream.into_split();
+    let (remote_read, remote_write) = remote_stream.into_split();
+
+    tokio::select! {
+        res = proxy(client_read, remote_write) => res,
+        res = proxy(remote_read, client_write) => res,
+    }?;
+
+    Ok(())
+}
+
 #[cfg(target_os = "windows")]
 pub async fn run_automatic_mode(
     use_windivert: bool,
     port_min: u16,
     port_max: u16,
     log: Logger,
+    panic_mode: Arc<Mutex<bool>>,
 ) -> anyhow::Result<()> {
     use crate::hotspot_redirect;
     use std::sync::Arc;
@@ -262,6 +313,10 @@ pub async fn run_automatic_mode(
     let mut pending = Vec::new();
 
     while let Some(client) = rx.recv().await {
+        if *panic_mode.lock().await {
+            tokio::spawn(run_panic_mode(client));
+            continue;
+        }
         if let Some(secondary) = pending.pop() {
             log.client_status("primary", true);
             session_set.spawn(run_auto_session(client, secondary, log.clone()));
@@ -285,6 +340,7 @@ pub async fn run_automatic_mode(
     _port_min: u16,
     _port_max: u16,
     log: Logger,
+    panic_mode: Arc<Mutex<bool>>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(format!("0.0.0.0:{}", BIND_PORT)).await?;
     log.info(format!("Ожидание подключений на порту {}", BIND_PORT));
@@ -304,6 +360,10 @@ pub async fn run_automatic_mode(
     let mut pending = Vec::new();
 
     while let Some(client) = rx.recv().await {
+        if *panic_mode.lock().await {
+            tokio::spawn(run_panic_mode(client));
+            continue;
+        }
         if let Some(secondary) = pending.pop() {
             log.client_status("primary", true);
             session_set.spawn(run_auto_session(client, secondary, log.clone()));

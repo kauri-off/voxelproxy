@@ -15,7 +15,8 @@ const initialState: AppState = {
   updateProcessed: false,
   updateError: false,
   clients: { primary: { online: false }, secondary: { online: false } },
-  platform: ''
+  platform: '',
+  panicMode: false
 };
 
 export function useAppState() {

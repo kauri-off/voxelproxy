@@ -316,3 +316,47 @@
 .help-icon:hover {
   background: rgba(var(--c-warn-rgb), 0.3);
 } 
+
+/* ── Panic Mode Button ────────────────────────────────────────── */
+.running-view__panic-mode {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 24px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.2s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 10px;
+}
+
+.panic-mode__disabled {
+  background: var(--c-surface2);
+  color: var(--c-muted);
+  border-color: var(--c-border);
+}
+
+.panic-mode__disabled:hover {
+  background: #2a2a32;
+  color: var(--c-text);
+}
+
+.panic-mode__enabled {
+  background: rgba(var(--c-success-rgb), 0.1);
+  color: var(--c-success);
+  border-color: rgba(var(--c-success-rgb), 0.4);
+  box-shadow: 0 0 12px rgba(var(--c-success-rgb), 0.15);
+}
+
+.panic-mode__enabled:hover {
+  background: rgba(var(--c-success-rgb), 0.15);
+  border-color: rgba(var(--c-success-rgb), 0.6);
+}
+
+.running-view__panic-mode:active {
+  transform: scale(0.97);
+}

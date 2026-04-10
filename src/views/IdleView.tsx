@@ -67,6 +67,8 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
           addLog("error", "Неверный диапазон портов (1-65535, min ≤ max)");
           return;
         }
+        setState((prev) => ({ ...prev, panicMode: false }));
+        await api.setPanicMode(false);
         await api.startAutoSession(autoUseWindivert, autoPortMin, autoPortMax);
         addLog(
           "info",

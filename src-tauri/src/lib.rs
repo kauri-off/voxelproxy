@@ -31,6 +31,7 @@ pub fn run() {
             commands::check_updates,
             commands::open_url,
             commands::get_platform,
+            commands::set_panic_mode
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

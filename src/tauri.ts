@@ -44,6 +44,14 @@ export async function openUrl(url: string): Promise<void> {
   await invoke('open_url', { url });
 }
 
+export async function getPlatform(): Promise<string> {
+  return await invoke('get_platform');
+}
+
+export async function setPanicMode(value: boolean): Promise<void> {
+  await invoke('set_panic_mode', { value });
+}
+
 type UnlistenFn = () => void;
 
 export async function onProxyLog(cb: (e: LogEntry) => void): Promise<UnlistenFn> {
@@ -62,8 +70,4 @@ export async function onClientStatus(
   cb: (e: ClientStatusPayload) => void,
 ): Promise<UnlistenFn> {
   return listen('client-status', (evt: { payload: ClientStatusPayload }) => cb(evt.payload));
-}
-
-export async function getPlatform(): Promise<string> {
-  return await invoke('get_platform');
 }

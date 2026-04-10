@@ -5,9 +5,11 @@ fn main() {
     let telemetry_url = std::env::var("TELEMETRY_URL").unwrap_or_default();
     println!("cargo:rustc-env=TELEMETRY_URL={}", telemetry_url);
 
+    #[cfg(target_os = "windows")]
     copy_windivert_files();
 }
 
+#[cfg(target_os = "windows")]
 fn copy_windivert_files() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let out_dir = std::env::var("OUT_DIR").unwrap();
