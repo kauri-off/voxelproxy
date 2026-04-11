@@ -1,4 +1,4 @@
-name: Rust Release (Portable)
+name: Rust Release
 
 on:
   workflow_dispatch:
@@ -27,10 +27,10 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Build
+      - name: Build MSI
         env:
           TELEMETRY_URL: ${{ secrets.TELEMETRY_URL }}
-        run: npx tauri build --no-bundle
+        run: npx tauri build --bundles msi
 
       - name: Extract version
         id: version
@@ -39,22 +39,11 @@ jobs:
           ver=$(grep '^version =' src-tauri/Cargo.toml | head -1 | sed -E 's/version = "(.*)"/\1/')
           echo "version=$ver" >> $GITHUB_OUTPUT
 
-      - name: Create release archive
-        shell: bash
-        run: |
-          mkdir -p release_pkg/voxelproxy
-          cp src-tauri/target/release/voxelproxy.exe release_pkg/voxelproxy/
-          cp src-tauri/windivert/WinDivert.dll release_pkg/voxelproxy/
-          cp src-tauri/windivert/WinDivert64.sys release_pkg/voxelproxy/
-
-          cd release_pkg
-          7z a ../voxelproxy-${{ steps.version.outputs.version }}.zip voxelproxy
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
           name: Release ${{ steps.version.outputs.version }}
-          files: voxelproxy-${{ steps.version.outputs.version }}.zip
+          files: src-tauri/target/release/bundle/msi/*_ru-RU.msi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

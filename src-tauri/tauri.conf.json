@@ -1,6 +1,6 @@
 {
   "productName": "VoxelProxy",
-  "version": "6.1.12",
+  "version": "6.2.0",
   "identifier": "com.kauri-off.voxelproxy",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -27,6 +27,16 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/icon.ico"]
+    "icon": ["icons/icon.ico"],
+    "resources": {
+      "windivert/WinDivert.dll": "WinDivert.dll",
+      "windivert/WinDivert64.sys": "WinDivert64.sys"
+    },
+    "windows": {
+      "wix": {
+        "language": "ru-RU",
+        "upgradeCode": "89f4c226-20a4-4ba9-b708-fac6123339a7"
+      }
+    }
   }
 }
