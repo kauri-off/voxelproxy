@@ -30,6 +30,7 @@ jobs:
       - name: Build MSI
         env:
           TELEMETRY_URL: ${{ secrets.TELEMETRY_URL }}
+          UPDATE_URL: ${{ secrets.UPDATE_URL }}
         run: npx tauri build --bundles msi
 
       - name: Extract version
