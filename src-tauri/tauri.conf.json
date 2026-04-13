@@ -1,6 +1,6 @@
 {
   "productName": "VoxelProxy",
-  "version": "6.2.0",
+  "version": "6.2.1",
   "identifier": "com.kauri-off.voxelproxy",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -35,7 +35,9 @@
     "windows": {
       "wix": {
         "language": "ru-RU",
-        "upgradeCode": "89f4c226-20a4-4ba9-b708-fac6123339a7"
+        "upgradeCode": "89f4c226-20a4-4ba9-b708-fac6123339a7",
+        "fragmentPaths": ["common.wxs"],
+        "componentRefs": ["FirewallException"]
       }
     }
   }
