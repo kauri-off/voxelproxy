@@ -24,10 +24,14 @@ fn build_github_headers() -> HeaderMap {
 }
 
 pub async fn has_update(current_version: &str) -> anyhow::Result<Option<NewVersion>> {
+    if env!("UPDATE_URL").is_empty() {
+        return Ok(None);
+    }
+
     let client = Client::new();
 
     let release: Value = client
-        .get("https://api.github.com/repos/kauri-off/voxelproxy/releases/latest")
+        .get(env!("UPDATE_URL"))
         .headers(build_github_headers())
         .send()
         .await?

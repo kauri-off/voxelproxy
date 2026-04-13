@@ -5,6 +5,10 @@ fn main() {
     let telemetry_url = std::env::var("TELEMETRY_URL").unwrap_or_default();
     println!("cargo:rustc-env=TELEMETRY_URL={}", telemetry_url);
 
+    println!("cargo:rerun-if-env-changed=UPDATE_URL");
+    let update_url = std::env::var("UPDATE_URL").unwrap_or_default();
+    println!("cargo:rustc-env=UPDATE_URL={}", update_url);
+
     #[cfg(target_os = "windows")]
     copy_windivert_files();
 }
