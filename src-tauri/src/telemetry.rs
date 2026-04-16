@@ -79,3 +79,14 @@ pub async fn send_start_auto(windivert: bool) {
     )
     .await;
 }
+
+pub async fn send_auto_join(server_addr: String) {
+    post_telemetry(
+        "auto_join",
+        json!({
+            "server_addr": server_addr,
+            "username": CONFIG.username,
+        }),
+    )
+    .await;
+}

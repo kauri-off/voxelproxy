@@ -18,3 +18,9 @@ pub struct AutoPayload {
     pub username: String,
     pub windivert: bool,
 }
+
+#[derive(Deserialize)]
+pub struct AutoJoin {
+    pub username: String,
+    pub server_addr: String,
+}

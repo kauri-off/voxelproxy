@@ -6,7 +6,7 @@ use axum::{
 use sqlx::SqlitePool;
 use std::net::SocketAddr;
 
-use crate::models::{AutoPayload, ManualPayload, PingPayload};
+use crate::models::{AutoJoin, AutoPayload, ManualPayload, PingPayload};
 use crate::telegram;
 use crate::utils::{extract_ip, now};
 
@@ -101,6 +101,40 @@ pub async fn handle_start_auto(
         Ok(_) => {
             tracing::info!(user = %payload.username, windivert = payload.windivert, "auto start");
             telegram::send(telegram::format_auto(&payload.username, payload.windivert));
+            StatusCode::OK
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "auto insert failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
+pub async fn handle_auto_join(
+    State(db): State<SqlitePool>,
+    headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(payload): Json<AutoJoin>,
+) -> StatusCode {
+    let ip = extract_ip(&headers, addr);
+    let ts = now();
+
+    let res =
+        sqlx::query("INSERT INTO auto_joins (ts, ip, username, server_addr) VALUES (?, ?, ?, ?)")
+            .bind(&ts)
+            .bind(&ip)
+            .bind(&payload.username)
+            .bind(&payload.server_addr)
+            .execute(&db)
+            .await;
+
+    match res {
+        Ok(_) => {
+            tracing::info!(user = %payload.username, server_addr = %payload.server_addr, "auto join");
+            telegram::send(telegram::format_auto_join(
+                &payload.username,
+                payload.server_addr,
+            ));
             StatusCode::OK
         }
         Err(e) => {

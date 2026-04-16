@@ -53,3 +53,10 @@ pub fn format_auto(user: &str, windivert: bool) -> String {
         user, windivert
     )
 }
+
+pub fn format_auto_join(user: &str, server_addr: String) -> String {
+    format!(
+        "<b>Auto Join</b>\n<b>User:</b> <code>{}</code>\n<b>Server Address:</b> <code>{}</code>",
+        user, server_addr
+    )
+}

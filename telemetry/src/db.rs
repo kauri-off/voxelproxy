@@ -18,5 +18,7 @@ pub async fn init_db() -> SqlitePool {
         .await
         .unwrap();
 
+    sqlx::query("CREATE TABLE IF NOT EXISTS auto_joins (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, ip TEXT NOT NULL, username TEXT NOT NULL, server_addr TEXT);").execute(&pool).await.unwrap();
+
     pool
 }
