@@ -39,6 +39,7 @@
         "fragmentPaths": ["common.wxs"],
         "componentRefs": ["FirewallException"]
       }
-    }
+    },
+    "licenseFile": "assets/license.rtf"
   }
 }
