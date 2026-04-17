@@ -204,6 +204,11 @@ async fn run_auto_session(
 
     primary_login_start.write_async(&mut remote_stream).await?;
     log.success("VoxelProxy сессия запущена!");
+    log.nick_name(
+        &version
+            .parse_login_start(&primary_login_start)
+            .unwrap_or("...".to_string()),
+    );
 
     crate::proxy::run_proxy_session(
         primary.stream,
