@@ -1,4 +1,4 @@
-export type Phase = 'idle' | 'waiting' | 'active';
+export type Phase = 'idle' | 'running';
 export type Mode = 'manual' | 'auto';
 
 export interface ClientStatus {

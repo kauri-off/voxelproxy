@@ -13,7 +13,7 @@ export const RunningView: React.FC<Props> = ({ state, onTogglePanicMode }) => {
     <div className="running-view__body">
       <ConnectInstruction
         ip={state.localIp}
-        phase={state.phase}
+        clients={state.clients}
         nickName={state.nickName}
       />
 

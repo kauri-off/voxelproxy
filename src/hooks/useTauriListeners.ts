@@ -16,7 +16,7 @@ export function useTauriListeners(
 
       const unstart = await api.onSessionStarted(() => {
         setState((s) => ({ ...s,
-          phase: "waiting",
+          phase: "running",
           clients: { primary: { online: false }, secondary: { online: false } },
         }));
         addLog("info", "Сессия запущена, ожидание клиентов...");
@@ -34,14 +34,7 @@ export function useTauriListeners(
             [which]: { online },
           };
 
-          const allOnline =
-            clients.primary.online && clients.secondary.online;
-
-          const phase = allOnline
-            ? "active"
-            : prev.phase;
-
-          return { ...prev, clients, phase };
+          return { ...prev, clients };
         });
 
         addLog(

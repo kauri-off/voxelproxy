@@ -1,16 +1,19 @@
 import React, { useState } from "react";
-import { Phase } from "../types";
+import { ClientStatus } from "../types";
 import { CheckIcon, CopyIcon } from "./Icons";
 
 interface Props {
   ip: string;
-  phase: Phase;
+  clients: {
+    primary: ClientStatus;
+    secondary: ClientStatus;
+  };
   nickName: string;
 }
 
 export const ConnectInstruction: React.FC<Props> = ({
   ip,
-  phase,
+  clients,
   nickName,
 }) => {
   const [copied, setCopied] = useState(false);
@@ -24,12 +27,17 @@ export const ConnectInstruction: React.FC<Props> = ({
     });
   };
 
+  const allOnline = clients.primary.online && clients.secondary.online;
+  const anyOnline = clients.primary.online || clients.secondary.online;
+
   return (
     <div className="connect-instruction">
       <div className="connect-instruction__label">
-        {phase === "active"
+        {allOnline
           ? `Подключено: ${nickName}`
-          : "Подключите Minecraft клиенты к:"}
+          : anyOnline
+            ? "Ожидание 2го клиента"
+            : "Подключите Minecraft клиенты к:"}
       </div>
       <div className="connect-instruction__addr-row">
         <div className="connect-instruction__addr">{fullAddr}</div>
