@@ -92,6 +92,16 @@ impl VersionProtocol for VersionData {
             Some(ClientDisconnectEvent::SendToServer(packets))
         }
     }
+
+    fn parse_login_start(&self, packet: &RawPacket) -> Option<String> {
+        match packet.as_uncompressed() {
+            Ok(t) => match t.deserialize_payload::<c2s::login::HelloPacket>() {
+                Ok(t) => Some(t.name),
+                Err(_) => None,
+            },
+            Err(_) => None,
+        }
+    }
 }
 
 impl VersionData {

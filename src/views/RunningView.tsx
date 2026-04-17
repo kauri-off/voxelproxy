@@ -11,7 +11,11 @@ interface Props {
 export const RunningView: React.FC<Props> = ({ state, onTogglePanicMode }) => {
   return (
     <div className="running-view__body">
-      <ConnectInstruction ip={state.localIp} phase={state.phase} />
+      <ConnectInstruction
+        ip={state.localIp}
+        phase={state.phase}
+        nickName={state.nickName}
+      />
 
       <div className="client-cards">
         <ClientCard type="primary" online={state.clients.primary.online} />
@@ -23,7 +27,7 @@ export const RunningView: React.FC<Props> = ({ state, onTogglePanicMode }) => {
           className={`running-view__panic-mode ${state.panicMode ? "panic-mode__enabled" : "panic-mode__disabled"}`}
           onClick={onTogglePanicMode}
         >
-          Режим "На проверке"
+          Нажми когда будешь на проверке
         </button>
       ) : (
         <></>

@@ -20,8 +20,7 @@ pub async fn start_manual_session(
     let log = Logger::new(app.clone());
     let app2 = app.clone();
 
-    app.emit("session-started", "manual")
-        .map_err(|e| e.to_string())?;
+    app.emit("session-started", ()).map_err(|e| e.to_string())?;
 
     let handle = tokio::spawn(async move {
         match session::run_manual_mode(server_addr, log.clone()).await {
@@ -49,8 +48,7 @@ pub async fn start_auto_session(
     let app2 = app.clone();
     let panic_mode = state.panic_mode.clone();
 
-    app.emit("session-started", "auto")
-        .map_err(|e| e.to_string())?;
+    app.emit("session-started", ()).map_err(|e| e.to_string())?;
 
     let handle = tokio::spawn(async move {
         match session::run_automatic_mode(

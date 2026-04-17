@@ -34,13 +34,11 @@ export function useTauriListeners(
             [which]: { online },
           };
 
-          const anyOnline =
-            clients.primary.online || clients.secondary.online;
+          const allOnline =
+            clients.primary.online && clients.secondary.online;
 
-          const phase = anyOnline
+          const phase = allOnline
             ? "active"
-            : prev.phase === "active"
-            ? "waiting"
             : prev.phase;
 
           return { ...prev, clients, phase };
@@ -54,7 +52,11 @@ export function useTauriListeners(
         );
       });
 
-      unlisteners = [unlog, unstart, unend, unclient];
+      const unnickname = await api.onNickName((nickname) => {
+        setState((s) => ({...s, nickName: nickname}))
+      })
+
+      unlisteners = [unlog, unstart, unend, unclient, unnickname];
     };
 
     setup();

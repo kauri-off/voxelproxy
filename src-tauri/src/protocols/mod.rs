@@ -19,6 +19,7 @@ pub trait VersionProtocol {
     fn handle_s2c(&mut self, packet: &RawPacket, both_active: bool) -> Option<ClientBoundEvent>;
     fn update_threshold(&mut self, threshold: Option<i32>);
     fn handle_client_disconnect(&mut self, new_active: ClientId) -> Option<ClientDisconnectEvent>;
+    fn parse_login_start(&self, packet: &RawPacket) -> Option<String>;
 }
 
 pub enum ServerBoundEvent {

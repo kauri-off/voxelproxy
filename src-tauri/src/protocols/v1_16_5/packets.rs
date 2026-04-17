@@ -3,6 +3,16 @@ use mc_protocol::{Packet, varint::VarInt};
 pub mod c2s {
     use super::*;
 
+    pub mod login {
+        use super::*;
+
+        #[derive(Packet, Debug)]
+        #[packet(0)] // ServerboundHelloPacket
+        pub struct HelloPacket {
+            pub name: String,
+        }
+    }
+
     pub mod game {
         use super::*;
 

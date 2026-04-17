@@ -9,7 +9,9 @@ use tokio::{
     sync::mpsc::{self, Sender},
 };
 
-use crate::{resolver::resolve_host_port, telemetry};
+use crate::{
+    packets::universal::status::s2c::StatusResponse, resolver::resolve_host_port, telemetry,
+};
 
 use crate::{
     controller::{ClientId, Controller, run_client, run_server},
@@ -140,6 +142,38 @@ async fn process_status(
     remote_dns: String,
     mut handshake: Handshake,
 ) -> anyhow::Result<()> {
+    if remote_addr == "127.0.0.1:25565".parse().unwrap() {
+        // Status request
+        RawPacket::read_async(&mut stream).await?;
+
+        // Status response
+        UncompressedPacket::from_packet(&StatusResponse {
+            response: json!({
+                "version": {
+                    "name": "VoxelProxy",
+                    "protocol": handshake.protocol_version.0
+                },
+                "players": {
+                    "max": 20,
+                    "online": 0,
+                    "sample": []
+                },
+                "description": {
+                    "text": "VoxelProxy Работает!"
+                }
+            })
+            .to_string(),
+        })?
+        .write_async(&mut stream)
+        .await?;
+
+        // PING
+        RawPacket::read_async(&mut stream)
+            .await?
+            .write_async(&mut stream)
+            .await?;
+        return Ok(());
+    }
     handshake.server_address = remote_dns;
     let mut remote_stream = TcpStream::connect(remote_addr).await?;
 

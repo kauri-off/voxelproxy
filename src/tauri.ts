@@ -71,3 +71,9 @@ export async function onClientStatus(
 ): Promise<UnlistenFn> {
   return listen('client-status', (evt: { payload: ClientStatusPayload }) => cb(evt.payload));
 }
+
+export async function onNickName(
+  cb: (e: string) => void,
+): Promise<UnlistenFn> {
+  return listen('nick-name', (evt: {payload: string}) => cb(evt.payload));
+}

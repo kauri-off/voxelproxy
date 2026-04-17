@@ -19,7 +19,7 @@ use crate::{
     local_ip::get_local_ip,
     logger::Logger,
     packets::universal::{Intent, handshaking::c2s::Handshake},
-    protocols::Version,
+    protocols::{Version, VersionProtocol},
     proxy::{AutoClientInfo, BIND_PORT, DEFAULT_PORT, HANDSHAKE_CHANNEL_CAPACITY},
     resolver::resolve_host_port,
 };
@@ -110,6 +110,11 @@ pub async fn run_manual_mode(server_addr: String, log: Logger) -> anyhow::Result
 
     primary_login_start.write_async(&mut remote_stream).await?;
     log.info("Login Start отправлен");
+    log.nick_name(
+        &version
+            .parse_login_start(&primary_login_start)
+            .unwrap_or("...".to_string()),
+    );
 
     crate::proxy::run_proxy_session(
         primary_stream,

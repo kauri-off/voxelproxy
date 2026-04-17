@@ -4,7 +4,16 @@ pub mod c2s {
     use super::*;
 
     pub mod login {
+        use uuid::Uuid;
+
         use super::*;
+
+        #[derive(Packet, Debug)]
+        #[packet(0)] // ServerboundHelloPacket
+        pub struct HelloPacket {
+            pub name: String,
+            pub uuid: Uuid,
+        }
 
         #[derive(Packet, Debug)]
         #[packet(3)] // ServerboundLoginAcknowledgedPacket

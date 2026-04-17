@@ -51,6 +51,10 @@ impl Logger {
             .ok();
     }
 
+    pub fn nick_name(&self, nickname: &str) {
+        self.app.emit("nick-name", nickname).ok();
+    }
+
     fn send(&self, level: &str, message: String) {
         let entry = LogEntry {
             level: level.to_string(),

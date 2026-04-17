@@ -16,7 +16,8 @@ const initialState: AppState = {
   updateError: false,
   clients: { primary: { online: false }, secondary: { online: false } },
   platform: '',
-  panicMode: false
+  panicMode: false,
+  nickName: ''
 };
 
 export function useAppState() {
