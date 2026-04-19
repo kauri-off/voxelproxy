@@ -201,9 +201,10 @@ async fn run_auto_session(
     UncompressedPacket::from_packet(&handshake)?
         .write_async(&mut remote_stream)
         .await?;
+    log.info("Handshake отправлен");
 
     primary_login_start.write_async(&mut remote_stream).await?;
-    log.success("VoxelProxy сессия запущена!");
+    log.info("Login Start отправлен");
     log.nick_name(
         &version
             .parse_login_start(&primary_login_start)
@@ -300,7 +301,6 @@ pub async fn run_automatic_mode(
         Ok(l) => l,
         Err(e) => anyhow::bail!("Ошибка при создании сокета: {}", e),
     };
-    log.info(format!("Ожидание подключений на порту {}", BIND_PORT));
     if use_windivert {
         log.info(format!(
             "Порты {}–{} перехватываются WinDivert",
