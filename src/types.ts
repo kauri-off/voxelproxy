@@ -25,8 +25,3 @@ export interface AppState {
   panicMode: boolean,
   nickName: string
 }
-
-export interface LogEntry {
-  level: 'info' | 'warn' | 'error' | 'success';
-  message: string;
-}

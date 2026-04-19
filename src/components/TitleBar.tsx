@@ -1,6 +1,6 @@
 import React from "react";
 import { AppState } from "../types";
-import { openUrl } from "../tauri";
+import { commands } from "../bindings";
 
 interface Props {
   state: AppState;
@@ -11,7 +11,9 @@ export const TitleBar: React.FC<Props> = ({ state, onStop }) => (
   <header className="titlebar">
     <button
       className="titlebar__logo"
-      onClick={() => openUrl("https://github.com/kauri-off/voxelproxy")}
+      onClick={() =>
+        commands.openUrl("https://github.com/kauri-off/voxelproxy")
+      }
     >
       VoxelProxy
     </button>

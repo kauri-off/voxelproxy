@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from "react";
 import { AppState } from "../types";
-import * as api from "../tauri";
+import { commands, LogLevel } from "../bindings";
 
 const validateManualAddr = (addr: string): boolean => {
   const trimmed = addr.trim();
@@ -35,7 +35,7 @@ const validateManualAddr = (addr: string): boolean => {
 interface Props {
   state: AppState;
   setState: React.Dispatch<React.SetStateAction<AppState>>;
-  addLog: (level: "info" | "error", message: string) => void;
+  addLog: (level: LogLevel, message: string) => void;
 }
 
 export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
@@ -48,30 +48,55 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
     try {
       if (state.mode === "manual") {
         if (!state.manualServerAddr.trim()) {
-          addLog("error", "Введите адрес сервера");
+          addLog("Error", "Введите адрес сервера");
           return;
         }
         if (!validateManualAddr(state.manualServerAddr)) {
-          addLog("error", "Неверный формат адреса (пример: mc.host:25565)");
+          addLog(
+            "Error",
+            "Неверный формат адреса (пример: mc.funtime.su:25565)",
+          );
           return;
         }
-        await api.startManualSession(state.manualServerAddr);
+
+        const result = await commands.startManualSession(
+          state.manualServerAddr,
+        );
+
+        if (result.status === "error") {
+          addLog("Error", `Ошибка запуска: ${result.error}`);
+        }
       } else {
         const { autoUseWindivert, autoPortMin, autoPortMax } = state;
+
         if (
           autoPortMin < 1 ||
           autoPortMax > 65535 ||
           autoPortMin > autoPortMax
         ) {
-          addLog("error", "Неверный диапазон портов (1-65535, min ≤ max)");
+          addLog("Error", "Неверный диапазон портов (1-65535, min ≤ max)");
           return;
         }
+
         setState((prev) => ({ ...prev, panicMode: false }));
-        await api.setPanicMode(false);
-        await api.startAutoSession(autoUseWindivert, autoPortMin, autoPortMax);
+        const resultpanic = await commands.setPanicMode(false);
+        if (resultpanic.status === "error") {
+          addLog(
+            "Error",
+            `Ошибка установки режима проверки: ${resultpanic.error}`,
+          );
+        }
+
+        const result = await commands.startAutoSession(
+          autoUseWindivert,
+          autoPortMin,
+          autoPortMax,
+        );
+
+        if (result.status === "error") {
+          addLog("Error", `Ошибка запуска: ${result.error}`);
+        }
       }
-    } catch (err: any) {
-      addLog("error", `Ошибка запуска: ${err.message || err}`);
     } finally {
       setIsStarting(false);
     }
@@ -96,12 +121,12 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
 
   if (hasUpdate) {
     buttonText = `Обновиться (${state.updateInfo!.tag})`;
-    buttonAction = () => api.openUrl(state.updateInfo!.link);
+    buttonAction = () => commands.openUrl(state.updateInfo!.link);
     isButtonDisabled = false;
   } else if (isError) {
     buttonText = "Ошибка проверки обновления";
     buttonAction = () =>
-      api.openUrl("https://github.com/kauri-off/voxelproxy/releases");
+      commands.openUrl("https://github.com/kauri-off/voxelproxy/releases");
     isButtonDisabled = false;
   } else if (isPending) {
     buttonText = "...";
@@ -182,7 +207,7 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                 <span
                   className="help-icon"
                   onClick={() =>
-                    api.openUrl(
+                    commands.openUrl(
                       "https://github.com/kauri-off/voxelproxy?tab=readme-ov-file#автоматический-режим-windows-хотспот",
                     )
                   }

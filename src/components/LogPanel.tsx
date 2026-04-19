@@ -1,17 +1,17 @@
 import React, { useState, useEffect, useRef } from "react";
-import { LogEntry } from "../types";
+import { ProxyLogEvent } from "../bindings";
 
-export const LogPanel: React.FC<{ logs: LogEntry[]; onClear: () => void }> = ({
-  logs,
-  onClear,
-}) => {
+export const LogPanel: React.FC<{
+  logs: ProxyLogEvent[];
+  onClear: () => void;
+}> = ({ logs, onClear }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevErrorCount = useRef(0);
 
   useEffect(() => {
     const currentErrorCount = logs.filter(
-      (log) => log.level === "error",
+      (log) => log.level === "Error",
     ).length;
     if (currentErrorCount > prevErrorCount.current) {
       setIsExpanded(true);

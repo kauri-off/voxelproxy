@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use etherparse::SlicedPacket;
+use tauri::AppHandle;
 use windivert::{
     WinDivert,
     layer::{ForwardLayer, NetworkLayer, WinDivertLayerTrait},
@@ -119,7 +120,7 @@ pub(crate) fn start_redirect(
     bind_port: u16,
     port_min: u16,
     port_max: u16,
-    log: Logger,
+    app: AppHandle,
 ) -> anyhow::Result<(NatTable, RedirectHandle)> {
     let nat: NatTable = Arc::new(Mutex::new(HashMap::new()));
 
@@ -157,14 +158,13 @@ pub(crate) fn start_redirect(
     };
 
     let nat_client = Arc::clone(&nat);
-    let log_client = log.clone();
+    let app2 = app.clone();
     std::thread::spawn(move || {
-        run_client_intercept_loop(wd_forward, wd_inject, bind_port, nat_client, log_client)
+        run_client_intercept_loop(wd_forward, wd_inject, bind_port, nat_client, app2)
     });
 
     let nat_return = Arc::clone(&nat);
-    let log_return = log.clone();
-    std::thread::spawn(move || run_return_intercept_loop(wd_return, nat_return, log_return));
+    std::thread::spawn(move || run_return_intercept_loop(wd_return, nat_return, app));
 
     Ok((nat, redirect))
 }
@@ -187,8 +187,9 @@ fn run_client_intercept_loop(
     wd_inject: WinDivert<NetworkLayer>,
     bind_port: u16,
     nat: NatTable,
-    log: Logger,
+    app: AppHandle,
 ) {
+    let log = Logger::new(&app);
     let mut buf = vec![0u8; 65535];
     loop {
         let packet = match wd_forward.recv(Some(&mut buf)) {
@@ -274,7 +275,8 @@ fn run_client_intercept_loop(
     }
 }
 
-fn run_return_intercept_loop(wd: WinDivert<NetworkLayer>, nat: NatTable, log: Logger) {
+fn run_return_intercept_loop(wd: WinDivert<NetworkLayer>, nat: NatTable, app: AppHandle) {
+    let log = Logger::new(&app);
     let mut buf = vec![0u8; 65535];
     loop {
         let packet = match wd.recv(Some(&mut buf)) {

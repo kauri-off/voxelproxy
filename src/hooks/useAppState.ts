@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import * as api from "../tauri";
-import { AppState, LogEntry } from "../types";
+import { commands, LogLevel, ProxyLogEvent } from "../bindings";
+import { AppState } from "../types";
 
 const initialState: AppState = {
   phase: "idle",
@@ -22,61 +22,58 @@ const initialState: AppState = {
 
 export function useAppState() {
   const [state, setState] = useState<AppState>(initialState);
-  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [logs, setLogs] = useState<ProxyLogEvent[]>([]);
 
-  const addLog = useCallback((level: LogEntry["level"], message: string) => {
+  const addLog = useCallback((level: LogLevel, message: string) => {
     setLogs((prev) => [...prev, { level, message }]);
   }, []);
 
   useEffect(() => {
     const loadVersion = async () => {
       try {
-        const version = await api.getVersion();
+        const version = await commands.getVersion();
         setState((prev) => ({ ...prev, version }));
       } catch (err) {
-        addLog("error", `Ошибка загрузки версии: ${err}`);
+        addLog("Error", `Ошибка загрузки версии: ${err}`);
       }
     };
 
     const loadLocalIp = async () => {
       try {
-        const localIp = await api.getLocalIpAddr();
+        const localIp = await commands.getLocalIpAddr();
         setState((prev) => ({ ...prev, localIp }));
       } catch (err) {
-        addLog("error", `Ошибка загрузки IP-адреса: ${err}`);
+        addLog("Error", `Ошибка загрузки IP-адреса: ${err}`);
       }
     };
 
     const loadUpdateInfo = async () => {
-      try {
-        const updateInfo = await api.checkUpdates();
-        setState((prev) => ({
-          ...prev,
-          updateInfo,
-          updateProcessed: true,
-          updateError: false,
-        }));
-      } catch (err) {
-        addLog("error", `Ошибка проверки обновлений: ${err}`);
-        setState((prev) => ({
-          ...prev,
-          updateInfo: null,
-          updateProcessed: true,
-          updateError: true,
-        }));
+      const result = await commands.checkUpdates();
+
+      const isError = result.status === "error";
+
+      if (isError) {
+        addLog("Error", `Ошибка проверки обновлений: ${result.error}`);
       }
+
+      setState((prev) => ({
+        ...prev,
+        updateInfo: isError ? null : result.data,
+        updateProcessed: true,
+        updateError: isError,
+      }));
     };
 
     const loadPlatform = async () => {
       try {
-        const platform = await api.getPlatform();
+        const platform = await commands.getPlatform();
         setState((prev) => ({
           ...prev,
           platform,
           autoUseWindivert: platform === 'windows' ? prev.autoUseWindivert : false,
         }));
       } catch (err) {
-        addLog("error", `Ошибка получения платформы: ${err}`);
+        addLog("Error", `Ошибка получения платформы: ${err}`);
       }
     };
 

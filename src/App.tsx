@@ -5,22 +5,23 @@ import { TitleBar } from "./components/TitleBar";
 import { LogPanel } from "./components/LogPanel";
 import { IdleView } from "./views/IdleView";
 import { RunningView } from "./views/RunningView";
-import * as api from "./tauri";
+import * as api from "./bindings";
 
 export const App = () => {
   const { state, setState, logs, setLogs, addLog } = useAppState();
   useTauriListeners(setState, addLog);
 
-  const handleStop = useCallback(() => {
-    api.stopSession().catch((err) => {
-      addLog("error", `Не удалось остановить: ${err}`);
-    });
+  const handleStop = useCallback(async () => {
+    const result = await api.commands.stopSession();
+    if (result.status === "error") {
+      addLog("Error", result.error);
+    }
   }, [addLog]);
 
   const togglePanicMode = () => {
     setState((prev) => {
       const newMode = !prev.panicMode;
-      api.setPanicMode(newMode);
+      api.commands.setPanicMode(newMode);
       return { ...prev, panicMode: newMode };
     });
   };

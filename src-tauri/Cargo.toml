@@ -1,6 +1,6 @@
 [package]
 name = "voxelproxy"
-version = "6.2.2"
+version = "6.2.3"
 edition = "2024"
 authors = ["kauri-off <https://github.com/kauri-off>"]
 description = "Бесплатный аналог takker.ru"
@@ -8,10 +8,6 @@ repository = "https://github.com/kauri-off/voxelproxy"
 homepage = "https://github.com/kauri-off/voxelproxy"
 readme = "../README.md"
 license = "GPL-3.0-only"
-
-[lib]
-name = "voxelproxy_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
 tauri = { version = "2.10.3", features = [] }
@@ -23,9 +19,12 @@ reqwest = { version = "0.13.2", features = ["json"] }
 anyhow = "1.0.102"
 mc_protocol = "2.1.0"
 enum_dispatch = "0.3.13"
-open = "5.3.3"
+open = "5.3.4"
 lazy_static = "1.5.0"
 uuid = { version = "1.23.1", features = ["v4"] }
+tauri-specta = { version = "2.0.0-rc.24", features = ["derive", "typescript"] }
+specta-typescript = "0.0.11"
+specta = { version = "2.0.0-rc.24", features = ["derive"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [

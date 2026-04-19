@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use anyhow::anyhow;
 use mc_protocol::packet::{RawPacket, UncompressedPacket};
 use serde_json::json;
+use tauri::AppHandle;
 use tokio::{
     io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
@@ -216,8 +217,9 @@ pub async fn run_proxy_session(
     mut secondary: TcpStream,
     mut remote: TcpStream,
     mut version: Version,
-    log: Logger,
+    app: AppHandle,
 ) -> anyhow::Result<()> {
+    let log = Logger::new(&app);
     let mut threshold = None;
 
     loop {
@@ -281,7 +283,7 @@ pub async fn run_proxy_session(
         remote_tx,
         event_rx,
         version,
-        log.clone(),
+        app.clone(),
     );
 
     tokio::spawn(run_client(

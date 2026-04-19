@@ -5,6 +5,9 @@ use mc_protocol::{
     packet::{RawPacket, UncompressedPacket},
     varint::VarInt,
 };
+#[cfg(target_os = "windows")]
+use tauri::AppHandle;
+use tauri_specta::Event;
 use tokio::sync::Mutex;
 use tokio::{
     net::{
@@ -16,6 +19,7 @@ use tokio::{
 };
 
 use crate::{
+    events::{ClientStatusEvent, NickNameEvent, WhichClient},
     local_ip::get_local_ip,
     logger::Logger,
     packets::universal::{Intent, handshaking::c2s::Handshake},
@@ -24,7 +28,8 @@ use crate::{
     resolver::resolve_host_port,
 };
 
-pub async fn run_manual_mode(server_addr: String, log: Logger) -> anyhow::Result<()> {
+pub async fn run_manual_mode(server_addr: String, app: AppHandle) -> anyhow::Result<()> {
+    let log = Logger::new(&app);
     let (remote_addr, remote_dns) =
         match resolve_host_port(&server_addr, DEFAULT_PORT, "minecraft", "tcp").await {
             Some(addr) => (addr, server_addr),
@@ -52,12 +57,23 @@ pub async fn run_manual_mode(server_addr: String, log: Logger) -> anyhow::Result
     let (mut primary_stream, primary_protocol) = rx.recv().await.unwrap();
     let primary_login_start = RawPacket::read_async(&mut primary_stream).await?;
     log.success("Основной клиент подключён");
-    log.client_status("primary", true);
+
+    ClientStatusEvent {
+        which: WhichClient::Primary,
+        online: true,
+    }
+    .emit(&app)
+    .ok();
 
     let (mut secondary_stream, secondary_protocol) = rx.recv().await.unwrap();
     let _ = RawPacket::read_async(&mut secondary_stream).await?;
     log.success("Дополнительный клиент подключён");
-    log.client_status("secondary", true);
+    ClientStatusEvent {
+        which: WhichClient::Secondary,
+        online: true,
+    }
+    .emit(&app)
+    .ok();
 
     if primary_protocol != secondary_protocol {
         crate::proxy::send_login_error(
@@ -69,7 +85,7 @@ pub async fn run_manual_mode(server_addr: String, log: Logger) -> anyhow::Result
         anyhow::bail!("Версии клиентов различаются");
     }
 
-    let version = match Version::from_protocol(primary_protocol, log.clone()) {
+    let version = match Version::from_protocol(primary_protocol, app.clone()) {
         Some(v) => v,
         None => {
             crate::proxy::send_login_error(
@@ -110,18 +126,21 @@ pub async fn run_manual_mode(server_addr: String, log: Logger) -> anyhow::Result
 
     primary_login_start.write_async(&mut remote_stream).await?;
     log.info("Login Start отправлен");
-    log.nick_name(
-        &version
+
+    NickNameEvent(
+        version
             .parse_login_start(&primary_login_start)
             .unwrap_or("...".to_string()),
-    );
+    )
+    .emit(&app)
+    .ok();
 
     crate::proxy::run_proxy_session(
         primary_stream,
         secondary_stream,
         remote_stream,
         version,
-        log.clone(),
+        app,
     )
     .await
 }
@@ -129,8 +148,9 @@ pub async fn run_manual_mode(server_addr: String, log: Logger) -> anyhow::Result
 async fn run_auto_session(
     mut primary: AutoClientInfo,
     mut secondary: AutoClientInfo,
-    log: Logger,
+    app: AppHandle,
 ) -> anyhow::Result<()> {
+    let log = Logger::new(&app);
     let primary_login_start = RawPacket::read_async(&mut primary.stream).await?;
     let _ = RawPacket::read_async(&mut secondary.stream).await?;
 
@@ -144,7 +164,7 @@ async fn run_auto_session(
         return Ok(());
     }
 
-    let version = match Version::from_protocol(primary.protocol_version, log.clone()) {
+    let version = match Version::from_protocol(primary.protocol_version, app.clone()) {
         Some(v) => v,
         None => {
             crate::proxy::send_login_error(
@@ -205,18 +225,20 @@ async fn run_auto_session(
 
     primary_login_start.write_async(&mut remote_stream).await?;
     log.info("Login Start отправлен");
-    log.nick_name(
-        &version
+    NickNameEvent(
+        version
             .parse_login_start(&primary_login_start)
             .unwrap_or("...".to_string()),
-    );
+    )
+    .emit(&app)
+    .ok();
 
     crate::proxy::run_proxy_session(
         primary.stream,
         secondary.stream,
         remote_stream,
         version,
-        log.clone(),
+        app,
     )
     .await
 }
@@ -271,9 +293,10 @@ pub async fn run_automatic_mode(
     use_windivert: bool,
     port_min: u16,
     port_max: u16,
-    log: Logger,
+    app: AppHandle,
     panic_mode: Arc<Mutex<bool>>,
 ) -> anyhow::Result<()> {
+    let log = Logger::new(&app);
     use crate::hotspot_redirect;
     use std::sync::Arc;
 
@@ -285,7 +308,7 @@ pub async fn run_automatic_mode(
         }
 
         let (nat_table, redirect) =
-            match hotspot_redirect::start_redirect(BIND_PORT, port_min, port_max, log.clone()) {
+            match hotspot_redirect::start_redirect(BIND_PORT, port_min, port_max, app.clone()) {
                 Ok(t) => t,
                 Err(e) => anyhow::bail!("WinDivert недоступен: {}", e),
             };
@@ -328,11 +351,21 @@ pub async fn run_automatic_mode(
             continue;
         }
         if let Some(secondary) = pending.pop() {
-            log.client_status("primary", true);
-            session_set.spawn(run_auto_session(client, secondary, log.clone()));
+            ClientStatusEvent {
+                which: WhichClient::Primary,
+                online: true,
+            }
+            .emit(&app)
+            .ok();
+            session_set.spawn(run_auto_session(client, secondary, app.clone()));
         } else {
             let key = (client.server_host.clone(), client.server_port);
-            log.client_status("secondary", true);
+            ClientStatusEvent {
+                which: WhichClient::Secondary,
+                online: true,
+            }
+            .emit(&app)
+            .ok();
             log.info(format!(
                 "Дополнительный клиент подключён ({}:{}), ожидание основного...",
                 key.0, key.1
@@ -349,9 +382,10 @@ pub async fn run_automatic_mode(
     _use_windivert: bool,
     _port_min: u16,
     _port_max: u16,
-    log: Logger,
+    app: AppHandle,
     panic_mode: Arc<Mutex<bool>>,
 ) -> anyhow::Result<()> {
+    let log = Logger::new(&app);
     let listener = TcpListener::bind(format!("0.0.0.0:{}", BIND_PORT)).await?;
     log.info(format!("Ожидание подключений на порту {}", BIND_PORT));
     log.info("Порядок: сначала дополнительный клиент, затем основной");
@@ -375,11 +409,21 @@ pub async fn run_automatic_mode(
             continue;
         }
         if let Some(secondary) = pending.pop() {
-            log.client_status("primary", true);
-            session_set.spawn(run_auto_session(client, secondary, log.clone()));
+            ClientStatusEvent {
+                which: WhichClient::Primary,
+                online: true,
+            }
+            .emit(&app)
+            .ok();
+            session_set.spawn(run_auto_session(client, secondary, app.clone()));
         } else {
             let key = (client.server_host.clone(), client.server_port);
-            log.client_status("secondary", true);
+            ClientStatusEvent {
+                which: WhichClient::Secondary,
+                online: true,
+            }
+            .emit(&app)
+            .ok();
             log.info(format!(
                 "Дополнительный клиент подключён ({}:{}), ожидание основного...",
                 key.0, key.1

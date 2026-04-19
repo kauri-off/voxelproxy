@@ -1,10 +1,13 @@
 use mc_protocol::packet::RawPacket;
+use tauri::AppHandle;
+use tauri_specta::Event;
 use tokio::{
     net::tcp::{OwnedReadHalf, OwnedWriteHalf},
     sync::mpsc::{Receiver, Sender},
 };
 
 use crate::{
+    events::{ClientStatusEvent, WhichClient},
     logger::Logger,
     protocols::{ServerBoundEvent, Version, VersionProtocol},
 };
@@ -25,7 +28,7 @@ impl ClientId {
 }
 
 #[derive(Debug)]
-pub enum Event {
+pub enum ControllerEvent {
     ClientData(ClientId, RawPacket),
     ClientDisconnected(ClientId),
     ServerData(RawPacket),
@@ -40,11 +43,11 @@ pub struct Controller {
     /// Channel for sending packets to the upstream server.
     remote_tx: Sender<RawPacket>,
     /// Receives events (client data, disconnections, server data) from I/O tasks.
-    event_rx: Receiver<Event>,
+    event_rx: Receiver<ControllerEvent>,
     primary_active: bool,
     secondary_active: bool,
     version: Version,
-    log: Logger,
+    app: AppHandle,
 }
 
 impl Controller {
@@ -53,9 +56,9 @@ impl Controller {
         primary_tx: Sender<RawPacket>,
         secondary_tx: Sender<RawPacket>,
         remote_tx: Sender<RawPacket>,
-        event_rx: Receiver<Event>,
+        event_rx: Receiver<ControllerEvent>,
         version: Version,
-        log: Logger,
+        app: AppHandle,
     ) -> Self {
         Self {
             active_client,
@@ -66,7 +69,7 @@ impl Controller {
             primary_active: true,
             secondary_active: true,
             version,
-            log,
+            app,
         }
     }
 
@@ -77,9 +80,10 @@ impl Controller {
     /// - `ClientDisconnected` — update state, optionally switch active client & replay sync packets
     /// - `ServerData`         — track new pings, broadcast to active clients
     pub async fn run(mut self) {
+        let log = Logger::new(&self.app);
         while let Some(event) = self.event_rx.recv().await {
             match event {
-                Event::ClientData(client_id, packet) => {
+                ControllerEvent::ClientData(client_id, packet) => {
                     let event = self.version.handle_c2s(
                         &packet,
                         client_id,
@@ -113,33 +117,42 @@ impl Controller {
 
                     if client_id == self.active_client {
                         if let Err(e) = self.remote_tx.send(packet).await {
-                            self.log
-                                .error(format!("Ошибка отправки пакета на сервер: {}", e));
+                            log.error(format!("Ошибка отправки пакета на сервер: {}", e));
                             return;
                         }
                     }
                 }
 
-                Event::ClientDisconnected(client_id) => {
+                ControllerEvent::ClientDisconnected(client_id) => {
                     match client_id {
                         ClientId::Primary => {
                             self.primary_active = false;
-                            self.log.client_status("primary", false);
+                            ClientStatusEvent {
+                                which: WhichClient::Primary,
+                                online: false,
+                            }
+                            .emit(&self.app)
+                            .ok();
                         }
                         ClientId::Secondary => {
                             self.secondary_active = false;
-                            self.log.client_status("secondary", false);
+                            ClientStatusEvent {
+                                which: WhichClient::Secondary,
+                                online: false,
+                            }
+                            .emit(&self.app)
+                            .ok();
                         }
                     }
 
                     if !(self.primary_active || self.secondary_active) {
-                        self.log.info("Оба клиента отключились, сессия завершена");
+                        log.info("Оба клиента отключились, сессия завершена");
                         return;
                     }
 
                     if self.active_client == client_id {
                         self.active_client = client_id.opposite();
-                        self.log.info(format!(
+                        log.info(format!(
                             "Активный клиент отключился, управление передано: {}",
                             match self.active_client {
                                 ClientId::Primary => "основной",
@@ -161,7 +174,7 @@ impl Controller {
                     }
                 }
 
-                Event::ServerData(packet) => {
+                ControllerEvent::ServerData(packet) => {
                     if let Some(event) = self.version.handle_s2c(&packet, self.both_active()) {
                         match event {}
                     }
@@ -191,7 +204,7 @@ pub async fn run_client(
     read_half: OwnedReadHalf,
     write_half: OwnedWriteHalf,
     client_id: ClientId,
-    event_tx: Sender<Event>,
+    event_tx: Sender<ControllerEvent>,
     mut packet_rx: Receiver<RawPacket>,
 ) {
     let (mut client_read, mut client_write) = (read_half, write_half);
@@ -201,7 +214,7 @@ pub async fn run_client(
                 match RawPacket::read_async(&mut client_read).await {
                     Ok(packet) => {
                         if event_tx
-                            .send(Event::ClientData(client_id, packet))
+                            .send(ControllerEvent::ClientData(client_id, packet))
                             .await
                             .is_err()
                         {
@@ -210,7 +223,7 @@ pub async fn run_client(
                     }
                     Err(_) => {
                         event_tx
-                            .send(Event::ClientDisconnected(client_id))
+                            .send(ControllerEvent::ClientDisconnected(client_id))
                             .await
                             .ok();
                         break;
@@ -236,7 +249,7 @@ pub async fn run_client(
 pub async fn run_server(
     read_half: tokio::net::tcp::OwnedReadHalf,
     write_half: tokio::net::tcp::OwnedWriteHalf,
-    event_tx: Sender<Event>,
+    event_tx: Sender<ControllerEvent>,
     mut packet_rx: Receiver<RawPacket>,
 ) {
     let (mut server_read, mut server_write) = (read_half, write_half);
@@ -245,7 +258,11 @@ pub async fn run_server(
             loop {
                 match RawPacket::read_async(&mut server_read).await {
                     Ok(packet) => {
-                        if event_tx.send(Event::ServerData(packet)).await.is_err() {
+                        if event_tx
+                            .send(ControllerEvent::ServerData(packet))
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }

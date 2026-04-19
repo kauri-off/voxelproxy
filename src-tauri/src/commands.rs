@@ -1,15 +1,23 @@
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
+use tauri_specta::Event;
 
-use crate::{app_state::AppState, logger::Logger, session, telemetry, updater::has_update};
+use crate::{
+    app_state::AppState,
+    events::{SessionEndedEvent, SessionStartedEvent},
+    logger::Logger,
+    session, telemetry,
+    updater::has_update,
+};
 
-#[derive(Serialize)]
+#[derive(Serialize, specta::Type)]
 pub struct UpdateInfo {
     pub tag: String,
     pub link: String,
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn start_manual_session(
     server_addr: String,
     app: AppHandle,
@@ -17,17 +25,16 @@ pub async fn start_manual_session(
 ) -> Result<(), String> {
     tokio::spawn(telemetry::send_start_manual(server_addr.clone()));
     abort_existing(&state).await;
-    let log = Logger::new(app.clone());
-    let app2 = app.clone();
 
-    app.emit("session-started", ()).map_err(|e| e.to_string())?;
+    SessionStartedEvent {}.emit(&app).ok();
 
     let handle = tokio::spawn(async move {
-        match session::run_manual_mode(server_addr, log.clone()).await {
+        let log = Logger::new(&app);
+        match session::run_manual_mode(server_addr, app.clone()).await {
             Ok(()) => log.info("Сессия завершена"),
             Err(e) => log.error(format!("{}", e)),
         }
-        app2.emit("session-ended", ()).ok();
+        SessionEndedEvent {}.emit(&app).ok();
     });
 
     *state.session.lock().await = Some(handle.abort_handle());
@@ -35,6 +42,7 @@ pub async fn start_manual_session(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn start_auto_session(
     use_windivert: bool,
     port_min: u16,
@@ -44,18 +52,17 @@ pub async fn start_auto_session(
 ) -> Result<(), String> {
     tokio::spawn(telemetry::send_start_auto(use_windivert));
     abort_existing(&state).await;
-    let log = Logger::new(app.clone());
-    let app2 = app.clone();
     let panic_mode = state.panic_mode.clone();
 
-    app.emit("session-started", ()).map_err(|e| e.to_string())?;
+    SessionStartedEvent {}.emit(&app).ok();
 
     let handle = tokio::spawn(async move {
+        let log = Logger::new(&app);
         match session::run_automatic_mode(
             use_windivert,
             port_min,
             port_max,
-            log.clone(),
+            app.clone(),
             panic_mode,
         )
         .await
@@ -63,7 +70,7 @@ pub async fn start_auto_session(
             Ok(()) => log.info("Автосессия завершена"),
             Err(e) => log.error(format!("{}", e)),
         }
-        app2.emit("session-ended", ()).ok();
+        SessionEndedEvent {}.emit(&app).ok();
     });
 
     *state.session.lock().await = Some(handle.abort_handle());
@@ -71,18 +78,21 @@ pub async fn start_auto_session(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn stop_session(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     abort_existing(&state).await;
-    app.emit("session-ended", ()).ok();
+    SessionEndedEvent {}.emit(&app).ok();
     Ok(())
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn get_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn get_local_ip_addr() -> String {
     use std::net::Ipv4Addr;
     crate::local_ip::get_local_ip()
@@ -91,6 +101,7 @@ pub fn get_local_ip_addr() -> String {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn check_updates() -> Result<Option<UpdateInfo>, String> {
     if cfg!(debug_assertions) || std::env::consts::OS != "windows" {
         return Ok(None);
@@ -107,6 +118,7 @@ pub async fn check_updates() -> Result<Option<UpdateInfo>, String> {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn open_url(url: String) {
     if url.starts_with("http://") || url.starts_with("https://") {
         let _ = open::that(url);
@@ -114,11 +126,13 @@ pub fn open_url(url: String) {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn get_platform() -> String {
     std::env::consts::OS.to_string()
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn set_panic_mode(value: bool, state: State<'_, AppState>) -> Result<(), String> {
     let mut panic_mode = state.panic_mode.lock().await;
     *panic_mode = value;

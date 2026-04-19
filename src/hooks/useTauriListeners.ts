@@ -1,52 +1,52 @@
 import { useEffect } from "react";
-import * as api from "../tauri";
-import { AppState, LogEntry } from "../types";
+import { events, LogLevel } from "../bindings";
+import { AppState } from "../types";
 
 export function useTauriListeners(
   setState: React.Dispatch<React.SetStateAction<AppState>>,
-  addLog: (level: LogEntry["level"], message: string) => void
+  addLog: (level: LogLevel, message: string) => void
 ) {
   useEffect(() => {
     let unlisteners: Array<() => void> = [];
 
     const setup = async () => {
-      const unlog = await api.onProxyLog((log) =>
-        addLog(log.level, log.message)
-      );
+      const unlog = await events.proxyLogEvent.listen((e) => addLog(e.payload.level, e.payload.message));
 
-      const unstart = await api.onSessionStarted(() => {
+      const unstart = await events.sessionStartedEvent.listen(() => {
         setState((s) => ({ ...s,
           phase: "running",
           clients: { primary: { online: false }, secondary: { online: false } },
         }));
-        addLog("info", "Сессия запущена, ожидание клиентов...");
+        addLog("Info", "Сессия запущена, ожидание клиентов...");
       });
 
-      const unend = await api.onSessionEnded(() => {
+      const unend = await events.sessionEndedEvent.listen(() => {
         setState((s) => ({ ...s, phase: "idle" }));
-        addLog("info", "Сессия остановлена");
+        addLog("Info", "Сессия остановлена");
       });
 
-      const unclient = await api.onClientStatus(({ which, online }) => {
+      const unclient = await events.clientStatusEvent.listen((e) => {
+        const { which, online } = e.payload;
         setState((prev) => {
+          const key = which.toLowerCase() as "primary" | "secondary";
           const clients = {
             ...prev.clients,
-            [which]: { online },
+            [key]: { online },
           };
 
           return { ...prev, clients };
         });
 
         addLog(
-          "info",
-          `${which === "primary" ? "Основное" : "Второе"} устройство ${
+          "Info",
+          `${which === "Primary" ? "Основное" : "Второе"} устройство ${
             online ? "подключилось" : "отключилось"
           }`
         );
       });
 
-      const unnickname = await api.onNickName((nickname) => {
-        setState((s) => ({...s, nickName: nickname}))
+      const unnickname = await events.nickNameEvent.listen((e) => {
+        setState((s) => ({...s, nickName: e.payload}))
       })
 
       unlisteners = [unlog, unstart, unend, unclient, unnickname];

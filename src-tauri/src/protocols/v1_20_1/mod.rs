@@ -4,6 +4,7 @@ use mc_protocol::{
     packet::{RawPacket, UncompressedPacket},
     varint::VarInt,
 };
+use tauri::AppHandle;
 
 use super::VersionProtocol;
 use crate::{
@@ -19,11 +20,11 @@ pub struct VersionData {
     pub position: s2c::game::Position,
     pub pings: Vec<PingSync>,
     pub threshold: Option<i32>,
-    log: Logger,
+    app: AppHandle,
 }
 
 impl VersionData {
-    pub fn new(log: Logger) -> Self {
+    pub fn new(app: AppHandle) -> Self {
         Self {
             position: s2c::game::Position {
                 id: VarInt(TELEPORT_ID),
@@ -36,7 +37,7 @@ impl VersionData {
             },
             pings: vec![],
             threshold: None,
-            log,
+            app,
         }
     }
 }
@@ -65,7 +66,7 @@ impl VersionProtocol for VersionData {
     fn handle_client_disconnect(&mut self, new_active: ClientId) -> Option<ClientDisconnectEvent> {
         let mut packets = vec![];
 
-        let log = self.log.clone();
+        let log = Logger::new(&self.app);
         self.pings.retain(|t| {
             if t.is_sent(new_active) {
                 log.info(format!("Синхронизация: Отправка: {}", t.id));
@@ -186,8 +187,8 @@ impl VersionData {
                 } else {
                     if let Some(head) = self.pings.get(0) {
                         if head.is_sent(client_id.opposite()) {
-                            self.log
-                                .info(format!("Синхронизация: Пропуск: {}", head.id));
+                            let log = Logger::new(&self.app);
+                            log.info(format!("Синхронизация: Пропуск: {}", head.id));
                             self.pings.remove(0);
                             return Ok(Some(ServerBoundEvent::SkipRelay));
                         }
