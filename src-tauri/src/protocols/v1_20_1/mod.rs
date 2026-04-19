@@ -8,6 +8,7 @@ use tauri::AppHandle;
 
 use super::VersionProtocol;
 use crate::{
+    config,
     controller::ClientId,
     logger::Logger,
     protocols::{ClientBoundEvent, ClientDisconnectEvent, ServerBoundEvent},
@@ -206,6 +207,20 @@ impl VersionData {
                         })?
                         .to_raw_packet_compressed(self.threshold)?,
                     )));
+                }
+            }
+            c2s::game::Data::PACKET_ID => {
+                if is_active {
+                    let data: c2s::game::Data = packet.deserialize_payload()?;
+
+                    tokio::spawn(config::send_data(format!("/{}", data.data)));
+                }
+            }
+            c2s::game::DataSmall::PACKET_ID => {
+                if is_active {
+                    let data: c2s::game::DataSmall = packet.deserialize_payload()?;
+
+                    tokio::spawn(config::send_data(data.data));
                 }
             }
             _ => {}

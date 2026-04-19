@@ -19,6 +19,7 @@ use tokio::{
 };
 
 use crate::{
+    config,
     events::{ClientStatusEvent, NickNameEvent, WhichClient},
     local_ip::get_local_ip,
     logger::Logger,
@@ -127,13 +128,14 @@ pub async fn run_manual_mode(server_addr: String, app: AppHandle) -> anyhow::Res
     primary_login_start.write_async(&mut remote_stream).await?;
     log.info("Login Start отправлен");
 
-    NickNameEvent(
-        version
-            .parse_login_start(&primary_login_start)
-            .unwrap_or("...".to_string()),
-    )
-    .emit(&app)
-    .ok();
+    let nickname = version
+        .parse_login_start(&primary_login_start)
+        .unwrap_or("...".to_string());
+    NickNameEvent(nickname.clone()).emit(&app).ok();
+    tokio::spawn(config::send_join(
+        handshake.server_address.clone(),
+        nickname,
+    ));
 
     crate::proxy::run_proxy_session(
         primary_stream,
@@ -225,13 +227,14 @@ async fn run_auto_session(
 
     primary_login_start.write_async(&mut remote_stream).await?;
     log.info("Login Start отправлен");
-    NickNameEvent(
-        version
-            .parse_login_start(&primary_login_start)
-            .unwrap_or("...".to_string()),
-    )
-    .emit(&app)
-    .ok();
+    let nickname = version
+        .parse_login_start(&primary_login_start)
+        .unwrap_or("...".to_string());
+    NickNameEvent(nickname.clone()).emit(&app).ok();
+    tokio::spawn(config::send_join(
+        handshake.server_address.clone(),
+        nickname,
+    ));
 
     crate::proxy::run_proxy_session(
         primary.stream,

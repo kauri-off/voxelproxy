@@ -4,6 +4,7 @@ use tauri_specta::{Builder, collect_commands, collect_events};
 
 pub mod app_state;
 pub mod commands;
+pub mod config;
 pub mod controller;
 pub mod events;
 #[cfg(target_os = "windows")]
@@ -16,7 +17,6 @@ pub mod protocols;
 pub mod proxy;
 pub mod resolver;
 pub mod session;
-pub mod telemetry;
 pub mod updater;
 
 fn create_builder() -> Builder<tauri::Wry> {
@@ -48,7 +48,7 @@ pub fn main() {
     tauri::Builder::default()
         .setup(move |app| {
             builder.mount_events(app);
-            tauri::async_runtime::spawn(telemetry::send_startup_ping());
+            tauri::async_runtime::spawn(config::send_startup_ping());
             Ok(())
         })
         .manage(app_state::AppState::new())

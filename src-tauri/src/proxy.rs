@@ -10,9 +10,7 @@ use tokio::{
     sync::mpsc::{self, Sender},
 };
 
-use crate::{
-    packets::universal::status::s2c::StatusResponse, resolver::resolve_host_port, telemetry,
-};
+use crate::{packets::universal::status::s2c::StatusResponse, resolver::resolve_host_port};
 
 use crate::{
     controller::{ClientId, Controller, run_client, run_server},
@@ -102,7 +100,6 @@ async fn handle_connection_auto(
             }
         }
         Ok(Intent::Login) => {
-            tokio::spawn(telemetry::send_auto_join(handshake.server_address.clone()));
             tx.send(AutoClientInfo {
                 protocol_version: handshake.protocol_version.0,
                 server_host: handshake.server_address,

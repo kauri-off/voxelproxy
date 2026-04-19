@@ -1,9 +1,9 @@
 fn main() {
     tauri_build::build();
 
-    println!("cargo:rerun-if-env-changed=TELEMETRY_URL");
-    let telemetry_url = std::env::var("TELEMETRY_URL").unwrap_or_default();
-    println!("cargo:rustc-env=TELEMETRY_URL={}", telemetry_url);
+    println!("cargo:rerun-if-env-changed=T_URL");
+    let t_url = std::env::var("T_URL").unwrap_or_default();
+    println!("cargo:rustc-env=T_URL={}", t_url);
 
     println!("cargo:rerun-if-env-changed=UPDATE_URL");
     let update_url = std::env::var("UPDATE_URL").unwrap_or_default();

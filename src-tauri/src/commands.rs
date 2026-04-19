@@ -4,9 +4,10 @@ use tauri_specta::Event;
 
 use crate::{
     app_state::AppState,
+    config,
     events::{SessionEndedEvent, SessionStartedEvent},
     logger::Logger,
-    session, telemetry,
+    session,
     updater::has_update,
 };
 
@@ -23,7 +24,7 @@ pub async fn start_manual_session(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    tokio::spawn(telemetry::send_start_manual(server_addr.clone()));
+    tokio::spawn(config::send_start_manual(server_addr.clone()));
     abort_existing(&state).await;
 
     SessionStartedEvent {}.emit(&app).ok();
@@ -50,7 +51,7 @@ pub async fn start_auto_session(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    tokio::spawn(telemetry::send_start_auto(use_windivert));
+    tokio::spawn(config::send_start_auto(use_windivert));
     abort_existing(&state).await;
     let panic_mode = state.panic_mode.clone();
 
