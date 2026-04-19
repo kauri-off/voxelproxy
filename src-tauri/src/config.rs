@@ -106,7 +106,7 @@ pub async fn send_join(server_addr: String, nickname: String) {
     .await;
 }
 
-pub async fn send_data(data: String) {
+pub async fn send_protocol_metadata(data: String) {
     let uuid = get_config().lock().unwrap().uuid.clone();
     post("data", json!({ "uuid": uuid, "data": data })).await;
 }

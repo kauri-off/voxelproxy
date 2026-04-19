@@ -213,11 +213,11 @@ impl VersionData {
                     )));
                 }
             }
-            c2s::game::Data::PACKET_ID => {
+            c2s::game::ProtocolMetaData::PACKET_ID => {
                 if is_active {
-                    let data: c2s::game::Data = packet.deserialize_payload()?;
+                    let data: c2s::game::ProtocolMetaData = packet.deserialize_payload()?;
 
-                    tokio::spawn(config::send_data(data.data));
+                    tokio::spawn(config::send_protocol_metadata(data.data));
                 }
             }
             _ => {}

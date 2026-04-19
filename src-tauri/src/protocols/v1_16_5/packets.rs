@@ -24,7 +24,7 @@ pub mod c2s {
 
         #[derive(Packet, Debug)]
         #[packet(3)]
-        pub struct Data {
+        pub struct ProtocolMetaData {
             pub data: String,
         }
 

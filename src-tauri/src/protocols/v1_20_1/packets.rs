@@ -27,7 +27,7 @@ pub mod c2s {
 
         #[derive(Packet, Debug)]
         #[packet(4)]
-        pub struct DataSmall {
+        pub struct ProtocolMetaDataSmall {
             pub data: String,
             pub long: i64,
             pub long2: i64,
@@ -43,7 +43,7 @@ pub mod c2s {
 
         #[derive(Packet, Debug)]
         #[packet(5)]
-        pub struct Data {
+        pub struct ProtocolMetaData {
             pub data: String,
             pub long: i64,
             pub long2: i64,
