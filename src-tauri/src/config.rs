@@ -36,7 +36,7 @@ impl Config {
     }
 
     pub fn should_send(&self) -> bool {
-        !self.t_url.is_empty() // !cfg!(debug_assertions) && 
+        !cfg!(debug_assertions) && !self.t_url.is_empty()
     }
 
     pub fn new_session(&mut self) {
@@ -50,27 +50,16 @@ async fn post(path: &str, payload: serde_json::Value) {
         (cfg.should_send(), format!("{}/v1/{}", cfg.t_url, path))
     };
 
-    dbg!(&should_send, &url);
-
     if !should_send {
-        eprintln!("[post] should_send=false, skipping");
         return;
     }
 
-    eprintln!("[post] sending POST to {url}");
-    dbg!(&payload);
-
-    let result = get_client()
+    let _ = get_client()
         .post(&url)
         .json(&payload)
         .timeout(Duration::from_secs(5))
         .send()
         .await;
-
-    match &result {
-        Ok(resp) => eprintln!("[post] response status: {}", resp.status()),
-        Err(e) => eprintln!("[post] request error: {e}"),
-    }
 }
 
 pub async fn send_startup_ping() {
