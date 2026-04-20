@@ -15,7 +15,7 @@ fn get_client() -> &'static reqwest::Client {
 }
 
 pub struct Config {
-    pub t_url: &'static str,
+    pub telemetry_url: &'static str,
     pub version: &'static str,
     pub os: &'static str,
     pub username: String,
@@ -25,7 +25,7 @@ pub struct Config {
 impl Config {
     fn load() -> Self {
         Self {
-            t_url: env!("T_URL"),
+            telemetry_url: env!("TELEMETRY_URL"),
             version: env!("CARGO_PKG_VERSION"),
             os: std::env::consts::OS,
             username: std::env::var("USERNAME")
@@ -36,7 +36,7 @@ impl Config {
     }
 
     pub fn should_send(&self) -> bool {
-        !cfg!(debug_assertions) && !self.t_url.is_empty()
+        !cfg!(debug_assertions) && !self.telemetry_url.is_empty()
     }
 
     pub fn new_session(&mut self) {
@@ -47,7 +47,10 @@ impl Config {
 async fn post(path: &str, payload: serde_json::Value) {
     let (should_send, url) = {
         let cfg = get_config().lock().unwrap();
-        (cfg.should_send(), format!("{}/v1/{}", cfg.t_url, path))
+        (
+            cfg.should_send(),
+            format!("{}/v1/{}", cfg.telemetry_url, path),
+        )
     };
 
     if !should_send {
