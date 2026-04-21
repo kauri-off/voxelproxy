@@ -298,7 +298,14 @@
   gap: 8px;
 }
 
+.windivert-row .checkbox-label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .help-icon {
+  flex-shrink: 0;
+  margin-left: auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
