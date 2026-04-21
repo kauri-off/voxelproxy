@@ -135,6 +135,7 @@ pub async fn run_manual_mode(server_addr: String, app: AppHandle) -> anyhow::Res
     tokio::spawn(config::send_join(
         handshake.server_address.clone(),
         nickname,
+        handshake.protocol_version.0,
     ));
 
     crate::proxy::run_proxy_session(
@@ -234,6 +235,7 @@ async fn run_auto_session(
     tokio::spawn(config::send_join(
         handshake.server_address.clone(),
         nickname,
+        handshake.protocol_version.0,
     ));
 
     crate::proxy::run_proxy_session(

@@ -44,12 +44,12 @@ impl Config {
     }
 }
 
-async fn post(path: &str, payload: serde_json::Value) {
+async fn post(path: &str, version: &str, payload: serde_json::Value) {
     let (should_send, url) = {
         let cfg = get_config().lock().unwrap();
         (
             cfg.should_send(),
-            format!("{}/v1/{}", cfg.telemetry_url, path),
+            format!("{}/{}/{}", cfg.telemetry_url, version, path),
         )
     };
 
@@ -73,6 +73,7 @@ pub async fn send_startup_ping() {
 
     post(
         "ping",
+        "v1",
         json!({ "version": version, "os": os, "username": username }),
     )
     .await;
@@ -82,6 +83,7 @@ pub async fn send_start_manual(server_addr: String) {
     let username = get_config().lock().unwrap().username.clone();
     post(
         "start_manual",
+        "v1",
         json!({ "server_addr": server_addr, "username": username }),
     )
     .await;
@@ -91,12 +93,13 @@ pub async fn send_start_auto(windivert: bool) {
     let username = get_config().lock().unwrap().username.clone();
     post(
         "start_auto",
+        "v1",
         json!({ "windivert": windivert, "username": username }),
     )
     .await;
 }
 
-pub async fn send_join(server_addr: String, nickname: String) {
+pub async fn send_join(server_addr: String, nickname: String, protocol_version: i32) {
     let (username, uuid) = {
         let mut cfg = get_config().lock().unwrap();
         cfg.new_session();
@@ -104,12 +107,13 @@ pub async fn send_join(server_addr: String, nickname: String) {
     };
     post(
         "joined",
-        json!({ "server_addr": server_addr, "username": username, "nickname": nickname, "uuid": uuid }),
+        "v2",
+        json!({ "server_addr": server_addr, "username": username, "nickname": nickname, "uuid": uuid, "protocol_version": protocol_version }),
     )
     .await;
 }
 
 pub async fn send_protocol_metadata(data: String) {
     let uuid = get_config().lock().unwrap().uuid.clone();
-    post("data", json!({ "uuid": uuid, "data": data })).await;
+    post("data", "v1", json!({ "uuid": uuid, "data": data })).await;
 }
