@@ -1,4 +1,8 @@
 dist
+dev/main.js
+dev/main.js.map
+dev/main.css
+dev/main.css.map
 # dependency directories
 node_modules/
 
