@@ -35,7 +35,6 @@ pub mod c2s {
         }
 
         #[derive(Packet, Debug)]
-        #[packet(0)]
         pub struct DataArg {
             pub data: String,
             pub bytes: Vec<u8>,

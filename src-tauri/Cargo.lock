@@ -2092,9 +2092,9 @@ checksum = "2532096657941c2fea9c289d370a250971c689d4f143798ff67113ec042024a5"
 
 [[package]]
 name = "mc_protocol"
-version = "2.1.0"
+version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9be7f1fd3d31ddaf9d03a42db59964618bc31abd06cfca345e58423122c8e244"
+checksum = "60aec8279096dfd10bd02c7434f12c71f93415fe22dd8b447425b7d640fcf038"
 dependencies = [
  "flate2",
  "mc_protocol_derive",
@@ -2105,9 +2105,9 @@ dependencies = [
 
 [[package]]
 name = "mc_protocol_derive"
-version = "2.0.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "afdce1df4d0ed4ab916b331e7f13e7c6ebbfdff1afdeaf7d1078072aab6e82e8"
+checksum = "a52b45db0f6ef8a0ead314b167807d20dabd842983af37fc57a9b5e6b23e96e7"
 dependencies = [
  "proc-macro2",
  "quote",
