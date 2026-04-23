@@ -36,7 +36,7 @@ pub struct VersionData {
 }
 
 impl VersionData {
-    pub const VERSION: &'static str = "1.21.4";
+    pub const VERSION: &'static str = "1.21.8";
 
     pub fn new(app: AppHandle) -> Self {
         Self {

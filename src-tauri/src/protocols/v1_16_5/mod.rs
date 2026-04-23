@@ -106,10 +106,6 @@ impl VersionProtocol for VersionData {
             Err(_) => None,
         }
     }
-
-    fn protocol_string(&self) -> &'static str {
-        Self::VERSION
-    }
 }
 
 impl VersionData {

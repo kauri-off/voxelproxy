@@ -1,6 +1,7 @@
 pub mod v1_16_5;
 pub mod v1_20_1;
 pub mod v1_21_4;
+pub mod v1_21_8;
 
 use enum_dispatch::enum_dispatch;
 use mc_protocol::packet::RawPacket;
@@ -21,7 +22,6 @@ pub trait VersionProtocol {
     fn update_threshold(&mut self, threshold: Option<i32>);
     fn handle_client_disconnect(&mut self, new_active: ClientId) -> Option<ClientDisconnectEvent>;
     fn parse_login_start(&self, packet: &RawPacket) -> Option<String>;
-    fn protocol_string(&self) -> &'static str;
 }
 
 pub enum ServerBoundEvent {
@@ -40,6 +40,7 @@ pub enum Version {
     V1_16_5(v1_16_5::VersionData),
     V1_20_1(v1_20_1::VersionData),
     V1_21_4(v1_21_4::VersionData),
+    V1_21_8(v1_21_8::VersionData),
 }
 
 impl Version {
@@ -50,6 +51,7 @@ impl Version {
             754 => Some(Version::V1_16_5(v1_16_5::VersionData::new(app))),
             763 => Some(Version::V1_20_1(v1_20_1::VersionData::new(app))),
             769 => Some(Version::V1_21_4(v1_21_4::VersionData::new(app))),
+            772 => Some(Version::V1_21_8(v1_21_8::VersionData::new(app))),
             _ => None,
         }
     }
@@ -59,6 +61,7 @@ impl Version {
             v1_16_5::VersionData::VERSION,
             v1_20_1::VersionData::VERSION,
             v1_21_4::VersionData::VERSION,
+            v1_21_8::VersionData::VERSION,
         ]
     }
 }
