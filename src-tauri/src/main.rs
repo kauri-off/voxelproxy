@@ -27,6 +27,7 @@ fn create_builder() -> Builder<tauri::Wry> {
             commands::start_auto_session,
             commands::stop_session,
             commands::get_version,
+            commands::get_supported_versions,
             commands::get_local_ip_addr,
             commands::check_updates,
             commands::open_url,

@@ -21,6 +21,7 @@ pub trait VersionProtocol {
     fn update_threshold(&mut self, threshold: Option<i32>);
     fn handle_client_disconnect(&mut self, new_active: ClientId) -> Option<ClientDisconnectEvent>;
     fn parse_login_start(&self, packet: &RawPacket) -> Option<String>;
+    fn protocol_string(&self) -> &'static str;
 }
 
 pub enum ServerBoundEvent {
@@ -51,5 +52,13 @@ impl Version {
             769 => Some(Version::V1_21_4(v1_21_4::VersionData::new(app))),
             _ => None,
         }
+    }
+
+    pub fn supported_versions() -> &'static [&'static str] {
+        &[
+            v1_16_5::VersionData::VERSION,
+            v1_20_1::VersionData::VERSION,
+            v1_21_4::VersionData::VERSION,
+        ]
     }
 }

@@ -36,6 +36,8 @@ pub struct VersionData {
 }
 
 impl VersionData {
+    pub const VERSION: &'static str = "1.21.4";
+
     pub fn new(app: AppHandle) -> Self {
         Self {
             active_state_in: State::Login,
@@ -134,6 +136,10 @@ impl VersionProtocol for VersionData {
             },
             Err(_) => None,
         }
+    }
+
+    fn protocol_string(&self) -> &'static str {
+        Self::VERSION
     }
 }
 

@@ -9,6 +9,7 @@ export const commands = {
 	startAutoSession: (useWindivert: boolean, portMin: number, portMax: number) => typedError<null, string>(__TAURI_INVOKE("start_auto_session", { useWindivert, portMin, portMax })),
 	stopSession: () => typedError<null, string>(__TAURI_INVOKE("stop_session")),
 	getVersion: () => __TAURI_INVOKE<string>("get_version"),
+	getSupportedVersions: () => __TAURI_INVOKE<string[]>("get_supported_versions"),
 	getLocalIpAddr: () => __TAURI_INVOKE<string>("get_local_ip_addr"),
 	checkUpdates: () => typedError<{
 	tag: string,

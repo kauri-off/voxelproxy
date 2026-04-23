@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { AppState } from "../types";
 import { commands, LogLevel } from "../bindings";
 
@@ -40,6 +40,11 @@ interface Props {
 
 export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
   const [isStarting, setIsStarting] = useState(false);
+  const [supportedVersions, setSupportedVersions] = useState<string[]>([]);
+
+  useEffect(() => {
+    commands.getSupportedVersions().then(setSupportedVersions);
+  }, []);
 
   const start = useCallback(async () => {
     if (isStarting) return;
@@ -262,6 +267,12 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
         >
           {buttonText}
         </button>
+
+        {supportedVersions.length > 0 && (
+          <div className="supported-versions">
+            Поддерживаются: {supportedVersions.join(", ")}
+          </div>
+        )}
       </div>
     </div>
   );

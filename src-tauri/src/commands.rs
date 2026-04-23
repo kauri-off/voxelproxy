@@ -8,6 +8,7 @@ use crate::{
     config,
     events::{SessionEndedEvent, SessionStartedEvent},
     logger::Logger,
+    protocols::Version,
     session,
     updater::has_update,
 };
@@ -91,6 +92,15 @@ pub async fn stop_session(app: AppHandle, state: State<'_, AppState>) -> Result<
 #[specta::specta]
 pub fn get_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_supported_versions() -> Vec<String> {
+    Version::supported_versions()
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
 }
 
 #[tauri::command]
