@@ -1,11 +1,14 @@
 import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
 
-// Dev is served by esbuild via `node dev.mjs` (see package.json "dev").
-// This config only runs for `vite build`. JSX is handled by Vite's built-in
-// esbuild transform using `jsx: "react-jsx"` from tsconfig.json, so no
-// React plugin is needed.
 export default defineConfig({
+  plugins: [react()],
   clearScreen: false,
+  server: {
+    port: 5173,
+    strictPort: true,
+    host: '127.0.0.1',
+  },
   envPrefix: ['VITE_', 'TAURI_'],
   build: {
     outDir: 'dist',
