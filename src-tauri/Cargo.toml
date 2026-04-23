@@ -1,6 +1,6 @@
 [package]
 name = "voxelproxy"
-version = "6.2.5"
+version = "6.2.6"
 edition = "2024"
 authors = ["kauri-off <https://github.com/kauri-off>"]
 description = "Бесплатный аналог takker.ru"
@@ -24,6 +24,8 @@ uuid = { version = "1.23.1", features = ["v4"] }
 tauri-specta = { version = "2.0.0-rc.24", features = ["derive", "typescript"] }
 specta-typescript = "0.0.11"
 specta = { version = "2.0.0-rc.24", features = ["derive"] }
+pulldown-cmark = { version = "0.13.3", default-features = false, features = ["html"] }
+semver = "1.0.28"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [
@@ -35,6 +37,7 @@ windows = { version = "0.62.2", features = [
 ] }
 windivert = "0.6.0"
 etherparse = "0.20.1"
+winreg = "0.56"
 
 [target.'cfg(not(windows))'.dependencies]
 get_if_addrs = "0.5.3"

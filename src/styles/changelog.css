@@ -1,0 +1,172 @@
+/* ── Changelog modal ──────────────────────────────────────────── */
+.changelog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: changelog-fade-in 0.15s ease-out;
+}
+
+@keyframes changelog-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.changelog-card {
+  width: min(560px, calc(100vw - 48px));
+  max-height: min(70vh, 560px);
+  display: flex;
+  flex-direction: column;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  animation: changelog-pop-in 0.18s ease-out;
+}
+
+@keyframes changelog-pop-in {
+  from { transform: translateY(8px) scale(0.98); opacity: 0; }
+  to   { transform: none; opacity: 1; }
+}
+
+.changelog-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-surface2);
+}
+
+.changelog-card__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-text);
+}
+
+.changelog-card__title .arrow {
+  color: var(--c-muted);
+  margin: 0 6px;
+}
+
+.changelog-card__title .to {
+  color: var(--c-accent);
+}
+
+.changelog-card__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--c-muted);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  transition: color 0.15s, background 0.15s;
+}
+
+.changelog-card__close:hover {
+  color: var(--c-text);
+  background: var(--c-bg);
+}
+
+.changelog-card__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 24px;
+}
+
+.changelog-section + .changelog-section {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--c-border);
+}
+
+.changelog-section__version {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--c-accent);
+  background: rgba(var(--c-accent-rgb), 0.12);
+  padding: 3px 10px;
+  border-radius: 999px;
+  letter-spacing: 0.03em;
+  margin-bottom: 10px;
+}
+
+.changelog-body {
+  color: var(--c-text);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.changelog-body p       { margin: 0 0 8px 0; }
+.changelog-body p:last-child { margin-bottom: 0; }
+.changelog-body ul,
+.changelog-body ol      { margin: 0 0 8px 0; padding-left: 22px; }
+.changelog-body li      { margin-bottom: 3px; }
+.changelog-body li::marker { color: var(--c-muted); }
+.changelog-body a       { color: var(--c-accent); text-decoration: none; }
+.changelog-body a:hover { text-decoration: underline; }
+.changelog-body code    {
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 12.5px;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.changelog-body pre {
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+.changelog-body pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+.changelog-body h1,
+.changelog-body h2,
+.changelog-body h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 14px 0 6px 0;
+  color: var(--c-text);
+}
+.changelog-body strong { color: var(--c-text); font-weight: 600; }
+.changelog-body em     { color: var(--c-text); }
+
+.changelog-card__footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 20px;
+  border-top: 1px solid var(--c-border);
+  background: var(--c-surface2);
+}
+
+.changelog-card__ok {
+  padding: 8px 22px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--c-accent);
+  border: none;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+
+.changelog-card__ok:hover  { background: #4a7de0; }
+.changelog-card__ok:active { transform: scale(0.98); }

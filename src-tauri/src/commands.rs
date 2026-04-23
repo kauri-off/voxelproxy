@@ -4,6 +4,7 @@ use tauri_specta::Event;
 
 use crate::{
     app_state::AppState,
+    changelog::{self, ChangelogEntry},
     config,
     events::{SessionEndedEvent, SessionStartedEvent},
     logger::Logger,
@@ -138,6 +139,36 @@ pub async fn set_panic_mode(value: bool, state: State<'_, AppState>) -> Result<(
     let mut panic_mode = state.panic_mode.lock().await;
     *panic_mode = value;
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_pending_changelogs() -> Result<Vec<ChangelogEntry>, String> {
+    let current = env!("CARGO_PKG_VERSION");
+    let last_seen = changelog::read_last_seen();
+
+    if last_seen.is_none() {
+        changelog::write_last_seen(current)?;
+        return Ok(Vec::new());
+    }
+
+    let entries = changelog::pending_for(last_seen.as_deref(), current, changelog::bundled());
+
+    if entries.is_empty() {
+        if let Some(stored) = last_seen.as_deref() {
+            if stored != current {
+                changelog::write_last_seen(current)?;
+            }
+        }
+    }
+
+    Ok(entries)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn acknowledge_changelog() -> Result<(), String> {
+    changelog::write_last_seen(env!("CARGO_PKG_VERSION"))
 }
 
 async fn abort_existing(state: &State<'_, AppState>) {

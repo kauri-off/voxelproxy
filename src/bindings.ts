@@ -17,6 +17,8 @@ export const commands = {
 	openUrl: (url: string) => __TAURI_INVOKE<void>("open_url", { url }),
 	getPlatform: () => __TAURI_INVOKE<string>("get_platform"),
 	setPanicMode: (value: boolean) => typedError<null, string>(__TAURI_INVOKE("set_panic_mode", { value })),
+	getPendingChangelogs: () => typedError<ChangelogEntry[], string>(__TAURI_INVOKE("get_pending_changelogs")),
+	acknowledgeChangelog: () => typedError<null, string>(__TAURI_INVOKE("acknowledge_changelog")),
 };
 
 /** Events */
@@ -29,6 +31,11 @@ export const events = {
 };
 
 /* Types */
+export type ChangelogEntry = {
+	version: string,
+	html: string,
+};
+
 export type ClientStatusEvent = {
 	which: WhichClient,
 	online: boolean,

@@ -1,6 +1,6 @@
 {
   "productName": "VoxelProxy",
-  "version": "6.2.5",
+  "version": "6.2.6",
   "identifier": "com.kauri-off.voxelproxy",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -16,7 +16,7 @@
         "width": 960,
         "height": 640,
         "minWidth": 760,
-        "minHeight": 500,
+        "minHeight": 550,
         "resizable": true
       }
     ],

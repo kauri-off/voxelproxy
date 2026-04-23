@@ -3,6 +3,7 @@
 use tauri_specta::{Builder, collect_commands, collect_events};
 
 pub mod app_state;
+pub mod changelog;
 pub mod commands;
 pub mod config;
 pub mod controller;
@@ -30,7 +31,9 @@ fn create_builder() -> Builder<tauri::Wry> {
             commands::check_updates,
             commands::open_url,
             commands::get_platform,
-            commands::set_panic_mode
+            commands::set_panic_mode,
+            commands::get_pending_changelogs,
+            commands::acknowledge_changelog
         ])
         .events(collect_events![
             events::ProxyLogEvent,
