@@ -6,6 +6,17 @@ import { defineConfig } from 'vite';
 // React plugin is needed.
 export default defineConfig({
   clearScreen: false,
+<<<<<<< HEAD
+=======
+  server: {
+    port: 5173,
+    strictPort: true,
+    host: '127.0.0.1',
+    watch: {
+      ignored: ["/src-tauri/"],
+    },
+  },
+>>>>>>> 70f455d (Fix)
   envPrefix: ['VITE_', 'TAURI_'],
   build: {
     outDir: 'dist',
