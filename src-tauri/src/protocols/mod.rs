@@ -1,5 +1,6 @@
 pub mod v1_16_5;
 pub mod v1_20_1;
+pub mod v1_21_11;
 pub mod v1_21_4;
 pub mod v1_21_8;
 
@@ -41,6 +42,7 @@ pub enum Version {
     V1_20_1(v1_20_1::VersionData),
     V1_21_4(v1_21_4::VersionData),
     V1_21_8(v1_21_8::VersionData),
+    V1_21_11(v1_21_11::VersionData),
 }
 
 impl Version {
@@ -52,6 +54,7 @@ impl Version {
             763 => Some(Version::V1_20_1(v1_20_1::VersionData::new(app))),
             769 => Some(Version::V1_21_4(v1_21_4::VersionData::new(app))),
             772 => Some(Version::V1_21_8(v1_21_8::VersionData::new(app))),
+            774 => Some(Version::V1_21_11(v1_21_11::VersionData::new(app))),
             _ => None,
         }
     }
@@ -62,6 +65,7 @@ impl Version {
             v1_20_1::VersionData::VERSION,
             v1_21_4::VersionData::VERSION,
             v1_21_8::VersionData::VERSION,
+            v1_21_11::VersionData::VERSION,
         ]
     }
 }
