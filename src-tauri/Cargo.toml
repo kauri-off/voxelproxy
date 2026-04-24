@@ -21,11 +21,11 @@ mc_protocol = "2.1.1"
 enum_dispatch = "0.3.13"
 open = "5.3.4"
 uuid = { version = "1.23.1", features = ["v4"] }
-tauri-specta = { version = "2.0.0-rc.24", features = ["derive", "typescript"] }
 specta-typescript = "0.0.11"
-specta = { version = "2.0.0-rc.24", features = ["derive"] }
 pulldown-cmark = { version = "0.13.3", default-features = false, features = ["html"] }
 semver = "1.0.28"
+specta = { version = "2.0.0-rc.24", features = ["derive"] }
+tauri-specta = { version = "2.0.0-rc.24", features = ["derive", "typescript"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [
