@@ -1,4 +1,3 @@
-use std::net::Ipv4Addr;
 use std::sync::Arc;
 
 use mc_protocol::{
@@ -21,7 +20,6 @@ use tokio::{
 use crate::{
     config,
     events::{ClientStatusEvent, NickNameEvent, WhichClient},
-    local_ip::get_local_ip,
     logger::Logger,
     packets::universal::{Intent, handshaking::c2s::Handshake},
     protocols::{Version, VersionProtocol},
@@ -42,10 +40,6 @@ pub async fn run_manual_mode(server_addr: String, app: AppHandle) -> anyhow::Res
         Err(e) => anyhow::bail!("Ошибка при создании сокета: {}", e),
     };
 
-    let addr = get_local_ip().unwrap_or(Ipv4Addr::new(127, 0, 0, 1));
-    log.info(format!("Ожидание подключений на {}:{}", addr, BIND_PORT));
-    log.info("Порядок: сначала основной клиент, потом дополнительный");
-
     let (tx, mut rx) = mpsc::channel(HANDSHAKE_CHANNEL_CAPACITY);
     let mut _dispatch_set: JoinSet<()> = JoinSet::new();
     _dispatch_set.spawn(crate::proxy::listen_and_dispatch(
@@ -57,7 +51,6 @@ pub async fn run_manual_mode(server_addr: String, app: AppHandle) -> anyhow::Res
 
     let (mut primary_stream, primary_protocol) = rx.recv().await.unwrap();
     let primary_login_start = RawPacket::read_async(&mut primary_stream).await?;
-    log.success("Основной клиент подключён");
 
     ClientStatusEvent {
         which: WhichClient::Primary,
@@ -68,7 +61,6 @@ pub async fn run_manual_mode(server_addr: String, app: AppHandle) -> anyhow::Res
 
     let (mut secondary_stream, secondary_protocol) = rx.recv().await.unwrap();
     let _ = RawPacket::read_async(&mut secondary_stream).await?;
-    log.success("Дополнительный клиент подключён");
     ClientStatusEvent {
         which: WhichClient::Secondary,
         online: true,
@@ -86,7 +78,7 @@ pub async fn run_manual_mode(server_addr: String, app: AppHandle) -> anyhow::Res
         anyhow::bail!("Версии клиентов различаются");
     }
 
-    let version = match Version::from_protocol(primary_protocol, app.clone()) {
+    let version = match Version::from_protocol(primary_protocol) {
         Some(v) => v,
         None => {
             crate::proxy::send_login_error(
@@ -99,7 +91,6 @@ pub async fn run_manual_mode(server_addr: String, app: AppHandle) -> anyhow::Res
         }
     };
 
-    log.info(format!("Подключение к {}...", remote_addr));
     let mut remote_stream = match TcpStream::connect(remote_addr).await {
         Ok(t) => t,
         Err(_) => {
@@ -123,10 +114,8 @@ pub async fn run_manual_mode(server_addr: String, app: AppHandle) -> anyhow::Res
     UncompressedPacket::from_packet(&handshake)?
         .write_async(&mut remote_stream)
         .await?;
-    log.info("Handshake отправлен");
 
     primary_login_start.write_async(&mut remote_stream).await?;
-    log.info("Login Start отправлен");
 
     let nickname = version
         .parse_login_start(&primary_login_start)
@@ -167,7 +156,7 @@ async fn run_auto_session(
         return Ok(());
     }
 
-    let version = match Version::from_protocol(primary.protocol_version, app.clone()) {
+    let version = match Version::from_protocol(primary.protocol_version) {
         Some(v) => v,
         None => {
             crate::proxy::send_login_error(
@@ -200,7 +189,6 @@ async fn run_auto_session(
         }
     };
 
-    log.info(format!("Подключение к {}...", remote_addr));
     let mut remote_stream = match TcpStream::connect(remote_addr).await {
         Ok(s) => s,
         Err(_) => {
@@ -224,10 +212,8 @@ async fn run_auto_session(
     UncompressedPacket::from_packet(&handshake)?
         .write_async(&mut remote_stream)
         .await?;
-    log.info("Handshake отправлен");
 
     primary_login_start.write_async(&mut remote_stream).await?;
-    log.info("Login Start отправлен");
     let nickname = version
         .parse_login_start(&primary_login_start)
         .unwrap_or("...".to_string());
@@ -329,17 +315,6 @@ pub async fn run_automatic_mode(
         Ok(l) => l,
         Err(e) => anyhow::bail!("Ошибка при создании сокета: {}", e),
     };
-    if use_windivert {
-        log.info(format!(
-            "Порты {}–{} перехватываются WinDivert",
-            port_min, port_max
-        ));
-    }
-    log.info("Порядок: сначала дополнительный клиент, затем основной");
-    log.info(format!(
-        "Основной клиент подключайтесь к 127.0.0.1:{}",
-        BIND_PORT
-    ));
 
     let (tx, mut rx) = mpsc::channel(HANDSHAKE_CHANNEL_CAPACITY);
     let mut session_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
@@ -364,17 +339,12 @@ pub async fn run_automatic_mode(
             .ok();
             session_set.spawn(run_auto_session(client, secondary, app.clone()));
         } else {
-            let key = (client.server_host.clone(), client.server_port);
             ClientStatusEvent {
                 which: WhichClient::Secondary,
                 online: true,
             }
             .emit(&app)
             .ok();
-            log.info(format!(
-                "Дополнительный клиент подключён ({}:{}), ожидание основного...",
-                key.0, key.1
-            ));
             pending.push(client);
         }
     }
@@ -390,14 +360,7 @@ pub async fn run_automatic_mode(
     app: AppHandle,
     panic_mode: Arc<Mutex<bool>>,
 ) -> anyhow::Result<()> {
-    let log = Logger::new(&app);
     let listener = TcpListener::bind(format!("0.0.0.0:{}", BIND_PORT)).await?;
-    log.info(format!("Ожидание подключений на порту {}", BIND_PORT));
-    log.info("Порядок: сначала дополнительный клиент, затем основной");
-    log.info(format!(
-        "Основной клиент подключайтесь к 127.0.0.1:{}",
-        BIND_PORT
-    ));
 
     let (tx, mut rx) = mpsc::channel(HANDSHAKE_CHANNEL_CAPACITY);
     let mut session_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
@@ -422,17 +385,12 @@ pub async fn run_automatic_mode(
             .ok();
             session_set.spawn(run_auto_session(client, secondary, app.clone()));
         } else {
-            let key = (client.server_host.clone(), client.server_port);
             ClientStatusEvent {
                 which: WhichClient::Secondary,
                 online: true,
             }
             .emit(&app)
             .ok();
-            log.info(format!(
-                "Дополнительный клиент подключён ({}:{}), ожидание основного...",
-                key.0, key.1
-            ));
             pending.push(client);
         }
     }

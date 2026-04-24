@@ -14,7 +14,6 @@ use crate::{packets::universal::status::s2c::StatusResponse, resolver::resolve_h
 
 use crate::{
     controller::{ClientId, Controller, run_client, run_server},
-    logger::Logger,
     packets::universal::{
         Intent,
         handshaking::c2s::Handshake,
@@ -216,7 +215,6 @@ pub async fn run_proxy_session(
     mut version: Version,
     app: AppHandle,
 ) -> anyhow::Result<()> {
-    let log = Logger::new(&app);
     let mut threshold = None;
 
     loop {
@@ -247,7 +245,6 @@ pub async fn run_proxy_session(
                 let packet = packet.to_raw_packet_compressed(threshold)?;
                 packet.write_async(&mut primary).await?;
                 packet.write_async(&mut secondary).await?;
-                log.success("Успешный вход");
                 break;
             }
             SetCompression::PACKET_ID => {
@@ -257,7 +254,6 @@ pub async fn run_proxy_session(
                 let packet = packet.to_raw_packet()?;
                 packet.write_async(&mut primary).await?;
                 packet.write_async(&mut secondary).await?;
-                log.info(format!("Сжатие: порог {} байт", compression.threshold.0));
             }
             _ => unreachable!(),
         }
@@ -299,7 +295,6 @@ pub async fn run_proxy_session(
     ));
     tokio::spawn(run_server(remote_read, remote_write, event_tx, remote_rx));
 
-    log.success("VoxelProxy запущен!");
     controller.run().await;
     Ok(())
 }

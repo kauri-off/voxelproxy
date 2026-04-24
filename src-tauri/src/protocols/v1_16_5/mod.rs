@@ -4,13 +4,11 @@ use mc_protocol::{
     packet::{RawPacket, UncompressedPacket},
     varint::VarInt,
 };
-use tauri::AppHandle;
 
 use super::VersionProtocol;
 use crate::{
     config,
     controller::ClientId,
-    logger::Logger,
     protocols::{ClientBoundEvent, ClientDisconnectEvent, ServerBoundEvent},
 };
 use packets::{c2s, s2c};
@@ -21,13 +19,12 @@ pub struct VersionData {
     pub position: s2c::game::Position,
     pub pings: Vec<PingSync>,
     pub threshold: Option<i32>,
-    app: AppHandle,
 }
 
 impl VersionData {
     pub const VERSION: &'static str = "1.16.5";
 
-    pub fn new(app: AppHandle) -> Self {
+    pub fn new() -> Self {
         Self {
             position: s2c::game::Position {
                 id: VarInt(TELEPORT_ID),
@@ -40,7 +37,6 @@ impl VersionData {
             },
             pings: vec![],
             threshold: None,
-            app,
         }
     }
 }
@@ -69,10 +65,8 @@ impl VersionProtocol for VersionData {
     fn handle_client_disconnect(&mut self, new_active: ClientId) -> Option<ClientDisconnectEvent> {
         let mut packets = vec![];
 
-        let log = Logger::new(&self.app);
         self.pings.retain(|t| {
             if t.is_sent(new_active) {
-                log.info(format!("Синхронизация: Отправка: {}", t.uid));
                 let tx = c2s::game::Ack {
                     container_id: t.container_id,
                     uid: t.uid,
@@ -193,9 +187,7 @@ impl VersionData {
                     }
                 } else {
                     if let Some(head) = self.pings.get(0) {
-                        let log = Logger::new(&self.app);
                         if head.is_sent(client_id.opposite()) {
-                            log.info(format!("Синхронизация: Пропуск: {}", head.uid));
                             self.pings.remove(0);
                             return Ok(Some(ServerBoundEvent::SkipRelay));
                         }

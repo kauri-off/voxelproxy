@@ -17,12 +17,10 @@ export function useTauriListeners(
           phase: "running",
           clients: { primary: { online: false }, secondary: { online: false } },
         }));
-        addLog("Info", "Сессия запущена, ожидание клиентов...");
       });
 
       const unend = await events.sessionEndedEvent.listen(() => {
         setState((s) => ({ ...s, phase: "idle" }));
-        addLog("Info", "Сессия остановлена");
       });
 
       const unclient = await events.clientStatusEvent.listen((e) => {
@@ -36,13 +34,6 @@ export function useTauriListeners(
 
           return { ...prev, clients };
         });
-
-        addLog(
-          "Info",
-          `${which === "Primary" ? "Основное" : "Второе"} устройство ${
-            online ? "подключилось" : "отключилось"
-          }`
-        );
       });
 
       const unnickname = await events.nickNameEvent.listen((e) => {

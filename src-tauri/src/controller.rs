@@ -146,7 +146,6 @@ impl Controller {
                     }
 
                     if !(self.primary_active || self.secondary_active) {
-                        log.info("Оба клиента отключились, сессия завершена");
                         return;
                     }
 

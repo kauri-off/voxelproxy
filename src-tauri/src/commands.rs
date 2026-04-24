@@ -33,9 +33,8 @@ pub async fn start_manual_session(
 
     let handle = tokio::spawn(async move {
         let log = Logger::new(&app);
-        match session::run_manual_mode(server_addr, app.clone()).await {
-            Ok(()) => log.info("Сессия завершена"),
-            Err(e) => log.error(format!("{}", e)),
+        if let Err(e) = session::run_manual_mode(server_addr, app.clone()).await {
+            log.error(format!("{}", e));
         }
         SessionEndedEvent {}.emit(&app).ok();
     });
@@ -61,7 +60,7 @@ pub async fn start_auto_session(
 
     let handle = tokio::spawn(async move {
         let log = Logger::new(&app);
-        match session::run_automatic_mode(
+        if let Err(e) = session::run_automatic_mode(
             use_windivert,
             port_min,
             port_max,
@@ -70,8 +69,7 @@ pub async fn start_auto_session(
         )
         .await
         {
-            Ok(()) => log.info("Автосессия завершена"),
-            Err(e) => log.error(format!("{}", e)),
+            log.error(format!("{}", e));
         }
         SessionEndedEvent {}.emit(&app).ok();
     });
