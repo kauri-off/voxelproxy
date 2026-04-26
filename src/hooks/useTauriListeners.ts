@@ -40,7 +40,11 @@ export function useTauriListeners(
         setState((s) => ({...s, nickName: e.payload}))
       })
 
-      unlisteners = [unlog, unstart, unend, unclient, unnickname];
+      const unserveraddr = await events.serverAddrEvent.listen((e) => {
+        setState((s) => ({...s, serverAddr: e.payload}))
+      })
+
+      unlisteners = [unlog, unstart, unend, unclient, unnickname, unserveraddr];
     };
 
     setup();

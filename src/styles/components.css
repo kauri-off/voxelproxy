@@ -4,19 +4,22 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  width: 100%;
-  padding: 11px 20px;
-  font-size: 14px;
+  padding: 10px 24px;
+  font-size: 13px;
   font-weight: 600;
-  color: #fff;
-  background: var(--c-accent);
-  border: none;
+  color: var(--c-accent);
+  background: rgba(var(--c-accent-rgb), 0.1);
+  border: 1px solid rgba(var(--c-accent-rgb), 0.4);
   border-radius: 8px;
   cursor: pointer;
-  transition: background 0.15s, transform 0.1s;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.1s;
 }
 
-.btn-primary:hover { background: #4a7de0; }
+.btn-primary:hover {
+  background: rgba(var(--c-accent-rgb), 0.16);
+  border-color: rgba(var(--c-accent-rgb), 0.65);
+}
+
 .btn-primary:active { transform: scale(0.98); }
 .btn-primary:disabled {
   opacity: 0.45;
@@ -30,7 +33,7 @@
   gap: 4px;
   padding: 4px;
   background: var(--c-bg);
-  border-radius: 9px;
+  border-radius: 8px;
   border: 1px solid var(--c-border);
 }
 
@@ -92,10 +95,9 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 10px;
 }
 
-.port-range-row .hint {
+.hint {
   font-size: 12px;
   color: var(--c-muted);
   white-space: nowrap;
@@ -123,180 +125,163 @@
 .port-input:focus { border-color: var(--c-accent); }
 .port-input:disabled { opacity: 0.45; cursor: not-allowed; }
 
-/* ── Idle view layout ─────────────────────────────────────────── */
-.idle-view__body {
+/* ── Panel (shared layout for all main views) ─────────────────── */
+.panel-host {
   flex: 1;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 32px 36px;
 }
 
-.config-card {
+.panel {
+  display: flex;
+  flex-direction: column;
   width: 100%;
-  max-width: 380px;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: 14px;
-  padding: 28px 28px 24px;
+  max-width: 520px;
+  gap: 16px;
+}
+
+.panel__header {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 4px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--c-border);
 }
 
-.config-card__section { display: flex; flex-direction: column; gap: 8px; }
-
-.supported-versions {
-  font-size: 11px;
-  color: var(--c-muted);
-  text-align: center;
-  margin-top: -8px;
-}
-
-.section-label {
-  font-size: 11px;
+.panel__title {
+  font-size: 18px;
   font-weight: 700;
-  color: var(--c-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
+  color: var(--c-text);
+  letter-spacing: 0.02em;
 }
 
-/* ── Running view layout ──────────────────────────────────────── */
-.running-view__body {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  gap: 28px;
-}
-
-/* ── Connect instruction ──────────────────────────────────────── */
-.connect-instruction {
-  text-align: center;
-}
-
-.connect-instruction__label {
+.panel__subtitle {
   font-size: 13px;
   color: var(--c-muted);
-  margin-bottom: 10px;
 }
 
-.connect-instruction__addr-row {
-  display: inline-flex;
+/* ── Field row (shared label + value layout) ──────────────────── */
+.field-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 
-.connect-instruction__addr {
-  display: inline-block;
-  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
-  font-size: 22px;
-  font-weight: 600;
-  color: var(--c-text);
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: 10px;
-  padding: 12px 28px;
-  letter-spacing: 0.03em;
+.field-row__label {
+  color: var(--c-muted);
+  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
 }
 
-.connect-instruction__copy-btn {
+/* ── Icon button (small square button for inline actions) ─────── */
+.icon-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   color: var(--c-muted);
-  background: var(--c-surface);
+  background: transparent;
   border: 1px solid var(--c-border);
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
   transition: color 0.15s, border-color 0.15s, background 0.15s;
   flex-shrink: 0;
 }
 
-.connect-instruction__copy-btn:hover {
+.icon-btn:hover {
   color: var(--c-text);
   border-color: var(--c-accent);
+  background: var(--c-surface);
 }
 
-.connect-instruction__copy-btn.copied {
+.icon-btn.is-success {
   color: var(--c-success);
   border-color: var(--c-success);
 }
 
-/* ── Client cards ─────────────────────────────────────────────── */
-.client-cards {
-  display: flex;
-  gap: 20px;
-  width: 100%;
-  max-width: 520px;
+/* ── Idle view specifics ──────────────────────────────────────── */
+.idle-view__versions {
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  color: var(--c-text);
+  letter-spacing: 0.02em;
+  word-break: break-word;
 }
 
-.client-card {
-  flex: 1;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: 14px;
-  padding: 24px 20px;
-  display: flex;
-  flex-direction: column;
+.idle-view__start {
+  align-self: flex-start;
+  margin-top: 8px;
+}
+
+/* ── Running view: setup state (waiting for clients) ──────────── */
+.running-setup__addr {
+  display: inline-flex;
   align-items: center;
-  gap: 12px;
-  transition: border-color 0.3s;
+  gap: 10px;
 }
 
-.client-card--online {
-  border-color: rgba(var(--c-success-rgb), 0.4);
+.running-setup__addr-text {
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--c-text);
+  letter-spacing: 0.04em;
 }
 
-.client-card__indicator {
-  width: 18px;
-  height: 18px;
+/* ── Client status dots (used in setup + active) ──────────────── */
+.client-list {
+  display: inline-flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.client-list__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--c-text);
+}
+
+.client-dot {
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   background: var(--c-surface2);
-  border: 2px solid var(--c-border);
+  border: 1px solid var(--c-border);
   transition: background 0.3s, border-color 0.3s, box-shadow 0.3s;
+  flex-shrink: 0;
 }
 
-.client-card--waiting .client-card__indicator {
-  border-color: var(--c-warn);
-  background: rgba(var(--c-warn-rgb), 0.15);
-  animation: pulse-ring 1.8s ease-in-out infinite;
-}
-
-.client-card--online .client-card__indicator {
+.client-dot--online {
   background: var(--c-success);
   border-color: var(--c-success);
-  box-shadow: 0 0 10px rgba(var(--c-success-rgb), 0.55);
-  animation: none;
+  box-shadow: 0 0 6px rgba(var(--c-success-rgb), 0.5);
 }
 
-@keyframes pulse-ring {
+.client-dot--offline {
+  background: rgba(var(--c-error-rgb), 0.2);
+  border-color: var(--c-error);
+}
+
+.client-dot--waiting {
+  background: rgba(var(--c-warn-rgb), 0.2);
+  border-color: var(--c-warn);
+  animation: client-dot-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes client-dot-pulse {
   0%   { box-shadow: 0 0 0 0   rgba(var(--c-warn-rgb), 0.55); }
-  70%  { box-shadow: 0 0 0 9px rgba(var(--c-warn-rgb), 0); }
-  100% { box-shadow: 0 0 0 0   rgba(var(--c-warn-rgb), 0); }
+  70%  { box-shadow: 0 0 0 7px rgba(var(--c-warn-rgb), 0);    }
+  100% { box-shadow: 0 0 0 0   rgba(var(--c-warn-rgb), 0);    }
 }
-
-.client-card__name {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--c-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-}
-
-.client-card__status {
-  font-size: 13px;
-  color: var(--c-muted);
-  transition: color 0.3s;
-}
-
-.client-card--waiting .client-card__status { color: var(--c-warn); }
-.client-card--online  .client-card__status { color: var(--c-success); }
 
 /* ── WinDivert row with help icon ─────────────────────────────── */
 .windivert-row {
@@ -329,48 +314,94 @@
 
 .help-icon:hover {
   background: rgba(var(--c-warn-rgb), 0.3);
-} 
+}
 
-/* ── Panic Mode Button ────────────────────────────────────────── */
-.running-view__panic-mode {
+/* ── Active session specifics ─────────────────────────────────── */
+.active-session__nickname {
+  font-size: 14px;
+  color: var(--c-muted);
+  letter-spacing: 0.04em;
+}
+
+.active-session__name {
+  color: var(--c-text);
+  font-weight: 700;
+}
+
+.active-session__server {
+  font-size: 13px;
+  color: var(--c-muted);
+}
+
+.active-session__server-name {
+  color: var(--c-text);
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  letter-spacing: 0.02em;
+}
+
+.active-session__uptime {
   display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--c-text);
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+}
+
+.active-session__pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--c-success);
+  box-shadow: 0 0 8px rgba(var(--c-success-rgb), 0.6);
+  animation: active-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes active-pulse {
+  0%, 100% { opacity: 1;   transform: scale(1); }
+  50%      { opacity: 0.5; transform: scale(0.85); }
+}
+
+/* ── Panic mode button (used in setup + active) ───────────────── */
+.panic-mode {
+  display: inline-flex;
+  align-self: flex-start;
   align-items: center;
   justify-content: center;
   padding: 10px 24px;
+  margin-top: 8px;
   font-size: 13px;
   font-weight: 600;
   border-radius: 8px;
   cursor: pointer;
   border: 1px solid transparent;
-  transition: all 0.2s ease;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-top: 10px;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s, transform 0.1s;
 }
 
-.panic-mode__disabled {
+.panic-mode:active { transform: scale(0.97); }
+
+.panic-mode--off {
   background: var(--c-surface2);
   color: var(--c-muted);
   border-color: var(--c-border);
 }
 
-.panic-mode__disabled:hover {
+.panic-mode--off:hover {
   background: #2a2a32;
   color: var(--c-text);
 }
 
-.panic-mode__enabled {
+.panic-mode--on {
   background: rgba(var(--c-success-rgb), 0.1);
   color: var(--c-success);
   border-color: rgba(var(--c-success-rgb), 0.4);
   box-shadow: 0 0 12px rgba(var(--c-success-rgb), 0.15);
 }
 
-.panic-mode__enabled:hover {
+.panic-mode--on:hover {
   background: rgba(var(--c-success-rgb), 0.15);
   border-color: rgba(var(--c-success-rgb), 0.6);
-}
-
-.running-view__panic-mode:active {
-  transform: scale(0.97);
 }

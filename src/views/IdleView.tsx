@@ -143,11 +143,24 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
     isButtonDisabled = isStarting;
   }
 
+  const subtitle = hasUpdate
+    ? `Доступно обновление ${state.updateInfo!.tag}`
+    : isError
+      ? "Не удалось проверить обновления"
+      : isPending
+        ? "Проверка обновлений…"
+        : "Готов к запуску";
+
   return (
-    <div className="idle-view__body">
-      <div className="config-card">
-        <div className="config-card__section">
-          <span className="section-label">Режим работы</span>
+    <div className="panel-host">
+      <div className="panel">
+        <div className="panel__header">
+          <div className="panel__title">Настройка</div>
+          <div className="panel__subtitle">{subtitle}</div>
+        </div>
+
+        <div className="field-row">
+          <span className="field-row__label">Режим</span>
           <div className="mode-tabs">
             <button
               className={`tab ${state.mode === "manual" ? "active" : ""}`}
@@ -166,24 +179,25 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
           </div>
         </div>
 
-        <div className="config-card__section">
-          {state.mode === "manual" ? (
-            <>
-              <span className="section-label">Целевой сервер</span>
-              <input
-                type="text"
-                className="text-input"
-                placeholder="mc.funtime.su"
-                value={state.manualServerAddr}
-                onChange={(e) =>
-                  setState((s) => ({ ...s, manualServerAddr: e.target.value }))
-                }
-                onKeyDown={handleKeyDown}
-                disabled={isBlocked}
-              />
-            </>
-          ) : (
-            <>
+        {state.mode === "manual" ? (
+          <div className="field-row">
+            <span className="field-row__label">Сервер</span>
+            <input
+              type="text"
+              className="text-input"
+              placeholder="mc.funtime.su"
+              value={state.manualServerAddr}
+              onChange={(e) =>
+                setState((s) => ({ ...s, manualServerAddr: e.target.value }))
+              }
+              onKeyDown={handleKeyDown}
+              disabled={isBlocked}
+            />
+          </div>
+        ) : (
+          <>
+            <div className="field-row">
+              <span className="field-row__label">WinDivert</span>
               <div className="windivert-row">
                 <label
                   className={`checkbox-label ${state.platform !== "windows" ? "is-disabled" : ""}`}
@@ -199,15 +213,10 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                     }
                     disabled={isBlocked || state.platform !== "windows"}
                   />
-                  Использовать WinDivert (нужны права администратора)
+                  Перехват трафика хотспота
                 </label>
                 {state.platform !== "windows" && (
-                  <span
-                    className="hint"
-                    style={{ fontSize: "11px", color: "var(--c-muted)" }}
-                  >
-                    (только для Windows)
-                  </span>
+                  <span className="hint">(только Windows)</span>
                 )}
                 <span
                   className="help-icon"
@@ -222,9 +231,12 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                   ?
                 </span>
               </div>
-              {state.autoUseWindivert && state.platform === "windows" && (
+            </div>
+
+            {state.autoUseWindivert && state.platform === "windows" && (
+              <div className="field-row">
+                <span className="field-row__label">Порты</span>
                 <div className="port-range-row">
-                  <span className="hint">Порты:</span>
                   <input
                     type="number"
                     className="port-input"
@@ -255,24 +267,27 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                     disabled={isBlocked}
                   />
                 </div>
-              )}
-            </>
-          )}
-        </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {supportedVersions.length > 0 && (
+          <div className="field-row">
+            <span className="field-row__label">Версии</span>
+            <span className="idle-view__versions">
+              {supportedVersions.join(", ")}
+            </span>
+          </div>
+        )}
 
         <button
-          className="btn-primary"
+          className="btn-primary idle-view__start"
           onClick={buttonAction}
           disabled={isButtonDisabled}
         >
           {buttonText}
         </button>
-
-        {supportedVersions.length > 0 && (
-          <div className="supported-versions">
-            Поддерживаются: {supportedVersions.join(", ")}
-          </div>
-        )}
       </div>
     </div>
   );

@@ -26,21 +26,25 @@
   border: none;
   padding: 0;
   margin: 0;
-  font: inherit;
   cursor: pointer;
   display: inline-block;
   text-decoration: none;
-}
-
-.titlebar__logo {
   font-weight: 700;
   font-size: 15px;
   color: var(--c-text);
   letter-spacing: 0.02em;
+  transition: color 0.15s;
 }
 
 .titlebar__logo:hover {
   color: var(--c-accent);
+}
+
+.titlebar__version {
+  font-size: 11px;
+  color: var(--c-muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.03em;
 }
 
 .titlebar__stop {

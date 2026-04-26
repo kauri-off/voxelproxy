@@ -42,6 +42,7 @@ fn create_builder() -> Builder<tauri::Wry> {
             events::SessionEndedEvent,
             events::ClientStatusEvent,
             events::NickNameEvent,
+            events::ServerAddrEvent,
         ])
 }
 

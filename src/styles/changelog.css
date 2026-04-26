@@ -157,16 +157,23 @@
 }
 
 .changelog-card__ok {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 8px 22px;
   font-size: 13px;
   font-weight: 600;
-  color: #fff;
-  background: var(--c-accent);
-  border: none;
-  border-radius: 7px;
+  color: var(--c-accent);
+  background: rgba(var(--c-accent-rgb), 0.1);
+  border: 1px solid rgba(var(--c-accent-rgb), 0.4);
+  border-radius: 8px;
   cursor: pointer;
-  transition: background 0.15s, transform 0.1s;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
 }
 
-.changelog-card__ok:hover  { background: #4a7de0; }
+.changelog-card__ok:hover {
+  background: rgba(var(--c-accent-rgb), 0.16);
+  border-color: rgba(var(--c-accent-rgb), 0.65);
+}
+
 .changelog-card__ok:active { transform: scale(0.98); }

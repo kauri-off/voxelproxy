@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cargo check *)"
+      "Bash(cargo check *)",
+      "Bash(npx tsc *)",
+      "Bash(npm run *)",
+      "Bash(cargo test *)"
     ]
   }
 }

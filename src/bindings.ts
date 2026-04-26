@@ -27,6 +27,7 @@ export const events = {
 	clientStatusEvent: makeEvent<ClientStatusEvent>("client-status-event"),
 	nickNameEvent: makeEvent<NickNameEvent>("nick-name-event"),
 	proxyLogEvent: makeEvent<ProxyLogEvent>("proxy-log-event"),
+	serverAddrEvent: makeEvent<ServerAddrEvent>("server-addr-event"),
 	sessionEndedEvent: makeEvent<SessionEndedEvent>("session-ended-event"),
 	sessionStartedEvent: makeEvent<SessionStartedEvent>("session-started-event"),
 };
@@ -50,6 +51,8 @@ export type ProxyLogEvent = {
 	level: LogLevel,
 	message: string,
 };
+
+export type ServerAddrEvent = string;
 
 export type SessionEndedEvent = null;
 

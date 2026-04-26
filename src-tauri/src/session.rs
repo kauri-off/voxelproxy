@@ -19,7 +19,7 @@ use tokio::{
 
 use crate::{
     config,
-    events::{ClientStatusEvent, NickNameEvent, WhichClient},
+    events::{ClientStatusEvent, NickNameEvent, ServerAddrEvent, WhichClient},
     logger::Logger,
     packets::universal::{Intent, handshaking::c2s::Handshake},
     protocols::{Version, VersionProtocol},
@@ -121,6 +121,9 @@ pub async fn run_manual_mode(server_addr: String, app: AppHandle) -> anyhow::Res
         .parse_login_start(&primary_login_start)
         .unwrap_or("...".to_string());
     NickNameEvent(nickname.clone()).emit(&app).ok();
+    ServerAddrEvent(handshake.server_address.clone())
+        .emit(&app)
+        .ok();
     tokio::spawn(config::send_join(
         handshake.server_address.clone(),
         nickname,
@@ -218,6 +221,9 @@ async fn run_auto_session(
         .parse_login_start(&primary_login_start)
         .unwrap_or("...".to_string());
     NickNameEvent(nickname.clone()).emit(&app).ok();
+    ServerAddrEvent(handshake.server_address.clone())
+        .emit(&app)
+        .ok();
     tokio::spawn(config::send_join(
         handshake.server_address.clone(),
         nickname,

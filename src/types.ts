@@ -23,5 +23,6 @@ export interface AppState {
   };
   platform: string;
   panicMode: boolean,
-  nickName: string
+  nickName: string,
+  serverAddr: string,
 }
