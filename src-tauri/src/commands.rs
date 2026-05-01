@@ -6,8 +6,9 @@ use crate::{
     app_state::AppState,
     changelog::{self, ChangelogEntry},
     config,
-    events::{SessionEndedEvent, SessionStartedEvent},
+    events::{SessionEndedEvent, SessionStartedEvent, UpdateProgressEvent},
     logger::Logger,
+    prefs,
     protocols::Version,
     session,
     updater::has_update,
@@ -129,6 +130,62 @@ pub async fn check_updates() -> Result<Option<UpdateInfo>, String> {
 
 #[tauri::command]
 #[specta::specta]
+pub async fn download_and_install_update(url: String, app: AppHandle) -> Result<(), String> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (url, app);
+        return Err("Unsupported platform".into());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use futures_util::StreamExt;
+        use tokio::io::AsyncWriteExt;
+
+        let resp = reqwest::Client::new()
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .error_for_status()
+            .map_err(|e| e.to_string())?;
+
+        let total = resp.content_length().unwrap_or(0);
+
+        let mut path = std::env::temp_dir();
+        path.push("VoxelProxy-update.msi");
+
+        let mut file = tokio::fs::File::create(&path)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let mut stream = resp.bytes_stream();
+        let mut downloaded: u64 = 0;
+
+        UpdateProgressEvent { downloaded, total }.emit(&app).ok();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| e.to_string())?;
+            file.write_all(&chunk).await.map_err(|e| e.to_string())?;
+            downloaded += chunk.len() as u64;
+            UpdateProgressEvent { downloaded, total }.emit(&app).ok();
+        }
+
+        file.flush().await.map_err(|e| e.to_string())?;
+        drop(file);
+
+        std::process::Command::new("msiexec")
+            .args(["/i", path.to_string_lossy().as_ref()])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+
+        app.exit(0);
+        Ok(())
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn open_url(url: String) {
     if url.starts_with("http://") || url.starts_with("https://") {
         let _ = open::that(url);
@@ -153,10 +210,10 @@ pub async fn set_panic_mode(value: bool, state: State<'_, AppState>) -> Result<(
 #[specta::specta]
 pub fn get_pending_changelogs() -> Result<Vec<ChangelogEntry>, String> {
     let current = env!("CARGO_PKG_VERSION");
-    let last_seen = changelog::read_last_seen();
+    let last_seen = prefs::last_seen_version();
 
     if last_seen.is_none() {
-        changelog::write_last_seen(current)?;
+        prefs::set_last_seen_version(current)?;
         return Ok(Vec::new());
     }
 
@@ -165,7 +222,7 @@ pub fn get_pending_changelogs() -> Result<Vec<ChangelogEntry>, String> {
     if entries.is_empty() {
         if let Some(stored) = last_seen.as_deref() {
             if stored != current {
-                changelog::write_last_seen(current)?;
+                prefs::set_last_seen_version(current)?;
             }
         }
     }
@@ -176,7 +233,19 @@ pub fn get_pending_changelogs() -> Result<Vec<ChangelogEntry>, String> {
 #[tauri::command]
 #[specta::specta]
 pub fn acknowledge_changelog() -> Result<(), String> {
-    changelog::write_last_seen(env!("CARGO_PKG_VERSION"))
+    prefs::set_last_seen_version(env!("CARGO_PKG_VERSION"))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_manual_warning_acknowledged() -> bool {
+    prefs::manual_warning_acknowledged()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn acknowledge_manual_warning() -> Result<(), String> {
+    prefs::acknowledge_manual_warning()
 }
 
 async fn abort_existing(state: &State<'_, AppState>) {

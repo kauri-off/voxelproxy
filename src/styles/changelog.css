@@ -177,3 +177,117 @@
 }
 
 .changelog-card__ok:active { transform: scale(0.98); }
+
+/* ── Manual-mode warning modal ────────────────────────────────── */
+.warning-card {
+  border-color: rgba(var(--c-error-rgb), 0.55);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55),
+              0 0 0 1px rgba(var(--c-error-rgb), 0.25);
+}
+
+.warning-card__header {
+  background: rgba(var(--c-error-rgb), 0.08);
+  border-bottom-color: rgba(var(--c-error-rgb), 0.35);
+}
+
+.warning-card__icon {
+  color: var(--c-error);
+  font-size: 16px;
+  margin-right: 8px;
+}
+
+.warning-card__danger {
+  color: var(--c-error);
+  font-weight: 700;
+}
+
+.warning-card__warn {
+  color: var(--c-warn);
+  font-weight: 600;
+}
+
+.warning-card__safe {
+  color: var(--c-success);
+  font-weight: 600;
+}
+
+.warning-card__body {
+  color: var(--c-text);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.warning-card__body p {
+  margin: 0 0 12px 0;
+}
+
+.warning-card__body p:last-child {
+  margin-bottom: 0;
+}
+
+.warning-card__confirm {
+  margin-top: 14px;
+  padding: 10px 12px;
+  background: rgba(var(--c-error-rgb), 0.08);
+  border: 1px solid rgba(var(--c-error-rgb), 0.3);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.warning-card__footer {
+  gap: 10px;
+  background: var(--c-surface2);
+  border-top-color: rgba(var(--c-error-rgb), 0.25);
+}
+
+.warning-card__cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-muted);
+  background: transparent;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.warning-card__cancel:hover {
+  color: var(--c-text);
+  border-color: var(--c-muted);
+  background: var(--c-bg);
+}
+
+.warning-card__accept {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 22px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--c-error);
+  background: rgba(var(--c-error-rgb), 0.12);
+  border: 1px solid rgba(var(--c-error-rgb), 0.45);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s, opacity 0.2s;
+  font-variant-numeric: tabular-nums;
+}
+
+.warning-card__accept:hover:not(:disabled) {
+  background: rgba(var(--c-error-rgb), 0.2);
+  border-color: rgba(var(--c-error-rgb), 0.7);
+}
+
+.warning-card__accept:active:not(:disabled) { transform: scale(0.98); }
+
+.warning-card__accept:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  color: var(--c-muted);
+  background: var(--c-bg);
+  border-color: var(--c-border);
+}

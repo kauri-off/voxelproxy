@@ -39,3 +39,9 @@ pub struct NickNameEvent(pub String);
 
 #[derive(Serialize, Clone, Type, Event)]
 pub struct ServerAddrEvent(pub String);
+
+#[derive(Serialize, Clone, Type, Event)]
+pub struct UpdateProgressEvent {
+    pub downloaded: u64,
+    pub total: u64,
+}

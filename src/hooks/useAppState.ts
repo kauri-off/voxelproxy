@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { commands, LogLevel, ProxyLogEvent } from "../bindings";
+import { commands, events, LogLevel, ProxyLogEvent } from "../bindings";
 import { AppState } from "../types";
 
 const initialState: AppState = {
@@ -14,6 +14,9 @@ const initialState: AppState = {
   updateInfo: null,
   updateProcessed: false,
   updateError: false,
+  updateDownloading: false,
+  updateProgress: null,
+  updateInstallError: null,
   clients: { primary: { online: false }, secondary: { online: false } },
   platform: '',
   panicMode: false,
@@ -82,6 +85,18 @@ export function useAppState() {
     loadLocalIp();
     loadUpdateInfo();
     loadPlatform();
+
+    const unlistenPromise = events.updateProgressEvent.listen(({ payload }) => {
+      const { downloaded, total } = payload;
+      const pct =
+        total > 0
+          ? Math.min(100, Math.floor((Number(downloaded) * 100) / Number(total)))
+          : null;
+      setState((prev) => ({ ...prev, updateProgress: pct }));
+    });
+    return () => {
+      unlistenPromise.then((fn) => fn()).catch(() => {});
+    };
   }, [addLog]);
 
   return { state, setState, logs, setLogs, addLog };

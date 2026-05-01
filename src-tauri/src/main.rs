@@ -14,6 +14,7 @@ pub mod local_ip;
 pub mod logger;
 #[allow(dead_code)]
 pub mod packets;
+pub mod prefs;
 pub mod protocols;
 pub mod proxy;
 pub mod resolver;
@@ -30,11 +31,14 @@ fn create_builder() -> Builder<tauri::Wry> {
             commands::get_supported_versions,
             commands::get_local_ip_addr,
             commands::check_updates,
+            commands::download_and_install_update,
             commands::open_url,
             commands::get_platform,
             commands::set_panic_mode,
             commands::get_pending_changelogs,
-            commands::acknowledge_changelog
+            commands::acknowledge_changelog,
+            commands::get_manual_warning_acknowledged,
+            commands::acknowledge_manual_warning
         ])
         .events(collect_events![
             events::ProxyLogEvent,
@@ -43,6 +47,7 @@ fn create_builder() -> Builder<tauri::Wry> {
             events::ClientStatusEvent,
             events::NickNameEvent,
             events::ServerAddrEvent,
+            events::UpdateProgressEvent,
         ])
 }
 

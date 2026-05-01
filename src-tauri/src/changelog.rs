@@ -77,37 +77,6 @@ pub fn pending_for(last_seen: Option<&str>, current: &str, md: &str) -> Vec<Chan
         .collect()
 }
 
-#[cfg(windows)]
-pub fn read_last_seen() -> Option<String> {
-    use winreg::RegKey;
-    use winreg::enums::HKEY_CURRENT_USER;
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let key = hkcu.open_subkey("Software\\VoxelProxy").ok()?;
-    key.get_value("LastSeenVersion").ok()
-}
-
-#[cfg(windows)]
-pub fn write_last_seen(value: &str) -> Result<(), String> {
-    use winreg::RegKey;
-    use winreg::enums::HKEY_CURRENT_USER;
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (key, _) = hkcu
-        .create_subkey("Software\\VoxelProxy")
-        .map_err(|e| e.to_string())?;
-    key.set_value("LastSeenVersion", &value.to_string())
-        .map_err(|e| e.to_string())
-}
-
-#[cfg(not(windows))]
-pub fn read_last_seen() -> Option<String> {
-    None
-}
-
-#[cfg(not(windows))]
-pub fn write_last_seen(_value: &str) -> Result<(), String> {
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

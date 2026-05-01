@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect } from "react";
 import { AppState } from "../types";
 import { commands, LogLevel } from "../bindings";
+import { ManualWarningModal } from "../components/ManualWarningModal";
 
 const validateManualAddr = (addr: string): boolean => {
   const trimmed = addr.trim();
@@ -41,10 +42,18 @@ interface Props {
 export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
   const [isStarting, setIsStarting] = useState(false);
   const [supportedVersions, setSupportedVersions] = useState<string[]>([]);
+  const [showManualWarning, setShowManualWarning] = useState(false);
 
   useEffect(() => {
     commands.getSupportedVersions().then(setSupportedVersions);
   }, []);
+
+  const launchManualSession = useCallback(async () => {
+    const result = await commands.startManualSession(state.manualServerAddr);
+    if (result.status === "error") {
+      addLog("Error", `Ошибка запуска: ${result.error}`);
+    }
+  }, [state.manualServerAddr, addLog]);
 
   const start = useCallback(async () => {
     if (isStarting) return;
@@ -64,13 +73,13 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
           return;
         }
 
-        const result = await commands.startManualSession(
-          state.manualServerAddr,
-        );
-
-        if (result.status === "error") {
-          addLog("Error", `Ошибка запуска: ${result.error}`);
+        const acknowledged = await commands.getManualWarningAcknowledged();
+        if (!acknowledged) {
+          setShowManualWarning(true);
+          return;
         }
+
+        await launchManualSession();
       } else {
         const { autoUseWindivert, autoPortMin, autoPortMax } = state;
 
@@ -117,16 +126,46 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
   const isError = state.updateError;
   const isReady = state.updateProcessed && !hasUpdate && !isError;
   const isPending = !state.updateProcessed;
+  const isDownloading = state.updateDownloading;
+  const installError = state.updateInstallError;
 
-  const isBlocked = isPending || hasUpdate || isError || isStarting;
+  const isBlocked =
+    isPending || hasUpdate || isError || isStarting || isDownloading;
+
+  const startUpdate = useCallback(async () => {
+    if (!state.updateInfo) return;
+    setState((s) => ({
+      ...s,
+      updateDownloading: true,
+      updateProgress: null,
+      updateInstallError: null,
+    }));
+    const r = await commands.downloadAndInstallUpdate(state.updateInfo.link);
+    if (r.status === "error") {
+      setState((s) => ({
+        ...s,
+        updateDownloading: false,
+        updateInstallError: r.error,
+      }));
+      addLog("Error", `Ошибка установки обновления: ${r.error}`);
+    }
+  }, [state.updateInfo, setState, addLog]);
 
   let buttonText = "";
   let buttonAction = () => {};
   let isButtonDisabled = false;
 
-  if (hasUpdate) {
+  if (hasUpdate && installError) {
+    buttonText = "Ошибка загрузки — повторить";
+    buttonAction = () => {
+      startUpdate();
+    };
+    isButtonDisabled = false;
+  } else if (hasUpdate) {
     buttonText = `Обновиться (${state.updateInfo!.tag})`;
-    buttonAction = () => commands.openUrl(state.updateInfo!.link);
+    buttonAction = () => {
+      startUpdate();
+    };
     isButtonDisabled = false;
   } else if (isError) {
     buttonText = "Ошибка проверки обновления";
@@ -143,13 +182,17 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
     isButtonDisabled = isStarting;
   }
 
-  const subtitle = hasUpdate
-    ? `Доступно обновление ${state.updateInfo!.tag}`
-    : isError
-      ? "Не удалось проверить обновления"
-      : isPending
-        ? "Проверка обновлений…"
-        : "Готов к запуску";
+  const subtitle = isDownloading
+    ? "Загрузка обновления…"
+    : hasUpdate && installError
+      ? "Ошибка загрузки обновления"
+      : hasUpdate
+        ? `Доступно обновление ${state.updateInfo!.tag}`
+        : isError
+          ? "Не удалось проверить обновления"
+          : isPending
+            ? "Проверка обновлений…"
+            : "Готов к запуску";
 
   return (
     <div className="panel-host">
@@ -281,14 +324,65 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
           </div>
         )}
 
-        <button
-          className="btn-primary idle-view__start"
-          onClick={buttonAction}
-          disabled={isButtonDisabled}
-        >
-          {buttonText}
-        </button>
+        {isDownloading ? (
+          <div className="update-progress-block">
+            <div className="update-progress-block__label">
+              <span>Загрузка обновления</span>
+              <span>
+                {state.updateProgress !== null
+                  ? `${state.updateProgress}%`
+                  : "…"}
+              </span>
+            </div>
+            <div
+              className={`update-progress${
+                state.updateProgress === null
+                  ? " update-progress--indeterminate"
+                  : ""
+              }`}
+            >
+              <div
+                className="update-progress__fill"
+                style={
+                  state.updateProgress !== null
+                    ? { width: `${state.updateProgress}%` }
+                    : undefined
+                }
+              />
+            </div>
+          </div>
+        ) : (
+          <button
+            className="btn-primary idle-view__start"
+            onClick={buttonAction}
+            disabled={isButtonDisabled}
+          >
+            {buttonText}
+          </button>
+        )}
       </div>
+
+      {showManualWarning && (
+        <ManualWarningModal
+          onCancel={() => setShowManualWarning(false)}
+          onAcknowledge={async () => {
+            setShowManualWarning(false);
+            const ack = await commands.acknowledgeManualWarning();
+            if (ack.status === "error") {
+              addLog(
+                "Warn",
+                `Не удалось сохранить подтверждение: ${ack.error}`,
+              );
+            }
+            setIsStarting(true);
+            try {
+              await launchManualSession();
+            } finally {
+              setIsStarting(false);
+            }
+          }}
+        />
+      )}
     </div>
   );
 };

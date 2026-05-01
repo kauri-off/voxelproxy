@@ -15,11 +15,14 @@ export const commands = {
 	tag: string,
 	link: string,
 } | null, string>(__TAURI_INVOKE("check_updates")),
+	downloadAndInstallUpdate: (url: string) => typedError<null, string>(__TAURI_INVOKE("download_and_install_update", { url })),
 	openUrl: (url: string) => __TAURI_INVOKE<void>("open_url", { url }),
 	getPlatform: () => __TAURI_INVOKE<string>("get_platform"),
 	setPanicMode: (value: boolean) => typedError<null, string>(__TAURI_INVOKE("set_panic_mode", { value })),
 	getPendingChangelogs: () => typedError<ChangelogEntry[], string>(__TAURI_INVOKE("get_pending_changelogs")),
 	acknowledgeChangelog: () => typedError<null, string>(__TAURI_INVOKE("acknowledge_changelog")),
+	getManualWarningAcknowledged: () => __TAURI_INVOKE<boolean>("get_manual_warning_acknowledged"),
+	acknowledgeManualWarning: () => typedError<null, string>(__TAURI_INVOKE("acknowledge_manual_warning")),
 };
 
 /** Events */
@@ -30,6 +33,7 @@ export const events = {
 	serverAddrEvent: makeEvent<ServerAddrEvent>("server-addr-event"),
 	sessionEndedEvent: makeEvent<SessionEndedEvent>("session-ended-event"),
 	sessionStartedEvent: makeEvent<SessionStartedEvent>("session-started-event"),
+	updateProgressEvent: makeEvent<UpdateProgressEvent>("update-progress-event"),
 };
 
 /* Types */
@@ -61,6 +65,11 @@ export type SessionStartedEvent = null;
 export type UpdateInfo = {
 	tag: string,
 	link: string,
+};
+
+export type UpdateProgressEvent = {
+	downloaded: number,
+	total: number,
 };
 
 export type WhichClient = "Primary" | "Secondary";

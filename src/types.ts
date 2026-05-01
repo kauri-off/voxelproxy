@@ -17,6 +17,9 @@ export interface AppState {
   updateInfo: { tag: string; link: string } | null;
   updateProcessed: boolean;
   updateError: boolean;
+  updateDownloading: boolean;
+  updateProgress: number | null;
+  updateInstallError: string | null;
   clients: {
     primary: ClientStatus;
     secondary: ClientStatus;
