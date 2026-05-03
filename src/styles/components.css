@@ -342,10 +342,6 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: rgba(var(--c-warn-rgb), 0.15);
   color: var(--c-warn);
   font-size: 12px;
   font-weight: bold;
@@ -353,9 +349,6 @@
   transition: background 0.15s;
 }
 
-.help-icon:hover {
-  background: rgba(var(--c-warn-rgb), 0.3);
-}
 
 /* ── Active session specifics ─────────────────────────────────── */
 .active-session__nickname {
