@@ -271,7 +271,7 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                   role="button"
                   tabIndex={0}
                 >
-                  ?
+                  Инструкция
                 </span>
               </div>
             </div>
