@@ -240,7 +240,7 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
         ) : (
           <>
             <div className="field-row">
-              <span className="field-row__label">WinDivert</span>
+              <span className="field-row__label">Хотспот</span>
               <div className="windivert-row">
                 <label
                   className={`checkbox-label ${state.platform !== "windows" ? "is-disabled" : ""}`}
@@ -265,7 +265,7 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                   className="help-icon"
                   onClick={() =>
                     commands.openUrl(
-                      "https://github.com/kauri-off/voxelproxy?tab=readme-ov-file#автоматический-режим-windows-хотспот",
+                      "https://github.com/kauri-off/voxelproxy?tab=readme-ov-file#если-что-то-пошло-не-так",
                     )
                   }
                   role="button"
@@ -274,6 +274,14 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                   Инструкция
                 </span>
               </div>
+            </div>
+
+            <div className="field-row">
+              <span className="field-row__label" />
+              <span className="hint auto-mode-note">
+                Для двух клиентов через Wi-Fi-хотспот этого ПК. Запускайте
+                от администратора.
+              </span>
             </div>
 
             {state.autoUseWindivert && state.platform === "windows" && (

@@ -103,6 +103,11 @@
   white-space: nowrap;
 }
 
+.hint.auto-mode-note {
+  white-space: normal;
+  line-height: 1.5;
+}
+
 .port-input {
   width: 70px;
   padding: 6px 8px;
@@ -274,6 +279,69 @@
   font-weight: 600;
   color: var(--c-text);
   letter-spacing: 0.04em;
+}
+
+/* ── Auto setup steps ─────────────────────────────────────────── */
+.setup-step {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.setup-step--done {
+  border-color: rgba(var(--c-success-rgb), 0.45);
+  background: rgba(var(--c-success-rgb), 0.05);
+}
+
+.setup-step__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.setup-step__index {
+  color: var(--c-muted);
+  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.setup-step__title {
+  color: var(--c-text);
+  font-weight: 600;
+  flex: 1;
+}
+
+.setup-step__status {
+  color: var(--c-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.setup-step--done .setup-step__status {
+  color: var(--c-success);
+}
+
+.setup-step__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-left: 19px;
+}
+
+.setup-step__text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--c-text);
 }
 
 /* ── Client status dots (used in setup + active) ──────────────── */
