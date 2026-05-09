@@ -392,7 +392,7 @@
   100% { box-shadow: 0 0 0 0   rgba(var(--c-warn-rgb), 0);    }
 }
 
-/* ── WinDivert row with help icon ─────────────────────────────── */
+/* ── WinDivert row ────────────────────────────────────────────── */
 .windivert-row {
   display: flex;
   align-items: center;
@@ -404,17 +404,18 @@
   min-width: 0;
 }
 
-.help-icon {
-  flex-shrink: 0;
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+.trouble-link {
   color: var(--c-warn);
-  font-size: 12px;
-  font-weight: bold;
+  font-weight: 500;
   cursor: pointer;
-  transition: background 0.15s;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 0.15s;
+}
+
+.trouble-link:hover {
+  color: var(--c-text);
+  text-decoration: underline;
 }
 
 

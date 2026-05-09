@@ -261,8 +261,16 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                 {state.platform !== "windows" && (
                   <span className="hint">(только Windows)</span>
                 )}
-                <span
-                  className="help-icon"
+              </div>
+            </div>
+
+            <div className="field-row">
+              <span className="field-row__label" />
+              <span className="hint auto-mode-note">
+                Для двух клиентов через Wi-Fi-хотспот этого ПК. Запускайте
+                от администратора.{" "}
+                <a
+                  className="trouble-link"
                   onClick={() =>
                     commands.openUrl(
                       "https://github.com/kauri-off/voxelproxy?tab=readme-ov-file#если-что-то-пошло-не-так",
@@ -271,16 +279,8 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                   role="button"
                   tabIndex={0}
                 >
-                  Инструкция
-                </span>
-              </div>
-            </div>
-
-            <div className="field-row">
-              <span className="field-row__label" />
-              <span className="hint auto-mode-note">
-                Для двух клиентов через Wi-Fi-хотспот этого ПК. Запускайте
-                от администратора.
+                  Если что-то пошло не так →
+                </a>
               </span>
             </div>
 
