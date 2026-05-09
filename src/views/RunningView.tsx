@@ -9,8 +9,10 @@ interface Props {
 }
 
 export const RunningView: React.FC<Props> = ({ state, onTogglePanicMode }) => {
-  const anyOnline = state.clients.primary.online || state.clients.secondary.online;
-  const bothOnline = state.clients.primary.online && state.clients.secondary.online;
+  const anyOnline =
+    state.clients.primary.online || state.clients.secondary.online;
+  const bothOnline =
+    state.clients.primary.online && state.clients.secondary.online;
 
   const [sessionLive, setSessionLive] = useState(false);
   useEffect(() => {
@@ -125,7 +127,7 @@ const AutoSetupSteps: React.FC<AutoSetupProps> = ({
       >
         <p className="setup-step__text">
           На втором устройстве (которое подключено к Wi-Fi-хотспоту этого ПК)
-          зайдите на сервер как обычно.
+          зайдите на сервер как обычно (mc.funtime.su).
         </p>
       </SetupStep>
 
@@ -153,7 +155,12 @@ interface SetupStepProps {
   children: React.ReactNode;
 }
 
-const SetupStep: React.FC<SetupStepProps> = ({ index, title, online, children }) => (
+const SetupStep: React.FC<SetupStepProps> = ({
+  index,
+  title,
+  online,
+  children,
+}) => (
   <div className={`setup-step ${online ? "setup-step--done" : ""}`}>
     <div className="setup-step__header">
       <span
@@ -175,7 +182,11 @@ interface CopyableAddrProps {
   fontSize?: number;
 }
 
-const CopyableAddr: React.FC<CopyableAddrProps> = ({ addr, disabled, fontSize }) => {
+const CopyableAddr: React.FC<CopyableAddrProps> = ({
+  addr,
+  disabled,
+  fontSize,
+}) => {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {

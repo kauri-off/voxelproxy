@@ -81,7 +81,8 @@ pub fn pending_for(last_seen: Option<&str>, current: &str, md: &str) -> Vec<Chan
 mod tests {
     use super::*;
 
-    const SAMPLE: &str = "# Changelog\n\n## 6.2.5\n- five\n\n## 6.2.4\n- four\n\n## 6.2.3\n- three\n";
+    const SAMPLE: &str =
+        "# Changelog\n\n## 6.2.5\n- five\n\n## 6.2.4\n- four\n\n## 6.2.3\n- three\n";
 
     #[test]
     fn first_install_returns_empty() {

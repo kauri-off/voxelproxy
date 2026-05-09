@@ -22,9 +22,7 @@ pub fn acknowledge_manual_warning() -> Result<(), String> {
     use winreg::RegKey;
     use winreg::enums::HKEY_CURRENT_USER;
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (key, _) = hkcu
-        .create_subkey(SUBKEY)
-        .map_err(|e| e.to_string())?;
+    let (key, _) = hkcu.create_subkey(SUBKEY).map_err(|e| e.to_string())?;
     key.set_value(MANUAL_WARNING_VALUE, &1u32)
         .map_err(|e| e.to_string())
 }

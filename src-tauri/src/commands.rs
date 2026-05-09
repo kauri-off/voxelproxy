@@ -61,14 +61,9 @@ pub async fn start_auto_session(
 
     let handle = tokio::spawn(async move {
         let log = Logger::new(&app);
-        if let Err(e) = session::run_automatic_mode(
-            use_windivert,
-            port_min,
-            port_max,
-            app.clone(),
-            panic_mode,
-        )
-        .await
+        if let Err(e) =
+            session::run_automatic_mode(use_windivert, port_min, port_max, app.clone(), panic_mode)
+                .await
         {
             log.error(format!("{}", e));
         }
