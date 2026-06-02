@@ -40,11 +40,19 @@ export const RunningView: React.FC<Props> = ({ state, onTogglePanicMode }) => {
   if (state.mode === "auto") {
     return (
       <div className="panel-host">
-        <AutoSetupSteps
-          clients={state.clients}
-          panicMode={state.panicMode}
-          onTogglePanicMode={onTogglePanicMode}
-        />
+        {state.autoUseWindivert ? (
+          <AutoSetupSteps
+            clients={state.clients}
+            panicMode={state.panicMode}
+            onTogglePanicMode={onTogglePanicMode}
+          />
+        ) : (
+          <AutoSimplePanel
+            clients={state.clients}
+            panicMode={state.panicMode}
+            onTogglePanicMode={onTogglePanicMode}
+          />
+        )}
       </div>
     );
   }
@@ -52,6 +60,62 @@ export const RunningView: React.FC<Props> = ({ state, onTogglePanicMode }) => {
   return (
     <div className="panel-host">
       <ManualSetupPanel ip={state.localIp} clients={state.clients} />
+    </div>
+  );
+};
+
+interface AutoSimpleProps {
+  clients: AppState["clients"];
+  panicMode: boolean;
+  onTogglePanicMode: () => void;
+}
+
+const AutoSimplePanel: React.FC<AutoSimpleProps> = ({
+  clients,
+  panicMode,
+  onTogglePanicMode,
+}) => {
+  const anyOnline = clients.primary.online || clients.secondary.online;
+  const subtitle = anyOnline
+    ? "Ожидание второго клиента"
+    : "Ожидание клиентов";
+
+  return (
+    <div className="panel">
+      <div className="panel__header">
+        <div className="panel__title">Запущено</div>
+        <div className="panel__subtitle">{subtitle}</div>
+      </div>
+
+      <div className="field-row">
+        <span className="field-row__label">Адрес</span>
+        <CopyableAddr addr="127.0.0.1:25565" fontSize={16} />
+      </div>
+
+      <div className="field-row">
+        <span className="field-row__label">Клиенты</span>
+        <span className="client-list">
+          <span className="client-list__item">
+            <span
+              className={`client-dot ${clients.primary.online ? "client-dot--online" : "client-dot--waiting"}`}
+            />
+            Основной
+          </span>
+          <span className="client-list__item">
+            <span
+              className={`client-dot ${clients.secondary.online ? "client-dot--online" : "client-dot--waiting"}`}
+            />
+            Дополнительный
+          </span>
+        </span>
+      </div>
+
+      <button
+        className={`panic-mode ${panicMode ? "panic-mode--on" : "panic-mode--off"}`}
+        onClick={onTogglePanicMode}
+      >
+        Нажми когда будешь на проверке
+      </button>
     </div>
   );
 };

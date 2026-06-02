@@ -133,6 +133,8 @@
 /* ── Panel (shared layout for all main views) ─────────────────── */
 .panel-host {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   align-items: flex-start;
   justify-content: flex-start;
@@ -416,6 +418,77 @@
 .trouble-link:hover {
   color: var(--c-text);
   text-decoration: underline;
+}
+
+/* ── Auto-mode how-to (collapsible instructions) ──────────────── */
+.auto-howto {
+  font-size: 12.5px;
+  color: var(--c-text);
+  line-height: 1.55;
+}
+
+.auto-howto > summary {
+  color: var(--c-warn);
+  font-weight: 500;
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  transition: color 0.15s;
+}
+
+.auto-howto > summary::-webkit-details-marker { display: none; }
+
+.auto-howto > summary::before {
+  content: "▸ ";
+  display: inline-block;
+  width: 0.9em;
+  transition: transform 0.15s;
+}
+
+.auto-howto[open] > summary::before {
+  content: "▾ ";
+}
+
+.auto-howto > summary:hover {
+  color: var(--c-text);
+}
+
+.auto-howto__list {
+  margin: 10px 0 0;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--c-muted);
+}
+
+.auto-howto__list strong {
+  color: var(--c-text);
+  font-weight: 600;
+}
+
+.auto-howto__list em {
+  font-style: normal;
+  color: var(--c-text);
+}
+
+.auto-howto__list code,
+.auto-howto__note code {
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 11.5px;
+  padding: 1px 5px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 4px;
+  color: var(--c-text);
+}
+
+.auto-howto__note {
+  margin: 12px 0 0;
+  color: var(--c-muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 

@@ -284,6 +284,50 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
               </span>
             </div>
 
+            {state.platform === "windows" && (
+              <div className="field-row">
+                <span className="field-row__label" />
+                <details className="auto-howto">
+                  <summary>Как настроить хотспот? (важно)</summary>
+                  <ol className="auto-howto__list">
+                    <li>
+                      <strong>Это должен быть хотспот именно этого ПК,
+                      а не общий Wi-Fi-роутер.</strong> Если оба устройства
+                      просто подключены к домашнему роутеру — авто-режим
+                      <strong> не сработает</strong>.
+                    </li>
+                    <li>
+                      На этом ПК откройте{" "}
+                      <em>Параметры → Сеть и Интернет → Мобильный хот-спот</em>{" "}
+                      и включите его. «Раздавать через» — Wi-Fi.
+                    </li>
+                    <li>
+                      На втором устройстве (телефон, ноутбук, другой ПК)
+                      отключитесь от домашнего Wi-Fi и подключитесь{" "}
+                      <strong>к Wi-Fi, который раздаёт этот ПК</strong>{" "}
+                      (имя и пароль показаны в окне Мобильного хот-спота).
+                    </li>
+                    <li>
+                      Запустите VoxelProxy{" "}
+                      <strong>от имени администратора</strong>. Без этого
+                      перехват трафика не заработает.
+                    </li>
+                    <li>
+                      Нажмите «Запустить». На втором устройстве — заходите
+                      на сервер как обычно (например, <code>mc.funtime.su</code>).
+                      На этом ПК — на адрес <code>127.0.0.1:25565</code>{" "}
+                      (его покажет приложение).
+                    </li>
+                  </ol>
+                  <p className="auto-howto__note">
+                    Так VoxelProxy видит трафик второго клиента и подменяет
+                    ник. Через общий роутер этот трафик до ПК просто не
+                    доходит — поэтому без хотспота ничего не работает.
+                  </p>
+                </details>
+              </div>
+            )}
+
             {state.autoUseWindivert && state.platform === "windows" && (
               <div className="field-row">
                 <span className="field-row__label">Порты</span>
