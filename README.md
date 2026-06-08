@@ -8,7 +8,7 @@
 
 ## Запуск
 
-Скачайте `voxelproxy.exe` из [Releases](https://github.com/kauri-off/voxelproxy/releases), запустите и выберите режим.
+Скачайте `VoxelProxy_x.x.x_x64_ru-RU.msi` из [Releases](https://github.com/kauri-off/voxelproxy/releases) и установите
 
 ### Ручной
 
