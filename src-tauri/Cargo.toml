@@ -1,6 +1,6 @@
 [package]
 name = "voxelproxy"
-version = "6.3.4"
+version = "6.3.5"
 edition = "2024"
 authors = ["kauri-off <https://github.com/kauri-off>"]
 description = "Бесплатный аналог takker.ru"
@@ -10,19 +10,19 @@ readme = "../README.md"
 license = "GPL-3.0-only"
 
 [dependencies]
-tauri = { version = "2.11.0", features = [] }
+tauri = { version = "2.11.2", features = [] }
 serde = { version = "1.0.228", features = ["derive"] }
-tokio = { version = "1.52.1", features = ["full"] }
-serde_json = "1.0.149"
+tokio = { version = "1.52.3", features = ["full"] }
+serde_json = "1.0.150"
 trust-dns-resolver = "0.23.2"
-reqwest = { version = "0.13.3", features = ["json", "stream"] }
+reqwest = { version = "0.13.4", features = ["json", "stream"] }
 anyhow = "1.0.102"
 mc_protocol = "2.1.1"
 enum_dispatch = "0.3.13"
-open = "5.3.4"
-uuid = { version = "1.23.1", features = ["v4"] }
-specta-typescript = "0.0.11"
-pulldown-cmark = { version = "0.13.3", default-features = false, features = ["html"] }
+open = "5.3.5"
+uuid = { version = "1.23.3", features = ["v4"] }
+specta-typescript = "0.0.12"
+pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
 semver = "1.0.28"
 specta = { version = "2.0.0-rc.24", features = ["derive"] }
 tauri-specta = { version = "2.0.0-rc.24", features = ["derive", "typescript"] }

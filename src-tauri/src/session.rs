@@ -27,6 +27,14 @@ use crate::{
     resolver::resolve_host_port,
 };
 
+/// Returns true if `host` points at the local machine (loopback). Used in auto mode to
+/// detect a client connecting to `127.0.0.1` before the hotspot client has paired.
+#[cfg(target_os = "windows")]
+fn is_loopback_host(host: &str) -> bool {
+    let h = host.trim().to_ascii_lowercase();
+    h == "localhost" || h == "::1" || h.starts_with("127.")
+}
+
 pub async fn run_manual_mode(server_addr: String, app: AppHandle) -> anyhow::Result<()> {
     let log = Logger::new(&app);
     let (remote_addr, remote_dns) =
@@ -331,9 +339,26 @@ pub async fn run_automatic_mode(
 
     let mut pending = Vec::new();
 
-    while let Some(client) = rx.recv().await {
+    while let Some(mut client) = rx.recv().await {
         if *panic_mode.lock().await {
             tokio::spawn(run_panic_mode(client));
+            continue;
+        }
+        if use_windivert && pending.is_empty() && is_loopback_host(&client.server_host) {
+            log.warn("Клиент подключился к 127.0.0.1 раньше второго клиента — отклонён");
+            tokio::spawn(async move {
+                // drain the client's LoginStart, then send the disconnect reason
+                let _ = RawPacket::read_async(&mut client.stream).await;
+                crate::proxy::send_login_disconnect(
+                    &mut client.stream,
+                    "Неправильный порядок подключения.\n\n\
+                     Сначала зайдите на сервер на ВТОРОМ устройстве (дополнительный клиент \
+                     через хотспот), и только потом — основным клиентом на 127.0.0.1.\n\n\
+                     Похоже, настройка неверная. Прочитайте инструкцию в приложении VoxelProxy."
+                        .to_string(),
+                )
+                .await;
+            });
             continue;
         }
         if let Some(secondary) = pending.pop() {

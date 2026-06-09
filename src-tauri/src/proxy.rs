@@ -299,6 +299,16 @@ pub async fn run_proxy_session(
     Ok(())
 }
 
+/// Sends a `LoginDisconnect` packet to a single client.
+pub async fn send_login_disconnect<W: AsyncWriteExt + Unpin>(stream: &mut W, message: String) {
+    let disconnect = UncompressedPacket::from_packet(&LoginDisconnect {
+        reason: json!({ "text": message }).to_string(),
+    })
+    .unwrap();
+
+    let _ = disconnect.write_async(stream).await;
+}
+
 /// Sends a `LoginDisconnect` packet to both clients.
 pub async fn send_login_error<W: AsyncWriteExt + Unpin>(
     primary: &mut W,

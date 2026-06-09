@@ -491,6 +491,51 @@
   line-height: 1.5;
 }
 
+.auto-howto__trouble {
+  margin: 10px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--c-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.auto-howto__trouble p {
+  margin: 0;
+}
+
+.auto-howto__trouble strong {
+  color: var(--c-text);
+  font-weight: 600;
+}
+
+.auto-howto__trouble code {
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 11.5px;
+  padding: 1px 5px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 4px;
+  color: var(--c-text);
+}
+
+.auto-howto__code {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.auto-howto__code code {
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 11.5px;
+  color: var(--c-text);
+  white-space: pre;
+}
+
 
 /* ── Active session specifics ─────────────────────────────────── */
 .active-session__nickname {

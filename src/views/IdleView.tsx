@@ -268,19 +268,7 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
               <span className="field-row__label" />
               <span className="hint auto-mode-note">
                 Для двух клиентов через Wi-Fi-хотспот этого ПК. Запускайте
-                от администратора.{" "}
-                <a
-                  className="trouble-link"
-                  onClick={() =>
-                    commands.openUrl(
-                      "https://github.com/kauri-off/voxelproxy?tab=readme-ov-file#если-что-то-пошло-не-так",
-                    )
-                  }
-                  role="button"
-                  tabIndex={0}
-                >
-                  Если что-то пошло не так →
-                </a>
+                от администратора.
               </span>
             </div>
 
@@ -324,6 +312,41 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                     ник. Через общий роутер этот трафик до ПК просто не
                     доходит — поэтому без хотспота ничего не работает.
                   </p>
+                </details>
+              </div>
+            )}
+
+            {state.platform === "windows" && (
+              <div className="field-row">
+                <span className="field-row__label" />
+                <details className="auto-howto">
+                  <summary>Если что-то пошло не так</summary>
+                  <div className="auto-howto__trouble">
+                    <p>
+                      <strong>
+                        Клиент не подключается / нет интернета на клиенте.
+                      </strong>{" "}
+                      WinDivert или служба хотспота зависли. В PowerShell от
+                      администратора:
+                    </p>
+                    <pre className="auto-howto__code">
+                      <code>{"sc.exe stop windivert\nStop-Service SharedAccess"}</code>
+                    </pre>
+                    <p>
+                      Затем включите хотспот заново и перезапустите{" "}
+                      <code>voxelproxy.exe</code>.
+                    </p>
+                    <p>
+                      <strong>Не работает с включённым VPN (TUN-режим).</strong>{" "}
+                      TUN-адаптер перехватывает IP-трафик раньше WinDivert.
+                      Отключите VPN на хосте.
+                    </p>
+                    <p>
+                      <strong>Лицензионный (online-mode) сервер.</strong>{" "}
+                      Используйте ViaProxy перед VoxelProxy с настроенным
+                      аккаунтом.
+                    </p>
+                  </div>
                 </details>
               </div>
             )}

@@ -8,7 +8,7 @@
 
 ## Запуск
 
-Скачайте `VoxelProxy_x.x.x_x64_ru-RU.msi` из [Releases](https://github.com/kauri-off/voxelproxy/releases) и установите
+Скачайте `VoxelProxy_x.x.x_x64_ru-RU.msi` из [Releases](https://github.com/kauri-off/voxelproxy/releases/latest) и установите
 
 ### Ручной
 
@@ -24,26 +24,6 @@
 - **Запускайте от администратора**, иначе перехват трафика не заработает.
 - В Windows должен быть включён хотспот.
 - После «Запустить» в окне появится пошаговая инструкция — следуйте ей.
-
----
-
-## Если что-то пошло не так
-
-**Клиент не подключается / нет интернета на клиенте.**
-WinDivert или служба хотспота зависли. В PowerShell от администратора:
-
-```powershell
-sc.exe stop windivert
-Stop-Service SharedAccess
-```
-
-Затем включите хотспот заново и перезапустите `voxelproxy.exe`.
-
-**Не работает с включённым VPN (TUN-режим).**
-TUN-адаптер перехватывает IP-трафик раньше WinDivert. Отключите VPN на хосте.
-
-**Лицензионный (online-mode) сервер.**
-Используйте ViaProxy перед VoxelProxy с настроенным аккаунтом.
 
 ---
 
