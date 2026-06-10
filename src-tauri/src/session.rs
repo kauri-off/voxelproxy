@@ -35,7 +35,35 @@ fn is_loopback_host(host: &str) -> bool {
     h == "localhost" || h == "::1" || h.starts_with("127.")
 }
 
+/// Emits `online: false` for both clients when dropped, i.e. whenever a session
+/// ends — early return (version mismatch, unsupported, resolve/connect failure),
+/// an `?` error during login, a login-phase abort inside `run_proxy_session`, or
+/// a normal disconnect. The `online: true` events are emitted at pairing time
+/// (`run_automatic_mode`) or as clients connect (`run_manual_mode`), so without
+/// this guard any exit before the controller loop starts would leave the UI
+/// desynced, still showing both clients connected. This matters most in auto
+/// mode, where a single failed pairing does not end the surrounding accept loop
+/// and so never emits `SessionEndedEvent`. Re-emitting on a normal disconnect is
+/// idempotent (the controller already marked them offline).
+struct ClientStatusOfflineGuard {
+    app: AppHandle,
+}
+
+impl Drop for ClientStatusOfflineGuard {
+    fn drop(&mut self) {
+        for which in [WhichClient::Primary, WhichClient::Secondary] {
+            ClientStatusEvent {
+                which,
+                online: false,
+            }
+            .emit(&self.app)
+            .ok();
+        }
+    }
+}
+
 pub async fn run_manual_mode(server_addr: String, app: AppHandle) -> anyhow::Result<()> {
+    let _status_guard = ClientStatusOfflineGuard { app: app.clone() };
     let log = Logger::new(&app);
     let (remote_addr, remote_dns) =
         match resolve_host_port(&server_addr, DEFAULT_PORT, "minecraft", "tcp").await {
@@ -153,6 +181,7 @@ async fn run_auto_session(
     mut secondary: AutoClientInfo,
     app: AppHandle,
 ) -> anyhow::Result<()> {
+    let _status_guard = ClientStatusOfflineGuard { app: app.clone() };
     let log = Logger::new(&app);
     let primary_login_start = RawPacket::read_async(&mut primary.stream).await?;
     let _ = RawPacket::read_async(&mut secondary.stream).await?;
@@ -344,7 +373,7 @@ pub async fn run_automatic_mode(
             tokio::spawn(run_panic_mode(client));
             continue;
         }
-        if use_windivert && pending.is_empty() && is_loopback_host(&client.server_host) {
+        if pending.is_empty() && is_loopback_host(&client.server_host) {
             log.warn("Клиент подключился к 127.0.0.1 раньше второго клиента — отклонён");
             tokio::spawn(async move {
                 // drain the client's LoginStart, then send the disconnect reason
