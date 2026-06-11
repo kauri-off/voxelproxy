@@ -4,7 +4,7 @@ import { AppState } from "../types";
 
 const initialState: AppState = {
   phase: "idle",
-  mode: "manual",
+  mode: "auto",
   manualServerAddr: "",
   autoUseWindivert: true,
   autoPortMin: 25560,

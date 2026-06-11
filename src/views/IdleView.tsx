@@ -218,18 +218,18 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
           <span className="field-row__label">Режим</span>
           <div className="mode-tabs">
             <button
-              className={`tab ${state.mode === "manual" ? "active" : ""}`}
-              onClick={() => setState((s) => ({ ...s, mode: "manual" }))}
-              disabled={isBlocked}
-            >
-              Ручной
-            </button>
-            <button
               className={`tab ${state.mode === "auto" ? "active" : ""}`}
               onClick={() => setState((s) => ({ ...s, mode: "auto" }))}
               disabled={isBlocked}
             >
               Авто
+            </button>
+            <button
+              className={`tab ${state.mode === "manual" ? "active" : ""}`}
+              onClick={() => setState((s) => ({ ...s, mode: "manual" }))}
+              disabled={isBlocked}
+            >
+              Ручной
             </button>
           </div>
         </div>
@@ -252,7 +252,7 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
         ) : (
           <>
             <div className="field-row">
-              <span className="field-row__label">Хотспот</span>
+              <span className="field-row__label">Раздача Wi-Fi</span>
               <div className="windivert-row">
                 <label
                   className={`checkbox-label ${state.platform !== "windows" ? "is-disabled" : ""}`}
@@ -268,7 +268,7 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                     }
                     disabled={isBlocked || state.platform !== "windows"}
                   />
-                  Перехват трафика хотспота
+                  Читать трафик с раздачи Wi-Fi
                 </label>
                 {state.platform !== "windows" && (
                   <span className="hint">(только Windows)</span>
@@ -279,7 +279,8 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
             <div className="field-row">
               <span className="field-row__label" />
               <span className="hint auto-mode-note">
-                Для двух клиентов через Wi-Fi-хотспот этого ПК. Запускайте
+                Для игры с двух устройств, когда второе выходит в интернет
+                через Wi-Fi, который раздаёт этот компьютер. Запускайте
                 от администратора.
               </span>
             </div>
@@ -288,29 +289,31 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
               <div className="field-row">
                 <span className="field-row__label" />
                 <details className="auto-howto">
-                  <summary>Как настроить хотспот? (важно)</summary>
+                  <summary>Как всё настроить? (важно прочитать)</summary>
                   <ol className="auto-howto__list">
                     <li>
-                      <strong>Это должен быть хотспот именно этого ПК,
-                      а не общий Wi-Fi-роутер.</strong> Если оба устройства
-                      просто подключены к домашнему роутеру — авто-режим
-                      <strong> не сработает</strong>.
+                      <strong>Интернет на втором устройстве должен идти
+                      через этот компьютер, а не через домашний роутер.</strong>{" "}
+                      Это как точка доступа на телефоне, только тут Wi-Fi
+                      раздаёт ПК. Если оба устройства просто подключены к
+                      домашнему Wi-Fi — авто-режим<strong> не сработает</strong>.
                     </li>
                     <li>
-                      На этом ПК откройте{" "}
+                      На этом компьютере откройте{" "}
                       <em>Параметры → Сеть и Интернет → Мобильный хот-спот</em>{" "}
-                      и включите его. «Раздавать через» — Wi-Fi.
+                      и включите раздачу. В строке «Раздавать через» выберите
+                      Wi-Fi.
                     </li>
                     <li>
                       На втором устройстве (телефон, ноутбук, другой ПК)
                       отключитесь от домашнего Wi-Fi и подключитесь{" "}
-                      <strong>к Wi-Fi, который раздаёт этот ПК</strong>{" "}
-                      (имя и пароль показаны в окне Мобильного хот-спота).
+                      <strong>к Wi-Fi, который раздаёт этот компьютер</strong>{" "}
+                      (его имя и пароль показаны в окне «Мобильный хот-спот»).
                     </li>
                     <li>
                       Запустите VoxelProxy{" "}
                       <strong>от имени администратора</strong>. Без этого
-                      перехват трафика не заработает.
+                      программа не сможет читать трафик.
                     </li>
                     <li>
                       Нажмите «Запустить». На втором устройстве — заходите
@@ -320,9 +323,10 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                     </li>
                   </ol>
                   <p className="auto-howto__note">
-                    Так VoxelProxy видит трафик второго клиента и подменяет
-                    ник. Через общий роутер этот трафик до ПК просто не
-                    доходит — поэтому без хотспота ничего не работает.
+                    Так VoxelProxy видит, что отправляет второе устройство, и
+                    меняет ник. Если интернет идёт через домашний роутер, эти
+                    данные до компьютера не доходят — поэтому без раздачи
+                    Wi-Fi с этого ПК ничего не работает.
                   </p>
                 </details>
               </div>
@@ -336,17 +340,27 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                   <div className="auto-howto__trouble">
                     <p>
                       <strong>
-                        Клиент не подключается / нет интернета на клиенте.
+                        Клиент не подключается / нет интернета на втором
+                        устройстве.
                       </strong>{" "}
-                      WinDivert или служба хотспота зависли. В PowerShell от
-                      администратора:
+                      Зависла программа чтения трафика (WinDivert) или сама
+                      раздача Wi-Fi. Откройте PowerShell от администратора и
+                      выполните:
                     </p>
                     <pre className="auto-howto__code">
                       <code>{"sc.exe stop windivert\nStop-Service SharedAccess"}</code>
                     </pre>
                     <p>
-                      Затем включите хотспот заново и перезапустите{" "}
+                      Затем включите раздачу Wi-Fi заново и перезапустите{" "}
                       <code>voxelproxy.exe</code>.
+                    </p>
+                    <p>
+                      <strong>
+                        На втором устройстве не работает интернет.
+                      </strong>{" "}
+                      Пропиши DNS вручную. В настройках Wi-Fi у пункта «DNS»
+                      (IPv4) выбери ручной ввод и впиши <code>1.1.1.1</code> и{" "}
+                      <code>8.8.8.8</code>, потом переподключись к Wi-Fi.
                     </p>
                     <p>
                       <strong>Не работает с включённым VPN (TUN-режим).</strong>{" "}
