@@ -157,13 +157,23 @@ pub async fn download_and_install_update(url: String, app: AppHandle) -> Result<
         let mut stream = resp.bytes_stream();
         let mut downloaded: u64 = 0;
 
-        UpdateProgressEvent { downloaded, total }.emit(&app).ok();
+        UpdateProgressEvent {
+            downloaded: downloaded as u32,
+            total: total as u32,
+        }
+        .emit(&app)
+        .ok();
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| e.to_string())?;
             file.write_all(&chunk).await.map_err(|e| e.to_string())?;
             downloaded += chunk.len() as u64;
-            UpdateProgressEvent { downloaded, total }.emit(&app).ok();
+            UpdateProgressEvent {
+                downloaded: downloaded as u32,
+                total: total as u32,
+            }
+            .emit(&app)
+            .ok();
         }
 
         file.flush().await.map_err(|e| e.to_string())?;
@@ -191,6 +201,69 @@ pub fn open_url(url: String) {
 #[specta::specta]
 pub fn get_platform() -> String {
     std::env::consts::OS.to_string()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn is_elevated() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        crate::hotspot_redirect::is_admin()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        true
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn relaunch_as_admin(app: AppHandle) -> Result<(), String> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        Err("Перезапуск с правами администратора поддерживается только на Windows".into())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        use windows::core::PCWSTR;
+
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+
+        let exe_wide: Vec<u16> = exe
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let verb: Vec<u16> = std::ffi::OsStr::new("runas")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        let result = unsafe {
+            ShellExecuteW(
+                None,
+                PCWSTR(verb.as_ptr()),
+                PCWSTR(exe_wide.as_ptr()),
+                PCWSTR::null(),
+                PCWSTR::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+
+        // ShellExecuteW returns a value > 32 on success. Values <= 32 are error
+        // codes (e.g. the user dismissed the UAC prompt).
+        if result.0 as isize <= 32 {
+            return Err("Не удалось перезапустить с правами администратора".into());
+        }
+
+        app.exit(0);
+        Ok(())
+    }
 }
 
 #[tauri::command]

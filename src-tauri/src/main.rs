@@ -34,6 +34,8 @@ fn create_builder() -> Builder<tauri::Wry> {
             commands::download_and_install_update,
             commands::open_url,
             commands::get_platform,
+            commands::is_elevated,
+            commands::relaunch_as_admin,
             commands::set_panic_mode,
             commands::get_pending_changelogs,
             commands::acknowledge_changelog,

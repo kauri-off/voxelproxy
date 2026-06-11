@@ -42,6 +42,6 @@ pub struct ServerAddrEvent(pub String);
 
 #[derive(Serialize, Clone, Type, Event)]
 pub struct UpdateProgressEvent {
-    pub downloaded: u64,
-    pub total: u64,
+    pub downloaded: u32,
+    pub total: u32,
 }

@@ -1,6 +1,6 @@
 [package]
 name = "voxelproxy"
-version = "6.3.6"
+version = "6.3.7"
 edition = "2024"
 authors = ["kauri-off <https://github.com/kauri-off>"]
 description = "Бесплатный аналог takker.ru"
@@ -35,6 +35,8 @@ windows = { version = "0.62.2", features = [
     "Win32_NetworkManagement_Ndis",
     "Win32_Security",
     "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 windivert = "0.6.0"
 etherparse = "0.20.1"

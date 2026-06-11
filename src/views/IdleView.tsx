@@ -2,6 +2,7 @@ import React, { useState, useCallback, useEffect } from "react";
 import { AppState } from "../types";
 import { commands, LogLevel } from "../bindings";
 import { ManualWarningModal } from "../components/ManualWarningModal";
+import { AdminRequiredModal } from "../components/AdminRequiredModal";
 
 const validateManualAddr = (addr: string): boolean => {
   const trimmed = addr.trim();
@@ -43,6 +44,7 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
   const [isStarting, setIsStarting] = useState(false);
   const [supportedVersions, setSupportedVersions] = useState<string[]>([]);
   const [showManualWarning, setShowManualWarning] = useState(false);
+  const [showAdminRequired, setShowAdminRequired] = useState(false);
 
   useEffect(() => {
     commands.getSupportedVersions().then(setSupportedVersions);
@@ -90,6 +92,16 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
         ) {
           addLog("Error", "Неверный диапазон портов (1-65535, min ≤ max)");
           return;
+        }
+
+        // Перехват трафика хотспота требует прав администратора. Если их нет,
+        // предлагаем перезапустить приложение от имени администратора.
+        if (autoUseWindivert) {
+          const elevated = await commands.isElevated();
+          if (!elevated) {
+            setShowAdminRequired(true);
+            return;
+          }
         }
 
         setState((prev) => ({ ...prev, panicMode: false }));
@@ -456,6 +468,18 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
               setIsStarting(false);
             }
           }}
+        />
+      )}
+
+      {showAdminRequired && (
+        <AdminRequiredModal
+          onCancel={() => setShowAdminRequired(false)}
+          onError={(message) =>
+            addLog(
+              "Error",
+              `Не удалось перезапустить от администратора: ${message}`,
+            )
+          }
         />
       )}
     </div>
