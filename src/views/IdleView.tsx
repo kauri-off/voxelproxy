@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { AppState } from "../types";
 import { commands, LogLevel } from "../bindings";
 import { ManualWarningModal } from "../components/ManualWarningModal";
@@ -222,208 +223,247 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
               onClick={() => setState((s) => ({ ...s, mode: "auto" }))}
               disabled={isBlocked}
             >
-              Авто
+              {state.mode === "auto" && (
+                <motion.span
+                  layoutId="mode-tab-pill"
+                  className="tab__pill"
+                  transition={{ type: "spring", stiffness: 500, damping: 38 }}
+                />
+              )}
+              <span className="tab__label">Авто</span>
             </button>
             <button
               className={`tab ${state.mode === "manual" ? "active" : ""}`}
               onClick={() => setState((s) => ({ ...s, mode: "manual" }))}
               disabled={isBlocked}
             >
-              Ручной
+              {state.mode === "manual" && (
+                <motion.span
+                  layoutId="mode-tab-pill"
+                  className="tab__pill"
+                  transition={{ type: "spring", stiffness: 500, damping: 38 }}
+                />
+              )}
+              <span className="tab__label">Ручной (Детектится)</span>
             </button>
           </div>
         </div>
 
-        {state.mode === "manual" ? (
-          <div className="field-row">
-            <span className="field-row__label">Сервер</span>
-            <input
-              type="text"
-              className="text-input"
-              placeholder="mc.funtime.su"
-              value={state.manualServerAddr}
-              onChange={(e) =>
-                setState((s) => ({ ...s, manualServerAddr: e.target.value }))
-              }
-              onKeyDown={handleKeyDown}
-              disabled={isBlocked}
-            />
-          </div>
-        ) : (
-          <>
-            <div className="field-row">
-              <span className="field-row__label">Раздача Wi-Fi</span>
-              <div className="windivert-row">
-                <label
-                  className={`checkbox-label ${state.platform !== "windows" ? "is-disabled" : ""}`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={state.autoUseWindivert}
-                    onChange={(e) =>
-                      setState((s) => ({
-                        ...s,
-                        autoUseWindivert: e.target.checked,
-                      }))
-                    }
-                    disabled={isBlocked || state.platform !== "windows"}
-                  />
-                  Проксировать трафик точки доступа Wi-Fi
-                  <span
-                    className="help-icon"
-                    tabIndex={0}
-                    role="img"
-                    aria-label="Подсказка"
-                    title="Позволяет играть с дополнительных устройств, подключенных к точке доступа Wi-Fi, который раздаёт это (основное) устройство. Требуются права администратора."
-                  >
-                    ?
-                  </span>
-                </label>
-                {state.platform !== "windows" && (
-                  <span className="hint">(только Windows)</span>
-                )}
-              </div>
-            </div>
-
-            <div className="field-row">
-              <span className="field-row__label" />
-              <span className="hint auto-mode-note">
-                Для игры с двух устройств, когда второе выходит в интернет
-                через Wi-Fi, который раздаёт этот компьютер. Запускайте
-                от администратора.
-              </span>
-            </div>
-
-            {state.platform === "windows" && (
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={state.mode}
+            className="mode-content"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+          >
+            {state.mode === "manual" ? (
               <div className="field-row">
-                <span className="field-row__label" />
-                <details className="auto-howto">
-                  <summary>Как всё настроить? (важно прочитать)</summary>
-                  <ol className="auto-howto__list">
-                    <li>
-                      <strong>Интернет на втором устройстве должен идти
-                      через этот компьютер, а не через домашний роутер.</strong>{" "}
-                      Это как точка доступа на телефоне, только тут Wi-Fi
-                      раздаёт ПК. Если оба устройства просто подключены к
-                      домашнему Wi-Fi — авто-режим<strong> не сработает</strong>.
-                    </li>
-                    <li>
-                      На этом компьютере откройте{" "}
-                      <em>Параметры → Сеть и Интернет → Мобильный хот-спот</em>{" "}
-                      и включите раздачу. В строке «Раздавать через» выберите
-                      Wi-Fi.
-                    </li>
-                    <li>
-                      На втором устройстве (телефон, ноутбук, другой ПК)
-                      отключитесь от домашнего Wi-Fi и подключитесь{" "}
-                      <strong>к Wi-Fi, который раздаёт этот компьютер</strong>{" "}
-                      (его имя и пароль показаны в окне «Мобильный хот-спот»).
-                    </li>
-                    <li>
-                      Запустите VoxelProxy{" "}
-                      <strong>от имени администратора</strong>. Без этого
-                      программа не сможет читать трафик.
-                    </li>
-                    <li>
-                      Нажмите «Запустить». На втором устройстве — заходите
-                      на сервер как обычно (например, <code>mc.funtime.su</code>).
-                      На этом ПК — на адрес <code>127.0.0.1:25565</code>{" "}
-                      (его покажет приложение).
-                    </li>
-                  </ol>
-                  <p className="auto-howto__note">
-                    Так VoxelProxy видит, что отправляет второе устройство, и
-                    меняет ник. Если интернет идёт через домашний роутер, эти
-                    данные до компьютера не доходят — поэтому без раздачи
-                    Wi-Fi с этого ПК ничего не работает.
-                  </p>
-                </details>
+                <span className="field-row__label">Сервер</span>
+                <input
+                  type="text"
+                  className="text-input"
+                  placeholder="mc.funtime.su"
+                  value={state.manualServerAddr}
+                  onChange={(e) =>
+                    setState((s) => ({ ...s, manualServerAddr: e.target.value }))
+                  }
+                  onKeyDown={handleKeyDown}
+                  disabled={isBlocked}
+                />
               </div>
-            )}
-
-            {state.platform === "windows" && (
-              <div className="field-row">
-                <span className="field-row__label" />
-                <details className="auto-howto">
-                  <summary>Если что-то пошло не так</summary>
-                  <div className="auto-howto__trouble">
-                    <p>
-                      <strong>
-                        Клиент не подключается / нет интернета на втором
-                        устройстве.
-                      </strong>{" "}
-                      Зависла программа чтения трафика (WinDivert) или сама
-                      раздача Wi-Fi. Откройте PowerShell от администратора и
-                      выполните:
-                    </p>
-                    <pre className="auto-howto__code">
-                      <code>{"sc.exe stop windivert\nStop-Service SharedAccess"}</code>
-                    </pre>
-                    <p>
-                      Затем включите раздачу Wi-Fi заново и перезапустите{" "}
-                      <code>voxelproxy.exe</code>.
-                    </p>
-                    <p>
-                      <strong>
-                        На втором устройстве не работает интернет.
-                      </strong>{" "}
-                      Пропиши DNS вручную. В настройках Wi-Fi у пункта «DNS»
-                      (IPv4) выбери ручной ввод и впиши <code>1.1.1.1</code> и{" "}
-                      <code>8.8.8.8</code>, потом переподключись к Wi-Fi.
-                    </p>
-                    <p>
-                      <strong>Не работает с включённым VPN (TUN-режим).</strong>{" "}
-                      TUN-адаптер перехватывает IP-трафик раньше WinDivert.
-                      Отключите VPN на хосте.
-                    </p>
-                    <p>
-                      <strong>Лицензионный (online-mode) сервер.</strong>{" "}
-                      Используйте ViaProxy перед VoxelProxy с настроенным
-                      аккаунтом.
-                    </p>
+            ) : (
+              <>
+                <div className="field-row">
+                  <span className="field-row__label">Раздача Wi-Fi</span>
+                  <div className="windivert-row">
+                    <label
+                      className={`checkbox-label ${state.platform !== "windows" ? "is-disabled" : ""}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={state.autoUseWindivert}
+                        onChange={(e) =>
+                          setState((s) => ({
+                            ...s,
+                            autoUseWindivert: e.target.checked,
+                          }))
+                        }
+                        disabled={isBlocked || state.platform !== "windows"}
+                      />
+                      Проксировать трафик точки доступа Wi-Fi
+                      <span
+                        className="help-icon"
+                        tabIndex={0}
+                        role="img"
+                        aria-label="Подсказка"
+                        title="Позволяет играть с дополнительных устройств, подключенных к точке доступа Wi-Fi, который раздаёт это (основное) устройство. Требуются права администратора."
+                      >
+                        ?
+                      </span>
+                    </label>
+                    {state.platform !== "windows" && (
+                      <span className="hint">(только Windows)</span>
+                    )}
                   </div>
-                </details>
-              </div>
-            )}
-
-            {state.autoUseWindivert && state.platform === "windows" && (
-              <div className="field-row">
-                <span className="field-row__label">Порты</span>
-                <div className="port-range-row">
-                  <input
-                    type="number"
-                    className="port-input"
-                    value={state.autoPortMin}
-                    onChange={(e) =>
-                      setState((s) => ({
-                        ...s,
-                        autoPortMin: Math.max(1, +e.target.value || 1),
-                      }))
-                    }
-                    min={1}
-                    max={65535}
-                    disabled={isBlocked}
-                  />
-                  <span className="hint">–</span>
-                  <input
-                    type="number"
-                    className="port-input"
-                    value={state.autoPortMax}
-                    onChange={(e) =>
-                      setState((s) => ({
-                        ...s,
-                        autoPortMax: Math.min(65535, +e.target.value || 65535),
-                      }))
-                    }
-                    min={1}
-                    max={65535}
-                    disabled={isBlocked}
-                  />
                 </div>
-              </div>
+
+                <div className="field-row">
+                  <span className="field-row__label" />
+                  <span className="hint auto-mode-note">
+                    Для игры с двух устройств, когда второе выходит в интернет
+                    через Wi-Fi, который раздаёт этот компьютер. Запускайте от
+                    администратора.
+                  </span>
+                </div>
+
+                {state.platform === "windows" && (
+                  <div className="field-row">
+                    <span className="field-row__label" />
+                    <Collapsible
+                      className="auto-howto"
+                      summary="Как всё настроить? (важно прочитать)"
+                    >
+                      <ol className="auto-howto__list">
+                        <li>
+                          <strong>
+                            Интернет на втором устройстве должен идти через этот
+                            компьютер, а не через домашний роутер.
+                          </strong>{" "}
+                          Это как точка доступа на телефоне, только тут Wi-Fi
+                          раздаёт ПК. Если оба устройства просто подключены к
+                          домашнему Wi-Fi — авто-режим
+                          <strong> не сработает</strong>.
+                        </li>
+                        <li>
+                          На этом компьютере откройте{" "}
+                          <em>Параметры → Сеть и Интернет → Мобильный хот-спот</em>{" "}
+                          и включите раздачу. В строке «Раздавать через» выберите
+                          Wi-Fi.
+                        </li>
+                        <li>
+                          На втором устройстве (телефон, ноутбук, другой ПК)
+                          отключитесь от домашнего Wi-Fi и подключитесь{" "}
+                          <strong>к Wi-Fi, который раздаёт этот компьютер</strong>{" "}
+                          (его имя и пароль показаны в окне «Мобильный хот-спот»).
+                        </li>
+                        <li>
+                          Запустите VoxelProxy{" "}
+                          <strong>от имени администратора</strong>. Без этого
+                          программа не сможет читать трафик.
+                        </li>
+                        <li>
+                          Нажмите «Запустить». На втором устройстве — заходите на
+                          сервер как обычно (например, <code>mc.funtime.su</code>
+                          ). На этом ПК — на адрес <code>127.0.0.1:25565</code>{" "}
+                          (его покажет приложение).
+                        </li>
+                      </ol>
+                      <p className="auto-howto__note">
+                        Так VoxelProxy видит, что отправляет второе устройство, и
+                        меняет ник. Если интернет идёт через домашний роутер, эти
+                        данные до компьютера не доходят — поэтому без раздачи
+                        Wi-Fi с этого ПК ничего не работает.
+                      </p>
+                    </Collapsible>
+                  </div>
+                )}
+
+                {state.platform === "windows" && (
+                  <div className="field-row">
+                    <span className="field-row__label" />
+                    <Collapsible
+                      className="auto-howto"
+                      summary="Если что-то пошло не так"
+                    >
+                      <div className="auto-howto__trouble">
+                        <p>
+                          <strong>
+                            Клиент не подключается / нет интернета на втором
+                            устройстве.
+                          </strong>{" "}
+                          Зависла программа чтения трафика (WinDivert) или сама
+                          раздача Wi-Fi. Откройте PowerShell от администратора и
+                          выполните:
+                        </p>
+                        <pre className="auto-howto__code">
+                          <code>
+                            {"sc.exe stop windivert\nStop-Service SharedAccess"}
+                          </code>
+                        </pre>
+                        <p>
+                          Затем включите раздачу Wi-Fi заново и перезапустите{" "}
+                          <code>voxelproxy.exe</code>.
+                        </p>
+                        <p>
+                          <strong>
+                            На втором устройстве не работает интернет.
+                          </strong>{" "}
+                          Пропиши DNS вручную. В настройках Wi-Fi у пункта «DNS»
+                          (IPv4) выбери ручной ввод и впиши <code>1.1.1.1</code>{" "}
+                          и <code>8.8.8.8</code>, потом переподключись к Wi-Fi.
+                        </p>
+                        <p>
+                          <strong>
+                            Не работает с включённым VPN (TUN-режим).
+                          </strong>{" "}
+                          TUN-адаптер перехватывает IP-трафик раньше WinDivert.
+                          Отключите VPN на хосте.
+                        </p>
+                        <p>
+                          <strong>Лицензионный (online-mode) сервер.</strong>{" "}
+                          Используйте ViaProxy перед VoxelProxy с настроенным
+                          аккаунтом.
+                        </p>
+                      </div>
+                    </Collapsible>
+                  </div>
+                )}
+
+                {state.autoUseWindivert && state.platform === "windows" && (
+                  <div className="field-row">
+                    <span className="field-row__label">Порты</span>
+                    <div className="port-range-row">
+                      <input
+                        type="number"
+                        className="port-input"
+                        value={state.autoPortMin}
+                        onChange={(e) =>
+                          setState((s) => ({
+                            ...s,
+                            autoPortMin: Math.max(1, +e.target.value || 1),
+                          }))
+                        }
+                        min={1}
+                        max={65535}
+                        disabled={isBlocked}
+                      />
+                      <span className="hint">–</span>
+                      <input
+                        type="number"
+                        className="port-input"
+                        value={state.autoPortMax}
+                        onChange={(e) =>
+                          setState((s) => ({
+                            ...s,
+                            autoPortMax: Math.min(
+                              65535,
+                              +e.target.value || 65535,
+                            ),
+                          }))
+                        }
+                        min={1}
+                        max={65535}
+                        disabled={isBlocked}
+                      />
+                    </div>
+                  </div>
+                )}
+              </>
             )}
-          </>
-        )}
+          </motion.div>
+        </AnimatePresence>
 
         {supportedVersions.length > 0 && (
           <div className="field-row">
@@ -505,6 +545,47 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
           }
         />
       )}
+    </div>
+  );
+};
+
+interface CollapsibleProps {
+  className?: string;
+  summary: string;
+  children: React.ReactNode;
+}
+
+const Collapsible: React.FC<CollapsibleProps> = ({
+  className,
+  summary,
+  children,
+}) => {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className={className}>
+      <button
+        type="button"
+        className="auto-howto__summary"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="auto-howto__marker">▸</span>
+        {summary}
+      </button>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            className="auto-howto__content"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.25, ease: "easeInOut" }}
+          >
+            {children}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

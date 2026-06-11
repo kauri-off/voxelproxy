@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { AppState } from "../types";
 import { ActiveSession } from "../components/ActiveSession";
 import { CheckIcon, CopyIcon } from "../components/Icons";
@@ -22,44 +23,62 @@ export const RunningView: React.FC<Props> = ({ state, onTogglePanicMode }) => {
 
   const showPanicMode = state.mode === "auto";
 
-  if (sessionLive) {
-    return (
-      <div className="panel-host">
-        <ActiveSession
-          nickName={state.nickName}
-          serverAddr={state.serverAddr}
-          clients={state.clients}
-          showPanicMode={showPanicMode}
-          panicMode={state.panicMode}
-          onTogglePanicMode={onTogglePanicMode}
-        />
-      </div>
-    );
-  }
+  const panelKey = sessionLive
+    ? "active"
+    : state.mode === "auto"
+      ? state.autoUseWindivert
+        ? "auto-steps"
+        : "auto-simple"
+      : "manual";
 
-  if (state.mode === "auto") {
-    return (
-      <div className="panel-host">
-        {state.autoUseWindivert ? (
+  const renderActivePanel = () => {
+    switch (panelKey) {
+      case "active":
+        return (
+          <ActiveSession
+            nickName={state.nickName}
+            serverAddr={state.serverAddr}
+            clients={state.clients}
+            showPanicMode={showPanicMode}
+            panicMode={state.panicMode}
+            onTogglePanicMode={onTogglePanicMode}
+          />
+        );
+      case "auto-steps":
+        return (
           <AutoSetupSteps
             clients={state.clients}
             panicMode={state.panicMode}
             onTogglePanicMode={onTogglePanicMode}
           />
-        ) : (
+        );
+      case "auto-simple":
+        return (
           <AutoSimplePanel
             clients={state.clients}
             panicMode={state.panicMode}
             onTogglePanicMode={onTogglePanicMode}
           />
-        )}
-      </div>
-    );
-  }
+        );
+      case "manual":
+        return <ManualSetupPanel ip={state.localIp} clients={state.clients} />;
+    }
+  };
 
   return (
     <div className="panel-host">
-      <ManualSetupPanel ip={state.localIp} clients={state.clients} />
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={panelKey}
+          className="panel-motion"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -10 }}
+          transition={{ duration: 0.2, ease: "easeOut" }}
+        >
+          {renderActivePanel()}
+        </motion.div>
+      </AnimatePresence>
     </div>
   );
 };

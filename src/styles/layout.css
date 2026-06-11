@@ -71,21 +71,13 @@
   overflow: hidden;
 }
 
+/* Motion (framer-motion) owns the enter/exit animation for views; this rule
+   just positions the active pane so entering/exiting panes overlay cleanly. */
 .view {
   position: absolute;
   inset: 0;
-  opacity: 0;
-  transform: translateY(8px);
-  transition: opacity 0.22s ease, transform 0.22s ease;
-  pointer-events: none;
   display: flex;
   flex-direction: column;
-}
-
-.view.is-visible {
-  opacity: 1;
-  transform: translateY(0);
-  pointer-events: auto;
 }
 
 /* ── Log drawer (sits at bottom of each view) ─────────────────── */

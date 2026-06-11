@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { useAppState } from "./hooks/useAppState";
 import { useTauriListeners } from "./hooks/useTauriListeners";
 import { TitleBar } from "./components/TitleBar";
@@ -47,24 +48,35 @@ export const App = () => {
   const isIdle = state.phase === "idle";
 
   return (
-    <div className="app">
-      <TitleBar state={state} onStop={handleStop} />
+    <MotionConfig reducedMotion="user">
+      <div className="app">
+        <TitleBar state={state} onStop={handleStop} />
 
-      <main className="view-container">
-        <div className={`view ${isIdle ? "is-visible" : ""}`}>
-          <IdleView state={state} setState={setState} addLog={addLog} />
-        </div>
+        <main className="view-container">
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={isIdle ? "idle" : "running"}
+              className="view"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.22, ease: "easeInOut" }}
+            >
+              {isIdle ? (
+                <IdleView state={state} setState={setState} addLog={addLog} />
+              ) : (
+                <RunningView state={state} onTogglePanicMode={togglePanicMode} />
+              )}
+            </motion.div>
+          </AnimatePresence>
+        </main>
 
-        <div className={`view ${!isIdle ? "is-visible" : ""}`}>
-          <RunningView state={state} onTogglePanicMode={togglePanicMode} />
-        </div>
-      </main>
+        <LogPanel logs={logs} onClear={() => setLogs([])} />
 
-      <LogPanel logs={logs} onClear={() => setLogs([])} />
-
-      {changelog.length > 0 && (
-        <ChangelogModal entries={changelog} onDismiss={dismissChangelog} />
-      )}
-    </div>
+        {changelog.length > 0 && (
+          <ChangelogModal entries={changelog} onDismiss={dismissChangelog} />
+        )}
+      </div>
+    </MotionConfig>
   );
 };

@@ -38,6 +38,7 @@
 }
 
 .tab {
+  position: relative;
   flex: 1;
   padding: 7px 0;
   font-size: 13px;
@@ -47,17 +48,38 @@
   border: none;
   border-radius: 6px;
   cursor: pointer;
-  transition: color 0.15s, background 0.15s;
+  transition: color 0.15s;
 }
 
 .tab:hover:not(.active) { color: var(--c-text); }
 
 .tab.active {
   color: var(--c-text);
+}
+
+/* Grey indicator that slides between tabs via framer-motion layoutId. */
+.tab__pill {
+  position: absolute;
+  inset: 0;
   background: var(--c-surface2);
+  border-radius: 6px;
+  z-index: 0;
+}
+
+.tab__label {
+  position: relative;
+  z-index: 1;
 }
 
 .tab:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Wrapper around the auto/manual mode fields; framer-motion cross-fades it
+   on mode change. Mirrors .panel's column gap so field spacing is unchanged. */
+.mode-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
 
 /* ── Text input ───────────────────────────────────────────────── */
 .text-input {
@@ -158,6 +180,13 @@
   align-items: flex-start;
   justify-content: flex-start;
   padding: 32px 36px;
+}
+
+/* Motion wrapper around the active panel; must not constrain the panel's
+   own max-width, so it spans the host and lets .panel align/size itself. */
+.panel-motion {
+  display: flex;
+  width: 100%;
 }
 
 .panel {
@@ -446,31 +475,42 @@
   line-height: 1.55;
 }
 
-.auto-howto > summary {
+.auto-howto__summary {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.2em;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: none;
+  text-align: left;
+  font-family: inherit;
   color: var(--c-warn);
   font-weight: 500;
   font-size: 12px;
   cursor: pointer;
-  list-style: none;
   user-select: none;
   transition: color 0.15s;
 }
 
-.auto-howto > summary::-webkit-details-marker { display: none; }
+.auto-howto__summary:hover {
+  color: var(--c-text);
+}
 
-.auto-howto > summary::before {
-  content: "▸ ";
+.auto-howto__marker {
   display: inline-block;
   width: 0.9em;
   transition: transform 0.15s;
 }
 
-.auto-howto[open] > summary::before {
-  content: "▾ ";
+.auto-howto__summary[aria-expanded="true"] .auto-howto__marker {
+  transform: rotate(90deg);
 }
 
-.auto-howto > summary:hover {
-  color: var(--c-text);
+/* framer-motion animates this wrapper's height; overflow hides the
+   content while it expands/collapses. */
+.auto-howto__content {
+  overflow: hidden;
 }
 
 .auto-howto__list {
