@@ -268,7 +268,16 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                     }
                     disabled={isBlocked || state.platform !== "windows"}
                   />
-                  Читать трафик с раздачи Wi-Fi
+                  Проксировать трафик точки доступа Wi-Fi
+                  <span
+                    className="help-icon"
+                    tabIndex={0}
+                    role="img"
+                    aria-label="Подсказка"
+                    title="Позволяет играть с дополнительных устройств, подключенных к точке доступа Wi-Fi, который раздаёт это (основное) устройство. Требуются права администратора."
+                  >
+                    ?
+                  </span>
                 </label>
                 {state.platform !== "windows" && (
                   <span className="hint">(только Windows)</span>

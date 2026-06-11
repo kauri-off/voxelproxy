@@ -190,8 +190,8 @@ const AutoSetupSteps: React.FC<AutoSetupProps> = ({
         online={secondaryOnline}
       >
         <p className="setup-step__text">
-          На втором устройстве (которое подключено к Wi-Fi-хотспоту этого ПК)
-          зайдите на сервер как обычно (mc.funtime.su).
+          На втором устройстве (которое подключено к Wi-Fi, который раздаёт
+          этот компьютер) зайдите на сервер как обычно (mc.funtime.su).
         </p>
       </SetupStep>
 

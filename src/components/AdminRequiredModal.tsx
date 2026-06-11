@@ -58,7 +58,7 @@ export const AdminRequiredModal: React.FC<Props> = ({ onCancel, onError }) => {
 
         <div className="changelog-card__body warning-card__body">
           <p>
-            Авто-режим с перехватом трафика хотспота работает только{" "}
+            Авто-режим с чтением трафика раздачи Wi-Fi работает только{" "}
             <span className="warning-card__warn">от имени администратора</span>.
             Сейчас VoxelProxy запущен без повышенных прав.
           </p>
