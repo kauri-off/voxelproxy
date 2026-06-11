@@ -149,6 +149,10 @@
   line-height: 1.5;
 }
 
+.field-row:has(.auto-mode-note) {
+  margin-top: -8px;
+}
+
 .port-input {
   width: 70px;
   padding: 6px 8px;

@@ -61,6 +61,16 @@ fn is_loopback_host(host: &str) -> bool {
     }
 }
 
+/// Resolves when `stream` is closed by the peer, errors, or (unexpectedly)
+/// sends more bytes. Assumes the client's `LoginStart` has already been drained,
+/// so a healthy client keeps the socket unreadable until it disconnects; used to
+/// notice a client that vanished while we wait for its partner to connect. `peek`
+/// consumes nothing, so this is cancellation-safe inside `select!`.
+async fn wait_for_disconnect(stream: &mut TcpStream) {
+    let mut probe = [0u8; 1];
+    let _ = stream.peek(&mut probe).await;
+}
+
 /// Emits `online: false` for both clients when dropped, i.e. whenever a session
 /// ends — early return (version mismatch, unsupported, resolve/connect failure),
 /// an `?` error during login, a login-phase abort inside `run_proxy_session`, or
@@ -111,17 +121,58 @@ pub async fn run_manual_mode(server_addr: String, app: AppHandle) -> anyhow::Res
         remote_addr,
     ));
 
-    let (mut primary_stream, primary_protocol) = rx.recv().await.unwrap();
-    let primary_login_start = RawPacket::read_async(&mut primary_stream).await?;
+    // Acquire a live primary, then wait for the secondary while watching the
+    // primary for an early disconnect. If the primary drops before the secondary
+    // arrives, mark it offline and re-acquire a fresh primary instead of carrying
+    // a dead stream into the session.
+    let (mut primary_stream, primary_protocol, primary_login_start, mut secondary_stream, secondary_protocol) = loop {
+        let (mut primary_stream, primary_protocol) = match rx.recv().await {
+            Some(p) => p,
+            None => anyhow::bail!("Диспетчер подключений завершился"),
+        };
+        let primary_login_start = RawPacket::read_async(&mut primary_stream).await?;
+        ClientStatusEvent {
+            which: WhichClient::Primary,
+            online: true,
+        }
+        .emit(&app)
+        .ok();
 
-    ClientStatusEvent {
-        which: WhichClient::Primary,
-        online: true,
-    }
-    .emit(&app)
-    .ok();
-
-    let (mut secondary_stream, secondary_protocol) = rx.recv().await.unwrap();
+        enum Sec {
+            Got((TcpStream, i32)),
+            PrimaryGone,
+            Closed,
+        }
+        let sec = tokio::select! {
+            recv = rx.recv() => match recv {
+                Some(s) => Sec::Got(s),
+                None => Sec::Closed,
+            },
+            _ = wait_for_disconnect(&mut primary_stream) => Sec::PrimaryGone,
+        };
+        match sec {
+            Sec::Got((secondary_stream, secondary_protocol)) => {
+                break (
+                    primary_stream,
+                    primary_protocol,
+                    primary_login_start,
+                    secondary_stream,
+                    secondary_protocol,
+                );
+            }
+            Sec::PrimaryGone => {
+                log.warn("Основной клиент отключился, не дождавшись второго");
+                ClientStatusEvent {
+                    which: WhichClient::Primary,
+                    online: false,
+                }
+                .emit(&app)
+                .ok();
+                continue;
+            }
+            Sec::Closed => anyhow::bail!("Диспетчер подключений завершился"),
+        }
+    };
     let _ = RawPacket::read_async(&mut secondary_stream).await?;
     ClientStatusEvent {
         which: WhichClient::Secondary,
@@ -209,8 +260,10 @@ async fn run_auto_session(
 ) -> anyhow::Result<()> {
     let _status_guard = ClientStatusOfflineGuard { app: app.clone() };
     let log = Logger::new(&app);
+    // The secondary's LoginStart was already drained at pairing time in
+    // `run_automatic_mode` (so its socket could be watched for disconnect while
+    // it waited); only the primary's remains to be read here.
     let primary_login_start = RawPacket::read_async(&mut primary.stream).await?;
-    let _ = RawPacket::read_async(&mut secondary.stream).await?;
 
     if primary.protocol_version != secondary.protocol_version {
         crate::proxy::send_login_error(
@@ -392,14 +445,43 @@ pub async fn run_automatic_mode(
         Ok(())
     });
 
-    let mut pending = Vec::new();
+    let mut pending: Option<AutoClientInfo> = None;
 
-    while let Some(mut client) = rx.recv().await {
+    loop {
+        // Receive the next client; while a secondary is pending, also watch its
+        // socket so we notice if it disconnects before the primary connects.
+        enum Step {
+            Client(Option<AutoClientInfo>),
+            SecondaryGone,
+        }
+        let step = match pending.as_mut() {
+            Some(sec) => tokio::select! {
+                recv = rx.recv() => Step::Client(recv),
+                _ = wait_for_disconnect(&mut sec.stream) => Step::SecondaryGone,
+            },
+            None => Step::Client(rx.recv().await),
+        };
+        let mut client = match step {
+            Step::SecondaryGone => {
+                log.warn("Второй клиент отключился, не дождавшись основного");
+                ClientStatusEvent {
+                    which: WhichClient::Secondary,
+                    online: false,
+                }
+                .emit(&app)
+                .ok();
+                pending = None;
+                continue;
+            }
+            Step::Client(Some(c)) => c,
+            Step::Client(None) => break,
+        };
+
         if *panic_mode.lock().await {
             tokio::spawn(run_panic_mode(client));
             continue;
         }
-        if pending.is_empty() && is_loopback_host(&client.server_host) {
+        if pending.is_none() && is_loopback_host(&client.server_host) {
             log.warn("Клиент подключился к 127.0.0.1 раньше второго клиента — отклонён");
             tokio::spawn(async move {
                 // drain the client's LoginStart, then send the disconnect reason
@@ -416,22 +498,29 @@ pub async fn run_automatic_mode(
             });
             continue;
         }
-        if let Some(secondary) = pending.pop() {
-            ClientStatusEvent {
-                which: WhichClient::Primary,
-                online: true,
+        match pending.take() {
+            Some(secondary) => {
+                ClientStatusEvent {
+                    which: WhichClient::Primary,
+                    online: true,
+                }
+                .emit(&app)
+                .ok();
+                session_set.spawn(run_auto_session(client, secondary, app.clone()));
             }
-            .emit(&app)
-            .ok();
-            session_set.spawn(run_auto_session(client, secondary, app.clone()));
-        } else {
-            ClientStatusEvent {
-                which: WhichClient::Secondary,
-                online: true,
+            None => {
+                // Drain the secondary's LoginStart now (it is discarded anyway, see
+                // run_auto_session) so wait_for_disconnect watches a quiet socket
+                // instead of one with the buffered LoginStart still readable.
+                let _ = RawPacket::read_async(&mut client.stream).await;
+                ClientStatusEvent {
+                    which: WhichClient::Secondary,
+                    online: true,
+                }
+                .emit(&app)
+                .ok();
+                pending = Some(client);
             }
-            .emit(&app)
-            .ok();
-            pending.push(client);
         }
     }
 
@@ -455,29 +544,64 @@ pub async fn run_automatic_mode(
         Ok(())
     });
 
-    let mut pending = Vec::new();
+    let mut pending: Option<AutoClientInfo> = None;
 
-    while let Some(client) = rx.recv().await {
+    loop {
+        // Receive the next client; while a secondary is pending, also watch its
+        // socket so we notice if it disconnects before the primary connects.
+        enum Step {
+            Client(Option<AutoClientInfo>),
+            SecondaryGone,
+        }
+        let step = match pending.as_mut() {
+            Some(sec) => tokio::select! {
+                recv = rx.recv() => Step::Client(recv),
+                _ = wait_for_disconnect(&mut sec.stream) => Step::SecondaryGone,
+            },
+            None => Step::Client(rx.recv().await),
+        };
+        let mut client = match step {
+            Step::SecondaryGone => {
+                ClientStatusEvent {
+                    which: WhichClient::Secondary,
+                    online: false,
+                }
+                .emit(&app)
+                .ok();
+                pending = None;
+                continue;
+            }
+            Step::Client(Some(c)) => c,
+            Step::Client(None) => break,
+        };
+
         if *panic_mode.lock().await {
             tokio::spawn(run_panic_mode(client));
             continue;
         }
-        if let Some(secondary) = pending.pop() {
-            ClientStatusEvent {
-                which: WhichClient::Primary,
-                online: true,
+        match pending.take() {
+            Some(secondary) => {
+                ClientStatusEvent {
+                    which: WhichClient::Primary,
+                    online: true,
+                }
+                .emit(&app)
+                .ok();
+                session_set.spawn(run_auto_session(client, secondary, app.clone()));
             }
-            .emit(&app)
-            .ok();
-            session_set.spawn(run_auto_session(client, secondary, app.clone()));
-        } else {
-            ClientStatusEvent {
-                which: WhichClient::Secondary,
-                online: true,
+            None => {
+                // Drain the secondary's LoginStart now (it is discarded anyway, see
+                // run_auto_session) so wait_for_disconnect watches a quiet socket
+                // instead of one with the buffered LoginStart still readable.
+                let _ = RawPacket::read_async(&mut client.stream).await;
+                ClientStatusEvent {
+                    which: WhichClient::Secondary,
+                    online: true,
+                }
+                .emit(&app)
+                .ok();
+                pending = Some(client);
             }
-            .emit(&app)
-            .ok();
-            pending.push(client);
         }
     }
 
