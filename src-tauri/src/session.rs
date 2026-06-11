@@ -1,3 +1,5 @@
+#[cfg(target_os = "windows")]
+use std::net::{IpAddr, ToSocketAddrs};
 use std::sync::Arc;
 
 use mc_protocol::{
@@ -27,12 +29,36 @@ use crate::{
     resolver::resolve_host_port,
 };
 
-/// Returns true if `host` points at the local machine (loopback). Used in auto mode to
-/// detect a client connecting to `127.0.0.1` before the hotspot client has paired.
+/// Returns true if host resolves to the local machine (loopback).
 #[cfg(target_os = "windows")]
 fn is_loopback_host(host: &str) -> bool {
-    let h = host.trim().to_ascii_lowercase();
-    h == "localhost" || h == "::1" || h.starts_with("127.")
+    let h = host
+        .split('\0')
+        .next()
+        .unwrap_or(host)
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+
+    if h.is_empty() {
+        return false;
+    }
+
+    // Literal IP: decide locally, no resolution.
+    if let Ok(ip) = h.parse::<IpAddr>() {
+        return ip.is_loopback();
+    }
+
+    // Hostname: ask the system resolver (it honours the hosts file), so anything
+    // mapped to 127.0.0.1 — kubernetes.docker.internal or any custom entry — is
+    // caught without a hardcoded list.
+    match (h, 0u16).to_socket_addrs() {
+        Ok(addrs) => {
+            let addrs: Vec<_> = addrs.collect();
+            !addrs.is_empty() && addrs.iter().all(|a| a.ip().is_loopback())
+        }
+        Err(_) => false,
+    }
 }
 
 /// Emits `online: false` for both clients when dropped, i.e. whenever a session
