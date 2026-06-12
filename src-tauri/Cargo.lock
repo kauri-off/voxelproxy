@@ -2006,9 +2006,9 @@ dependencies = [
 
 [[package]]
 name = "mc_protocol"
-version = "2.1.1"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60aec8279096dfd10bd02c7434f12c71f93415fe22dd8b447425b7d640fcf038"
+checksum = "876deb619b5a12a93f74736ad7e025fbc3d7becf526f87d18cfbe1244e8e775a"
 dependencies = [
  "flate2",
  "mc_protocol_derive",
@@ -2019,9 +2019,9 @@ dependencies = [
 
 [[package]]
 name = "mc_protocol_derive"
-version = "2.0.1"
+version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a52b45db0f6ef8a0ead314b167807d20dabd842983af37fc57a9b5e6b23e96e7"
+checksum = "76ff6382d72fc8a62d0597f40b06f38986fc17e362cdf1689932d24c69d4a3f3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4498,7 +4498,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "voxelproxy"
-version = "6.3.10"
+version = "6.3.11"
 dependencies = [
  "anyhow",
  "enum_dispatch",

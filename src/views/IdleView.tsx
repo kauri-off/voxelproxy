@@ -309,16 +309,18 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                   </div>
                 </div>
 
-                <div className="field-row">
-                  <span className="field-row__label" />
-                  <span className="hint auto-mode-note">
-                    Позволяет играть с дополнительных устройств, подключённых к
-                    точке доступа Wi-Fi, которую раздаёт это (основное)
-                    устройство. Требуются права администратора.
-                  </span>
-                </div>
+                {state.autoUseWindivert && (
+                  <div className="field-row">
+                    <span className="field-row__label" />
+                    <span className="hint auto-mode-note">
+                      Позволяет играть с дополнительных устройств, подключённых к
+                      точке доступа Wi-Fi, которую раздаёт это (основное)
+                      устройство. Требуются права администратора.
+                    </span>
+                  </div>
+                )}
 
-                {state.platform === "windows" && (
+                {state.autoUseWindivert && state.platform === "windows" && (
                   <div className="field-row">
                     <span className="field-row__label" />
                     <Collapsible
@@ -370,7 +372,7 @@ export const IdleView: React.FC<Props> = ({ state, setState, addLog }) => {
                   </div>
                 )}
 
-                {state.platform === "windows" && (
+                {state.autoUseWindivert && state.platform === "windows" && (
                   <div className="field-row">
                     <span className="field-row__label" />
                     <Collapsible
