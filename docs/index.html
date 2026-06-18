@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VoxelProxy — прокси для Minecraft</title>
+  <meta name="description" content="VoxelProxy — прокси для Minecraft: два клиента под одним ником на одном сервере. Поддержка 1.16.5, 1.20.1, 1.21.4, 1.21.8, 1.21.11." />
+  <meta name="theme-color" content="#0e0e10" />
+  <link rel="icon" type="image/png" href="icon.png" />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="VoxelProxy — прокси для Minecraft" />
+  <meta property="og:description" content="Два клиента под одним ником на одном сервере." />
+  <meta property="og:image" content="gui.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <style>
+    :root {
+      --c-bg:       #0e0e10;
+      --c-surface:  #18181c;
+      --c-surface2: #202026;
+      --c-border:   #2c2c34;
+      --c-accent:   #5b8dee;
+      --c-orange:   #f5481f;
+      --c-text:     #dddde8;
+      --c-muted:    #7878a0;
+      --c-warn:     #fbbf24;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--c-bg);
+      color: var(--c-text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+      position: relative;
+    }
+
+    /* ---- Animated background layers ---- */
+    .bg-fx {
+      position: fixed;
+      inset: 0;
+      z-index: -2;
+      overflow: hidden;
+      pointer-events: none;
+    }
+    .blob {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(90px);
+      opacity: 0.5;
+      will-change: transform;
+    }
+    .blob.b1 {
+      width: 520px; height: 520px;
+      background: radial-gradient(circle, rgba(91,141,238,0.55), transparent 70%);
+      top: -160px; left: 50%;
+      transform: translateX(-50%);
+      animation: drift1 18s ease-in-out infinite;
+    }
+    .blob.b2 {
+      width: 420px; height: 420px;
+      background: radial-gradient(circle, rgba(245,72,31,0.40), transparent 70%);
+      top: 40%; left: -120px;
+      animation: drift2 22s ease-in-out infinite;
+    }
+    .blob.b3 {
+      width: 460px; height: 460px;
+      background: radial-gradient(circle, rgba(120,120,200,0.30), transparent 70%);
+      top: 55%; right: -140px;
+      animation: drift3 26s ease-in-out infinite;
+    }
+    @keyframes drift1 {
+      0%,100% { transform: translateX(-50%) translateY(0) scale(1); }
+      50%     { transform: translateX(-50%) translateY(60px) scale(1.12); }
+    }
+    @keyframes drift2 {
+      0%,100% { transform: translate(0,0) scale(1); }
+      50%     { transform: translate(80px,-50px) scale(1.18); }
+    }
+    @keyframes drift3 {
+      0%,100% { transform: translate(0,0) scale(1.05); }
+      50%     { transform: translate(-70px,40px) scale(0.9); }
+    }
+
+    /* subtle moving grid */
+    .grid-fx {
+      position: fixed;
+      inset: -50%;
+      z-index: -1;
+      background-image:
+        linear-gradient(to right, rgba(91,141,238,0.05) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(91,141,238,0.05) 1px, transparent 1px);
+      background-size: 46px 46px;
+      mask-image: radial-gradient(circle at 50% 30%, #000 0%, transparent 65%);
+      -webkit-mask-image: radial-gradient(circle at 50% 30%, #000 0%, transparent 65%);
+      animation: gridpan 40s linear infinite;
+      pointer-events: none;
+    }
+    @keyframes gridpan {
+      from { background-position: 0 0; }
+      to   { background-position: 46px 46px; }
+    }
+
+    .wrap {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    a { color: var(--c-accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ---- Scroll reveal ---- */
+    .reveal {
+      opacity: 0;
+      transform: translateY(28px);
+      transition: opacity .7s cubic-bezier(.2,.7,.2,1), transform .7s cubic-bezier(.2,.7,.2,1);
+    }
+    .reveal.in {
+      opacity: 1;
+      transform: none;
+    }
+
+    /* ---- Hero ---- */
+    header.hero {
+      text-align: center;
+      padding: 96px 0 56px;
+    }
+
+    .logo {
+      width: 96px;
+      height: 96px;
+      margin: 0 auto 22px;
+      display: block;
+      filter: drop-shadow(0 6px 22px rgba(245, 72, 31, 0.45));
+      animation: floaty 5s ease-in-out infinite;
+    }
+    @keyframes floaty {
+      0%,100% { transform: translateY(0) rotate(-1deg); }
+      50%     { transform: translateY(-12px) rotate(1deg); }
+    }
+
+    .hero h1 {
+      font-size: 3rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: #fff;
+    }
+
+    .hero .tagline {
+      color: var(--c-muted);
+      font-size: 1.2rem;
+      margin-top: 10px;
+    }
+
+    /* ---- Version chips ---- */
+    .versions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+      margin-top: 26px;
+    }
+    .chip {
+      background: var(--c-surface2);
+      border: 1px solid var(--c-border);
+      border-radius: 999px;
+      padding: 5px 14px;
+      font-size: 0.9rem;
+      color: var(--c-text);
+      font-variant-numeric: tabular-nums;
+      transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease, color .18s ease;
+      opacity: 0;
+      transform: translateY(12px) scale(.9);
+      animation: chipIn .5s cubic-bezier(.2,.7,.2,1) forwards;
+    }
+    .chip:hover {
+      transform: translateY(-3px) scale(1.05);
+      border-color: var(--c-accent);
+      color: #fff;
+      box-shadow: 0 6px 18px rgba(91,141,238,0.30);
+    }
+    @keyframes chipIn {
+      to { opacity: 1; transform: none; }
+    }
+    .chip:nth-child(1) { animation-delay: .15s; }
+    .chip:nth-child(2) { animation-delay: .25s; }
+    .chip:nth-child(3) { animation-delay: .35s; }
+    .chip:nth-child(4) { animation-delay: .45s; }
+    .chip:nth-child(5) { animation-delay: .55s; }
+
+    /* ---- CTA ---- */
+    .cta {
+      display: flex;
+      gap: 14px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-top: 34px;
+    }
+    .btn {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 13px 26px;
+      border-radius: 12px;
+      font-weight: 700;
+      font-size: 1.02rem;
+      border: 1px solid transparent;
+      overflow: hidden;
+      transition: transform .14s ease, background .15s ease, border-color .15s ease, box-shadow .15s ease;
+    }
+    /* shine sweep */
+    .btn::after {
+      content: "";
+      position: absolute;
+      top: 0; left: -130%;
+      width: 60%; height: 100%;
+      background: linear-gradient(100deg, transparent, rgba(255,255,255,0.35), transparent);
+      transform: skewX(-20deg);
+      transition: left .6s ease;
+    }
+    .btn:hover::after { left: 130%; }
+    .btn:hover { text-decoration: none; transform: translateY(-3px); }
+    .btn:active { transform: translateY(-1px) scale(.98); }
+    .btn-primary {
+      background: linear-gradient(120deg, var(--c-accent), #6f9bf0);
+      color: #fff;
+      box-shadow: 0 8px 24px rgba(91, 141, 238, 0.35);
+    }
+    .btn-primary:hover { box-shadow: 0 12px 32px rgba(91, 141, 238, 0.55); }
+    .btn-ghost {
+      background: var(--c-surface);
+      color: var(--c-text);
+      border-color: var(--c-border);
+    }
+    .btn-ghost:hover { background: var(--c-surface2); border-color: var(--c-accent); }
+
+    /* ---- Screenshot ---- */
+    .shot {
+      margin: 56px 0;
+      perspective: 1200px;
+    }
+    .shot img {
+      width: 100%;
+      height: auto;
+      display: block;
+      border-radius: 14px;
+      border: 1px solid var(--c-border);
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+      transition: transform .4s cubic-bezier(.2,.7,.2,1), box-shadow .4s ease;
+    }
+    .shot:hover img {
+      transform: rotateX(4deg) translateY(-6px) scale(1.01);
+      box-shadow: 0 36px 80px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(91,141,238,0.4);
+    }
+
+    /* ---- Sections ---- */
+    section { padding: 28px 0; }
+    h2 {
+      font-size: 1.6rem;
+      font-weight: 700;
+      margin-bottom: 22px;
+      letter-spacing: -0.01em;
+      position: relative;
+      display: inline-block;
+    }
+    h2::after {
+      content: "";
+      position: absolute;
+      left: 0; bottom: -6px;
+      height: 3px; width: 0;
+      border-radius: 3px;
+      background: linear-gradient(90deg, var(--c-accent), #6f9bf0);
+      transition: width .8s cubic-bezier(.2,.7,.2,1);
+    }
+    h2.in::after { width: 100%; }
+
+    .cards {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+    .card {
+      position: relative;
+      background: var(--c-surface);
+      border: 1px solid var(--c-border);
+      border-radius: 14px;
+      padding: 22px 24px;
+      overflow: hidden;
+      transition: transform .25s ease, border-color .25s ease, box-shadow .25s ease;
+    }
+    /* glow follows cursor */
+    .card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      background: radial-gradient(260px circle at var(--mx,50%) var(--my,0%), rgba(91,141,238,0.16), transparent 60%);
+      opacity: 0;
+      transition: opacity .3s ease;
+      pointer-events: none;
+    }
+    .card:hover {
+      transform: translateY(-5px);
+      border-color: rgba(91,141,238,0.5);
+      box-shadow: 0 18px 40px rgba(0,0,0,0.4);
+    }
+    .card:hover::before { opacity: 1; }
+    .card h3 {
+      font-size: 1.18rem;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .card .badge {
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--c-accent);
+      background: rgba(91, 141, 238, 0.12);
+      border-radius: 6px;
+      padding: 2px 8px;
+    }
+    .card p { color: var(--c-muted); }
+    .card .note {
+      margin-top: 12px;
+      color: var(--c-warn);
+      font-size: 0.92rem;
+    }
+
+    /* ---- Install steps ---- */
+    ol.steps {
+      list-style: none;
+      counter-reset: step;
+      display: grid;
+      gap: 12px;
+    }
+    ol.steps li {
+      counter-increment: step;
+      position: relative;
+      background: var(--c-surface);
+      border: 1px solid var(--c-border);
+      border-radius: 12px;
+      padding: 16px 20px 16px 62px;
+      transition: transform .2s ease, border-color .2s ease;
+    }
+    ol.steps li:hover {
+      transform: translateX(6px);
+      border-color: rgba(91,141,238,0.5);
+    }
+    ol.steps li::before {
+      content: counter(step);
+      position: absolute;
+      left: 16px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--c-accent), #6f9bf0);
+      color: #fff;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 12px rgba(91,141,238,0.4);
+    }
+    ol.steps li:hover::before {
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%,100% { box-shadow: 0 4px 12px rgba(91,141,238,0.4); }
+      50%     { box-shadow: 0 4px 22px rgba(91,141,238,0.8); }
+    }
+    ol.steps code {
+      background: var(--c-surface2);
+      border: 1px solid var(--c-border);
+      border-radius: 6px;
+      padding: 1px 6px;
+      font-size: 0.9em;
+    }
+
+    /* ---- Footer ---- */
+    footer {
+      border-top: 1px solid var(--c-border);
+      margin-top: 56px;
+      padding: 32px 0 56px;
+      text-align: center;
+      color: var(--c-muted);
+      font-size: 0.92rem;
+    }
+    footer a { color: var(--c-muted); transition: color .2s ease; }
+    footer a:hover { color: var(--c-accent); }
+    footer .sep { opacity: 0.4; margin: 0 8px; }
+
+    @media (max-width: 640px) {
+      .hero { padding: 64px 0 40px; }
+      .hero h1 { font-size: 2.2rem; }
+      .cards { grid-template-columns: 1fr; }
+    }
+
+    /* ---- Respect reduced motion ---- */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation: none !important;
+        transition: none !important;
+      }
+      .reveal { opacity: 1; transform: none; }
+      .chip { opacity: 1; transform: none; }
+      h2::after { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-fx" aria-hidden="true">
+    <div class="blob b1"></div>
+    <div class="blob b2"></div>
+    <div class="blob b3"></div>
+  </div>
+  <div class="grid-fx" aria-hidden="true"></div>
+
+  <header class="hero">
+    <div class="wrap">
+      <img class="logo" src="icon.png" alt="VoxelProxy" />
+      <h1>VoxelProxy</h1>
+      <p class="tagline">Два клиента под одним ником на одном сервере</p>
+
+      <div class="versions">
+        <span class="chip">1.16.5</span>
+        <span class="chip">1.20.1</span>
+        <span class="chip">1.21.4</span>
+        <span class="chip">1.21.8</span>
+        <span class="chip">1.21.11</span>
+      </div>
+
+      <div class="cta">
+        <a class="btn btn-primary" href="https://github.com/kauri-off/voxelproxy/releases/latest">Скачать для Windows</a>
+        <a class="btn btn-ghost" href="https://github.com/kauri-off/voxelproxy">GitHub</a>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="shot reveal">
+      <img src="gui.png" alt="Интерфейс VoxelProxy" />
+    </div>
+
+    <section>
+      <h2 class="reveal">Два режима работы</h2>
+      <div class="cards">
+        <div class="card reveal">
+          <h3>Авто <span class="badge">этот ПК раздаёт Wi-Fi</span></h3>
+          <p>
+            Подходит, когда второе устройство выходит в интернет через Wi-Fi,
+            который раздаёт этот компьютер (как точка доступа на телефоне, только
+            тут её раздаёт ПК). После «Запустить» в окне появится пошаговая
+            инструкция — просто следуйте ей.
+          </p>
+          <p class="note">⚠ Запускайте от администратора — иначе программа не сможет читать трафик.</p>
+        </div>
+        <div class="card reveal">
+          <h3>Ручной</h3>
+          <p>
+            Введите адрес сервера (например <code style="color:var(--c-text)">mc.funtime.su</code>),
+            нажмите «Запустить» и подключите оба клиента на адрес, который покажет
+            приложение. Сначала основной — он станет активным, потом второй.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2 class="reveal">Установка</h2>
+      <ol class="steps">
+        <li class="reveal">Скачайте <code>VoxelProxy_x.x.x_x64_ru-RU.msi</code> из <a href="https://github.com/kauri-off/voxelproxy/releases/latest">Releases</a>.</li>
+        <li class="reveal">Установите и запустите приложение (для режима «Авто» — от администратора).</li>
+        <li class="reveal">Выберите режим — «Авто», если этот ПК раздаёт Wi-Fi, или «Ручной» с адресом сервера.</li>
+        <li class="reveal">Нажмите «Запустить» и подключите оба клиента по показанному адресу.</li>
+      </ol>
+    </section>
+  </div>
+
+  <footer>
+    <div class="wrap">
+      <a href="https://github.com/kauri-off/voxelproxy">Исходный код</a>
+      <span class="sep">·</span>
+      <a href="https://github.com/kauri-off/voxelproxy/blob/master/LICENSE">Лицензия GPL-3.0</a>
+    </div>
+  </footer>
+
+  <script>
+    // Scroll-reveal with stagger per group
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach((e) => {
+        if (e.isIntersecting) {
+          e.target.classList.add('in');
+          io.unobserve(e.target);
+        }
+      });
+    }, { threshold: 0.15 });
+
+    document.querySelectorAll('.reveal, h2').forEach((el, i) => {
+      el.style.transitionDelay = (Math.min(i % 4, 3) * 80) + 'ms';
+      io.observe(el);
+    });
+
+    // Cursor-follow glow on cards
+    document.querySelectorAll('.card').forEach((card) => {
+      card.addEventListener('pointermove', (ev) => {
+        const r = card.getBoundingClientRect();
+        card.style.setProperty('--mx', (ev.clientX - r.left) + 'px');
+        card.style.setProperty('--my', (ev.clientY - r.top) + 'px');
+      });
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,69 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Background -->
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1c1f2e"/>
+      <stop offset="0.55" stop-color="#11131d"/>
+      <stop offset="1" stop-color="#080910"/>
+    </linearGradient>
+    <radialGradient id="warmGlow" cx="0.5" cy="0.46" r="0.5">
+      <stop offset="0" stop-color="#ff7a33" stop-opacity="0.38"/>
+      <stop offset="0.55" stop-color="#ff5a1e" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#ff5a1e" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Cube face gradients -->
+    <linearGradient id="topFace" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#ffce8a"/>
+      <stop offset="1" stop-color="#ff9c4d"/>
+    </linearGradient>
+    <linearGradient id="leftFace" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff7e36"/>
+      <stop offset="1" stop-color="#ec5c18"/>
+    </linearGradient>
+    <linearGradient id="rightFace" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d9460f"/>
+      <stop offset="1" stop-color="#a82f08"/>
+    </linearGradient>
+
+    <!-- Soft glow / shadow under the cube -->
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="34" result="b"/>
+    </filter>
+
+    <clipPath id="round">
+      <rect x="0" y="0" width="1024" height="1024" rx="228" ry="228"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#round)">
+    <!-- Background -->
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#bg)"/>
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#warmGlow)"/>
+
+    <!-- Glow behind cube -->
+    <g filter="url(#glow)" opacity="0.55">
+      <polygon points="512,265 747,382.5 747,617.5 512,735 277,617.5 277,382.5"
+               fill="#ff6a26"/>
+    </g>
+
+    <!-- Cube -->
+    <g stroke-linejoin="round">
+      <!-- Right (dark) face -->
+      <polygon points="512,500 747,382.5 747,617.5 512,735" fill="url(#rightFace)"/>
+      <!-- Left (mid) face -->
+      <polygon points="277,382.5 512,500 512,735 277,617.5" fill="url(#leftFace)"/>
+      <!-- Top (light) face -->
+      <polygon points="512,265 747,382.5 512,500 277,382.5" fill="url(#topFace)"/>
+
+      <!-- Edge highlights on the top rhombus -->
+      <path d="M512,265 L747,382.5 M512,265 L277,382.5"
+            stroke="#ffe2b8" stroke-opacity="0.85" stroke-width="6" fill="none" stroke-linecap="round"/>
+      <!-- Bright vertical front edge -->
+      <path d="M512,500 L512,735" stroke="#ffb27a" stroke-opacity="0.55" stroke-width="5" fill="none"/>
+      <!-- Subtle outer silhouette for separation from dark bg -->
+      <polygon points="512,265 747,382.5 747,617.5 512,735 277,617.5 277,382.5"
+               fill="none" stroke="#ffd9a8" stroke-opacity="0.18" stroke-width="3"/>
+    </g>
+  </g>
+</svg>
