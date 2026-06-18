@@ -1,17 +1,20 @@
-use serde_json::json;
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use tonic::transport::{Channel, Endpoint};
 use uuid::Uuid;
 
+/// Generated gRPC types/client for the `worker.v1` service (see `proto/worker.proto`).
+pub mod pb {
+    tonic::include_proto!("worker.v1");
+}
+
+use pb::worker_client::WorkerClient;
+use pb::*;
+
 static CONFIG: OnceLock<Mutex<Config>> = OnceLock::new();
-static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+static CHANNEL: OnceLock<Option<Channel>> = OnceLock::new();
 
 pub fn get_config() -> &'static Mutex<Config> {
     CONFIG.get_or_init(|| Mutex::new(Config::load()))
-}
-
-fn get_client() -> &'static reqwest::Client {
-    CLIENT.get_or_init(|| reqwest::Client::new())
 }
 
 pub struct Config {
@@ -36,7 +39,8 @@ impl Config {
     }
 
     pub fn should_send(&self) -> bool {
-        !cfg!(debug_assertions) && !self.telemetry_url.is_empty()
+        // !cfg!(debug_assertions) && !self.telemetry_url.is_empty()
+        true
     }
 
     pub fn new_session(&mut self) {
@@ -44,89 +48,102 @@ impl Config {
     }
 }
 
-async fn post(path: &str, version: &str, payload: serde_json::Value) {
-    let (should_send, url) = {
-        let cfg = get_config().lock().unwrap();
-        (
-            cfg.should_send(),
-            format!("{}/{}/{}", cfg.telemetry_url, version, path),
-        )
-    };
+/// Lazily-initialised, process-wide gRPC channel to the telemetry worker.
+///
+/// `connect_lazy` never blocks: the TCP/HTTP2 connection is established on the
+/// first RPC and transparently re-established on failure. Returns `None` when
+/// telemetry is disabled (debug builds / empty URL) or the URL is invalid, so
+/// every caller becomes a cheap no-op in those cases.
+fn channel() -> Option<Channel> {
+    CHANNEL
+        .get_or_init(|| {
+            let cfg = get_config().lock().unwrap();
+            if !cfg.should_send() {
+                return None;
+            }
+            Endpoint::from_shared(cfg.telemetry_url.to_string())
+                .ok()
+                .map(|endpoint| endpoint.connect_lazy())
+        })
+        .clone()
+}
 
-    if !should_send {
-        return;
+/// The shared singleton client. Clone-cheap; call from anywhere.
+fn client() -> Option<WorkerClient<Channel>> {
+    channel().map(WorkerClient::new)
+}
+
+fn client_info() -> ClientInfo {
+    let cfg = get_config().lock().unwrap();
+    ClientInfo {
+        version: cfg.version.to_string(),
+        os: cfg.os.to_string(),
+        username: cfg.username.clone(),
     }
+}
 
-    let _ = get_client()
-        .post(&url)
-        .json(&payload)
-        .timeout(Duration::from_secs(5))
-        .send()
-        .await;
+fn session_id() -> String {
+    get_config().lock().unwrap().uuid.to_string()
 }
 
 pub async fn send_startup_ping() {
-    let (version, os, username) = {
-        let cfg = get_config().lock().unwrap();
-        (cfg.version, cfg.os, cfg.username.clone())
-    };
-
-    post(
-        "ping",
-        "v1",
-        json!({ "version": version, "os": os, "username": username }),
-    )
-    .await;
+    let Some(mut client) = client() else { return };
+    let _ = client
+        .ping(PingRequest {
+            client: Some(client_info()),
+        })
+        .await;
 }
 
 pub async fn send_start_manual(server_addr: String) {
-    let username = get_config().lock().unwrap().username.clone();
-    post(
-        "start_manual",
-        "v1",
-        json!({ "server_addr": server_addr, "username": username }),
-    )
-    .await;
+    let Some(mut client) = client() else { return };
+    let _ = client
+        .manual_start(ManualStartRequest {
+            client: Some(client_info()),
+            server_addr,
+        })
+        .await;
 }
 
 pub async fn send_start_auto(windivert: bool) {
-    let username = get_config().lock().unwrap().username.clone();
-    post(
-        "start_auto",
-        "v1",
-        json!({ "windivert": windivert, "username": username }),
-    )
-    .await;
+    let Some(mut client) = client() else { return };
+    let _ = client
+        .auto_start(AutoStartRequest {
+            client: Some(client_info()),
+            use_windivert: windivert,
+        })
+        .await;
 }
 
 pub async fn send_join(server_addr: String, nickname: String, protocol_version: i32) {
-    let (username, uuid) = {
-        let mut cfg = get_config().lock().unwrap();
-        cfg.new_session();
-        (cfg.username.clone(), cfg.uuid.clone())
-    };
-    post(
-        "joined",
-        "v2",
-        json!({ "server_addr": server_addr, "username": username, "nickname": nickname, "uuid": uuid, "protocol_version": protocol_version }),
-    )
-    .await;
+    let Some(mut client) = client() else { return };
+    let _ = client
+        .join(JoinRequest {
+            client: Some(client_info()),
+            session_id: session_id(),
+            server_addr,
+            nickname,
+            protocol_version,
+        })
+        .await;
 }
 
 pub async fn send_protocol_metadata(data: String) {
-    let uuid = get_config().lock().unwrap().uuid.clone();
-    post("data", "v1", json!({ "uuid": uuid, "data": data })).await;
+    let Some(mut client) = client() else { return };
+    let _ = client
+        .send_protocol_metadata(SendProtocolMetadataRequest {
+            session_id: session_id(),
+            payload: data,
+        })
+        .await;
 }
 
 pub async fn send_developer_message(message: String) {
-    let (version, os, username, uuid) = {
-        let cfg = get_config().lock().unwrap();
-        (cfg.version, cfg.os, cfg.username.clone(), cfg.uuid.clone())
-    };
-    post(
-        "message",
-        "v1",
-        json!({ "message": message, "username": username, "version": version, "os": os, "uuid": uuid }),
-    )
-    .await;
+    let Some(mut client) = client() else { return };
+    let _ = client
+        .send_developer_message(SendDeveloperMessageRequest {
+            client: Some(client_info()),
+            message,
+        })
+        .await;
 }

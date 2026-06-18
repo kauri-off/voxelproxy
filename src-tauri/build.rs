@@ -1,4 +1,14 @@
 fn main() {
+    // Use the bundled `protoc` so the build needs no system-wide install.
+    let protoc = protoc_bin_vendored::protoc_bin_path().expect("vendored protoc not found");
+    unsafe {
+        std::env::set_var("PROTOC", protoc);
+    }
+
+    tonic_prost_build::configure()
+        .build_server(false)
+        .compile_protos(&["proto/worker.proto"], &["proto"])
+        .unwrap();
     tauri_build::build();
 
     println!("cargo:rerun-if-env-changed=TELEMETRY_URL");

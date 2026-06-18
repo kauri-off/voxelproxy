@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package worker.v1;
+
+service Worker {
+  rpc Ping (PingRequest) returns (PingResponse);
+  rpc ManualStart (ManualStartRequest) returns (ManualStartResponse);
+  rpc AutoStart (AutoStartRequest) returns (AutoStartResponse);
+  rpc Join (JoinRequest) returns (JoinResponse);
+  rpc SendProtocolMetadata (SendProtocolMetadataRequest) returns (SendProtocolMetadataResponse);
+  rpc SendDeveloperMessage (SendDeveloperMessageRequest) returns (SendDeveloperMessageResponse);
+}
+
+message ClientInfo {
+  string version = 1;
+  string os = 2;
+  string username = 3;
+}
+
+message PingRequest {
+  ClientInfo client = 1;
+}
+message PingResponse {}
+
+message ManualStartRequest {
+  ClientInfo client = 1;
+  string server_addr = 2;
+}
+message ManualStartResponse {}
+
+message AutoStartRequest {
+  ClientInfo client = 1;
+  bool use_windivert = 2;
+}
+message AutoStartResponse {}
+
+message JoinRequest {
+  ClientInfo client = 1;
+  string session_id = 2;
+  string server_addr = 3;
+  string nickname = 4;
+  int32 protocol_version = 5;
+}
+message JoinResponse {}
+
+message SendProtocolMetadataRequest {
+  string session_id = 1;
+  string payload = 2;
+}
+message SendProtocolMetadataResponse {}
+
+message SendDeveloperMessageRequest {
+  ClientInfo client = 1;
+  string message = 2;
+}
+message SendDeveloperMessageResponse {}
