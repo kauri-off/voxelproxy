@@ -47,6 +47,25 @@
   letter-spacing: 0.03em;
 }
 
+.titlebar__contact {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--c-muted);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.titlebar__contact:hover {
+  color: var(--c-accent);
+  background: var(--c-surface2);
+}
+
 .titlebar__stop {
   font-size: 13px;
   font-weight: 500;

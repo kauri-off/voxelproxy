@@ -40,7 +40,8 @@ fn create_builder() -> Builder<tauri::Wry> {
             commands::get_pending_changelogs,
             commands::acknowledge_changelog,
             commands::get_manual_warning_acknowledged,
-            commands::acknowledge_manual_warning
+            commands::acknowledge_manual_warning,
+            commands::send_developer_message
         ])
         .events(collect_events![
             events::ProxyLogEvent,

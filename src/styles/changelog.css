@@ -178,6 +178,57 @@
 
 .changelog-card__ok:active { transform: scale(0.98); }
 
+.changelog-card__ok:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  color: var(--c-muted);
+  background: var(--c-bg);
+  border-color: var(--c-border);
+}
+
+/* ── Developer-message modal ──────────────────────────────────── */
+.dev-message__hint {
+  margin: 0 0 12px 0;
+  color: var(--c-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.dev-message__textarea {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--c-text);
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+
+.dev-message__textarea:focus {
+  outline: none;
+  border-color: rgba(var(--c-accent-rgb), 0.6);
+}
+
+.dev-message__textarea:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.dev-message__thanks {
+  margin: 0;
+  color: var(--c-success);
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  padding: 12px 0;
+}
+
 /* ── Manual-mode warning modal ────────────────────────────────── */
 .warning-card {
   border-color: rgba(var(--c-error-rgb), 0.55);

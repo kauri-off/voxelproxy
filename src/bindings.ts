@@ -25,6 +25,7 @@ export const commands = {
 	acknowledgeChangelog: () => typedError<null, string>(__TAURI_INVOKE("acknowledge_changelog")),
 	getManualWarningAcknowledged: () => __TAURI_INVOKE<boolean>("get_manual_warning_acknowledged"),
 	acknowledgeManualWarning: () => typedError<null, string>(__TAURI_INVOKE("acknowledge_manual_warning")),
+	sendDeveloperMessage: (message: string) => typedError<null, string>(__TAURI_INVOKE("send_developer_message", { message })),
 };
 
 /** Events */

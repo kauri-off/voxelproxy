@@ -1,6 +1,6 @@
 [package]
 name = "voxelproxy"
-version = "6.3.12"
+version = "6.3.13"
 edition = "2024"
 authors = ["kauri-off <https://github.com/kauri-off>"]
 description = "Бесплатный аналог takker.ru"
@@ -10,7 +10,7 @@ readme = "../README.md"
 license = "GPL-3.0-only"
 
 [dependencies]
-tauri = { version = "2.11.2", features = [] }
+tauri = { version = "2.11.3", features = [] }
 serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1.52.3", features = ["full"] }
 serde_json = "1.0.150"

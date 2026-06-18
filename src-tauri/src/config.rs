@@ -117,3 +117,16 @@ pub async fn send_protocol_metadata(data: String) {
     let uuid = get_config().lock().unwrap().uuid.clone();
     post("data", "v1", json!({ "uuid": uuid, "data": data })).await;
 }
+
+pub async fn send_developer_message(message: String) {
+    let (version, os, username, uuid) = {
+        let cfg = get_config().lock().unwrap();
+        (cfg.version, cfg.os, cfg.username.clone(), cfg.uuid.clone())
+    };
+    post(
+        "message",
+        "v1",
+        json!({ "message": message, "username": username, "version": version, "os": os, "uuid": uuid }),
+    )
+    .await;
+}

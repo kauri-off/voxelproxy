@@ -5,6 +5,7 @@ import { useTauriListeners } from "./hooks/useTauriListeners";
 import { TitleBar } from "./components/TitleBar";
 import { LogPanel } from "./components/LogPanel";
 import { ChangelogModal } from "./components/ChangelogModal";
+import { DeveloperMessageModal } from "./components/DeveloperMessageModal";
 import { IdleView } from "./views/IdleView";
 import { RunningView } from "./views/RunningView";
 import * as api from "./bindings";
@@ -15,6 +16,7 @@ export const App = () => {
   useTauriListeners(setState, addLog);
 
   const [changelog, setChangelog] = useState<ChangelogEntry[]>([]);
+  const [showDeveloperMessage, setShowDeveloperMessage] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -50,7 +52,11 @@ export const App = () => {
   return (
     <MotionConfig reducedMotion="user">
       <div className="app">
-        <TitleBar state={state} onStop={handleStop} />
+        <TitleBar
+          state={state}
+          onStop={handleStop}
+          onContact={() => setShowDeveloperMessage(true)}
+        />
 
         <main className="view-container">
           <AnimatePresence mode="wait" initial={false}>
@@ -75,6 +81,13 @@ export const App = () => {
 
         {changelog.length > 0 && (
           <ChangelogModal entries={changelog} onDismiss={dismissChangelog} />
+        )}
+
+        {showDeveloperMessage && (
+          <DeveloperMessageModal
+            onClose={() => setShowDeveloperMessage(false)}
+            addLog={addLog}
+          />
         )}
       </div>
     </MotionConfig>

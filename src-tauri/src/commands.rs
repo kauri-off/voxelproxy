@@ -316,6 +316,17 @@ pub fn acknowledge_manual_warning() -> Result<(), String> {
     prefs::acknowledge_manual_warning()
 }
 
+#[tauri::command]
+#[specta::specta]
+pub async fn send_developer_message(message: String) -> Result<(), String> {
+    let message = message.trim().to_string();
+    if message.is_empty() {
+        return Err("Сообщение не может быть пустым".into());
+    }
+    config::send_developer_message(message).await;
+    Ok(())
+}
+
 async fn abort_existing(state: &State<'_, AppState>) {
     if let Some(h) = state.session.lock().await.take() {
         h.abort();
