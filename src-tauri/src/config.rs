@@ -1,5 +1,5 @@
 use std::sync::{Mutex, OnceLock};
-use tonic::transport::{Channel, Endpoint};
+use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use uuid::Uuid;
 
 /// Generated gRPC types/client for the `worker.v1` service (see `proto/worker.proto`).
@@ -39,8 +39,7 @@ impl Config {
     }
 
     pub fn should_send(&self) -> bool {
-        // !cfg!(debug_assertions) && !self.telemetry_url.is_empty()
-        true
+        !cfg!(debug_assertions) && !self.telemetry_url.is_empty()
     }
 
     pub fn new_session(&mut self) {
@@ -54,6 +53,11 @@ impl Config {
 /// first RPC and transparently re-established on failure. Returns `None` when
 /// telemetry is disabled (debug builds / empty URL) or the URL is invalid, so
 /// every caller becomes a cheap no-op in those cases.
+///
+/// TLS is configured with the bundled webpki roots, which is what lets the
+/// `https://` endpoint connect at all — without it tonic refuses the https
+/// scheme and every RPC fails silently. Plaintext `http://` URLs ignore the
+/// TLS config and connect in cleartext (useful for local dev).
 fn channel() -> Option<Channel> {
     CHANNEL
         .get_or_init(|| {
@@ -61,9 +65,24 @@ fn channel() -> Option<Channel> {
             if !cfg.should_send() {
                 return None;
             }
-            Endpoint::from_shared(cfg.telemetry_url.to_string())
-                .ok()
-                .map(|endpoint| endpoint.connect_lazy())
+            let endpoint = match Endpoint::from_shared(cfg.telemetry_url.to_string()) {
+                Ok(endpoint) => endpoint,
+                Err(e) => {
+                    eprintln!(
+                        "telemetry: invalid TELEMETRY_URL {:?}: {e}",
+                        cfg.telemetry_url
+                    );
+                    return None;
+                }
+            };
+            let endpoint = match endpoint.tls_config(ClientTlsConfig::new().with_webpki_roots()) {
+                Ok(endpoint) => endpoint,
+                Err(e) => {
+                    eprintln!("telemetry: failed to configure TLS: {e}");
+                    return None;
+                }
+            };
+            Some(endpoint.connect_lazy())
         })
         .clone()
 }

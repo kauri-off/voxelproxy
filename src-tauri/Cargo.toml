@@ -27,7 +27,7 @@ semver = "1.0.28"
 specta = { version = "2.0.0-rc.24", features = ["derive"] }
 tauri-specta = { version = "2.0.0-rc.24", features = ["derive", "typescript"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
-tonic = "0.14.6"
+tonic = { version = "0.14.6", features = ["tls-ring", "tls-webpki-roots"] }
 tonic-prost = "0.14.6"
 prost = "0.14.4"
 
