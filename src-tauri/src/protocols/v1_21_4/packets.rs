@@ -38,6 +38,10 @@ pub mod c2s {
         }
 
         #[derive(Packet, Debug)]
+        #[packet(14)] // ServerboundConfigurationAcknowledgedPacket
+        pub struct ConfigurationAcknowledged {}
+
+        #[derive(Packet, Debug)]
         #[packet(28)] // ServerboundMovePlayerPacket.Pos
         pub struct Pos {
             pub x: f64,

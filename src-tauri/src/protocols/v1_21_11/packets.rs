@@ -38,6 +38,10 @@ pub mod c2s {
         }
 
         #[derive(Packet, Debug)]
+        #[packet(15)] // ServerboundConfigurationAcknowledgedPacket
+        pub struct ConfigurationAcknowledged {}
+
+        #[derive(Packet, Debug)]
         #[packet(6)]
         pub struct ProtocolMetaDataSmall {
             pub data: String,

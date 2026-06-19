@@ -230,6 +230,13 @@ impl VersionData {
         let packet = packet.uncompress(self.threshold)?;
 
         match packet.packet_id {
+            c2s::game::ConfigurationAcknowledged::PACKET_ID => {
+                if is_active {
+                    self.active_state_out = State::Configuration;
+                } else {
+                    self.inactive_state_out = State::Configuration;
+                }
+            }
             c2s::game::AcceptTeleportation::PACKET_ID => {
                 if !both_active {
                     let teleport: c2s::game::AcceptTeleportation = packet.deserialize_payload()?;
