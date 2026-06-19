@@ -1,6 +1,6 @@
 {
   "productName": "VoxelProxy",
-  "version": "6.3.17",
+  "version": "6.3.18",
   "identifier": "com.kauri-off.voxelproxy",
   "build": {
     "beforeDevCommand": "npm run dev",

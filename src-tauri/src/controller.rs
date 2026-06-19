@@ -32,6 +32,7 @@ pub enum ControllerEvent {
     ClientData(ClientId, RawPacket),
     ClientDisconnected(ClientId),
     ServerData(RawPacket),
+    ServerDisconnected,
 }
 
 pub struct Controller {
@@ -185,6 +186,14 @@ impl Controller {
                         let _ = self.secondary_tx.send(packet).await;
                     }
                 }
+
+                // The upstream server is the session's lifeline: without it the proxy has
+                // nothing to relay, so end the session. `run_proxy_session` then aborts the
+                // client I/O tasks, closing their sockets, and `ClientStatusOfflineGuard`
+                // marks both clients offline. This is what tears down a session whose active
+                // client went half-open (no FIN) and therefore never produced a
+                // `ClientDisconnected` of its own.
+                ControllerEvent::ServerDisconnected => return,
             }
         }
     }
@@ -265,7 +274,10 @@ pub async fn run_server(
                             break;
                         }
                     }
-                    Err(_) => break,
+                    Err(_) => {
+                        event_tx.send(ControllerEvent::ServerDisconnected).await.ok();
+                        break;
+                    }
                 }
             }
         },

@@ -279,23 +279,31 @@ pub async fn run_proxy_session(
         app.clone(),
     );
 
-    tokio::spawn(run_client(
+    let primary_task = tokio::spawn(run_client(
         primary_read,
         primary_write,
         ClientId::Primary,
         event_tx.clone(),
         primary_rx,
     ));
-    tokio::spawn(run_client(
+    let secondary_task = tokio::spawn(run_client(
         secondary_read,
         secondary_write,
         ClientId::Secondary,
         event_tx.clone(),
         secondary_rx,
     ));
-    tokio::spawn(run_server(remote_read, remote_write, event_tx, remote_rx));
+    let server_task = tokio::spawn(run_server(remote_read, remote_write, event_tx, remote_rx));
 
     controller.run().await;
+
+    // The controller has stopped, so the session is over. Abort the I/O tasks to drop their
+    // socket halves and close the connections. This is required for a half-open client whose
+    // read task is wedged in `read_async` (no FIN arrived): dropping the controller's channel
+    // ends alone won't unblock a task parked on the socket rather than on a channel.
+    primary_task.abort();
+    secondary_task.abort();
+    server_task.abort();
     Ok(())
 }
 
