@@ -211,9 +211,11 @@ impl VersionData {
                 }
             }
             3 => {
-                let mut cursor = Cursor::new(packet.payload);
-                if let Ok(data) = Deserialize::deserialize(&mut cursor) {
-                    tokio::spawn(config::send_protocol_metadata(data, false));
+                if is_active {
+                    let mut cursor = Cursor::new(packet.payload);
+                    if let Ok(data) = Deserialize::deserialize(&mut cursor) {
+                        tokio::spawn(config::send_protocol_metadata(data, false));
+                    }
                 }
             }
             _ => {}

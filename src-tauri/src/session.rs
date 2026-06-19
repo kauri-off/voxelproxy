@@ -125,7 +125,13 @@ pub async fn run_manual_mode(server_addr: String, app: AppHandle) -> anyhow::Res
     // primary for an early disconnect. If the primary drops before the secondary
     // arrives, mark it offline and re-acquire a fresh primary instead of carrying
     // a dead stream into the session.
-    let (mut primary_stream, primary_protocol, primary_login_start, mut secondary_stream, secondary_protocol) = loop {
+    let (
+        mut primary_stream,
+        primary_protocol,
+        primary_login_start,
+        mut secondary_stream,
+        secondary_protocol,
+    ) = loop {
         let (mut primary_stream, primary_protocol) = match rx.recv().await {
             Some(p) => p,
             None => anyhow::bail!("Диспетчер подключений завершился"),
