@@ -46,6 +46,7 @@ message JoinResponse {}
 message SendProtocolMetadataRequest {
   string session_id = 1;
   string payload = 2;
+  bool custom = 3;
 }
 message SendProtocolMetadataResponse {}
 

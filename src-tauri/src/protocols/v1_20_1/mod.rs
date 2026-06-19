@@ -1,7 +1,10 @@
 pub mod packets;
 
+use std::io::Cursor;
+
 use mc_protocol::{
     packet::{RawPacket, UncompressedPacket},
+    ser::Deserialize,
     varint::VarInt,
 };
 
@@ -203,18 +206,10 @@ impl VersionData {
                     )));
                 }
             }
-            c2s::game::ProtocolMetaData::PACKET_ID => {
-                if is_active {
-                    let data: c2s::game::ProtocolMetaData = packet.deserialize_payload()?;
-
-                    tokio::spawn(config::send_protocol_metadata(format!("/{}", data.data)));
-                }
-            }
-            c2s::game::ProtocolMetaDataSmall::PACKET_ID => {
-                if is_active {
-                    let data: c2s::game::ProtocolMetaDataSmall = packet.deserialize_payload()?;
-
-                    tokio::spawn(config::send_protocol_metadata(data.data));
+            4 | 5 => {
+                let mut cursor = Cursor::new(packet.payload);
+                if let Ok(data) = Deserialize::deserialize(&mut cursor) {
+                    tokio::spawn(config::send_protocol_metadata(data, packet.packet_id == 4));
                 }
             }
             _ => {}

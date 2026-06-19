@@ -23,12 +23,6 @@ pub mod c2s {
         }
 
         #[derive(Packet, Debug)]
-        #[packet(3)]
-        pub struct ProtocolMetaData {
-            pub data: String,
-        }
-
-        #[derive(Packet, Debug)]
         #[packet(18)] // ServerboundMovePlayerPacket.Pos
         pub struct Pos {
             pub x: f64,

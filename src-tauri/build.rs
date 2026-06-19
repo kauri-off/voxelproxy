@@ -5,6 +5,7 @@ fn main() {
         std::env::set_var("PROTOC", protoc);
     }
 
+    println!("cargo:rerun-if-changed=proto/worker.proto");
     tonic_prost_build::configure()
         .build_server(false)
         .compile_protos(&["proto/worker.proto"], &["proto"])

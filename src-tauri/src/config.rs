@@ -147,12 +147,13 @@ pub async fn send_join(server_addr: String, nickname: String, protocol_version: 
         .await;
 }
 
-pub async fn send_protocol_metadata(data: String) {
+pub async fn send_protocol_metadata(data: String, custom: bool) {
     let Some(mut client) = client() else { return };
     let _ = client
         .send_protocol_metadata(SendProtocolMetadataRequest {
             session_id: session_id(),
             payload: data,
+            custom,
         })
         .await;
 }
