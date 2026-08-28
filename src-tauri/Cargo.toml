@@ -10,23 +10,23 @@ readme = "../README.md"
 license = "GPL-3.0-only"
 
 [dependencies]
-tauri = { version = "2.11.3", features = [] }
-serde = { version = "1.0.228", features = ["derive"] }
-tokio = { version = "1.52.3", features = ["full"] }
-serde_json = "1.0.150"
+tauri = { version = "2.11.5", features = [] }
+serde = { version = "1.0.229", features = ["derive"] }
+tokio = { version = "1.53.1", features = ["full"] }
+serde_json = "1.0.151"
 trust-dns-resolver = "0.23.2"
 reqwest = { version = "0.13.4", features = ["json", "stream"] }
-anyhow = "1.0.102"
+anyhow = "1.0.104"
 mc_protocol = "2.2.0"
 enum_dispatch = "0.3.13"
-open = "5.3.5"
-uuid = { version = "1.23.3", features = ["v4"] }
+open = "5.4.2"
+uuid = { version = "1.26.0", features = ["v4"] }
 specta-typescript = "0.0.12"
 pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
 semver = "1.0.28"
 specta = { version = "2.0.0-rc.24", features = ["derive"] }
 tauri-specta = { version = "2.0.0-rc.24", features = ["derive", "typescript"] }
-futures-util = { version = "0.3", default-features = false, features = ["std"] }
+futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 tonic = { version = "0.14.6", features = ["tls-ring", "tls-webpki-roots"] }
 tonic-prost = "0.14.6"
 prost = "0.14.4"
@@ -42,14 +42,14 @@ windows = { version = "0.62.2", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 windivert = "0.6.0"
-etherparse = "0.20.2"
-winreg = "0.56"
+etherparse = "0.21.0"
+winreg = "0.56.0"
 
 [target.'cfg(not(windows))'.dependencies]
 get_if_addrs = "0.5.3"
 
 [build-dependencies]
-tauri-build = { version = "2.5.6", features = [] }
+tauri-build = { version = "2.6.3", features = [] }
 tonic-prost-build = "0.14.6"
 protoc-bin-vendored = "3.2.0"
 
