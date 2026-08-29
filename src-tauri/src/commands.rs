@@ -6,7 +6,7 @@ use crate::{
     app_state::AppState,
     changelog::{self, ChangelogEntry},
     config,
-    events::{SessionEndedEvent, SessionStartedEvent, UpdateProgressEvent},
+    events::{SessionEndedEvent, SessionStartedEvent},
     logger::Logger,
     prefs,
     protocols::Version,
@@ -134,6 +134,7 @@ pub async fn download_and_install_update(url: String, app: AppHandle) -> Result<
 
     #[cfg(target_os = "windows")]
     {
+        use crate::events::UpdateProgressEvent;
         use futures_util::StreamExt;
         use tokio::io::AsyncWriteExt;
 

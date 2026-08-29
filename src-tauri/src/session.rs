@@ -6,7 +6,6 @@ use mc_protocol::{
     packet::{RawPacket, UncompressedPacket},
     varint::VarInt,
 };
-#[cfg(target_os = "windows")]
 use tauri::AppHandle;
 use tauri_specta::Event;
 use tokio::sync::Mutex;
