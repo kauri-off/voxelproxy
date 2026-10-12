@@ -16,25 +16,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "./src-tauri -> target"
 
-      - name: Install dependencies
-        run: npm install
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --version 0.11.8 --locked
 
       - name: Build MSI
         env:
           TELEMETRY_URL: ${{ secrets.TELEMETRY_URL }}
           UPDATE_URL: ${{ secrets.UPDATE_URL }}
-        run: npx tauri build --bundles msi
+        run: cargo packager --release --formats wix
 
       - name: Extract version
         id: version
@@ -43,7 +36,7 @@ jobs:
           if [ "${{ github.ref_type }}" = "tag" ]; then
             ver="${GITHUB_REF_NAME#v}"
           else
-            ver=$(grep '^version =' src-tauri/Cargo.toml | head -1 | sed -E 's/version = "(.*)"/\1/')
+            ver=$(grep '^version =' Cargo.toml | head -1 | sed -E 's/version = "(.*)"/\1/')
           fi
           echo "version=$ver" >> $GITHUB_OUTPUT
 
@@ -52,6 +45,6 @@ jobs:
         with:
           tag_name: v${{ steps.version.outputs.version }}
           name: Release ${{ steps.version.outputs.version }}
-          files: src-tauri/target/release/bundle/msi/*_ru-RU.msi
+          files: target/release/*_ru-RU.msi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

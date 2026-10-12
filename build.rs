@@ -1,0 +1,59 @@
+fn main() {
+    // Use the bundled `protoc` so the build needs no system-wide install.
+    let protoc = protoc_bin_vendored::protoc_bin_path().expect("vendored protoc not found");
+    unsafe {
+        std::env::set_var("PROTOC", protoc);
+    }
+
+    println!("cargo:rerun-if-changed=proto/worker.proto");
+    tonic_prost_build::configure()
+        .build_server(false)
+        .compile_protos(&["proto/worker.proto"], &["proto"])
+        .unwrap();
+
+    println!("cargo:rerun-if-env-changed=TELEMETRY_URL");
+    let telemetry_url = std::env::var("TELEMETRY_URL").unwrap_or_default();
+    println!("cargo:rustc-env=TELEMETRY_URL={}", telemetry_url);
+
+    println!("cargo:rerun-if-env-changed=UPDATE_URL");
+    let update_url = std::env::var("UPDATE_URL").unwrap_or_default();
+    println!("cargo:rustc-env=UPDATE_URL={}", update_url);
+
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        embed_windows_resources();
+        copy_windivert_files();
+    }
+}
+
+fn embed_windows_resources() {
+    println!("cargo:rerun-if-changed=icons/icon.ico");
+    let mut res = winresource::WindowsResource::new();
+    res.set_icon("icons/icon.ico")
+        .set("ProductName", "VoxelProxy")
+        .set("FileDescription", "VoxelProxy");
+    res.compile().expect("failed to embed Windows resources");
+}
+
+fn copy_windivert_files() {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let out_dir = std::env::var("OUT_DIR").unwrap();
+
+    let profile_dir = std::path::Path::new(&out_dir)
+        .ancestors()
+        .nth(3)
+        .expect("Failed to resolve profile dir from OUT_DIR")
+        .to_path_buf();
+
+    let src_dir = std::path::Path::new(&manifest_dir).join("windivert");
+
+    for file in &["WinDivert.dll", "WinDivert64.sys"] {
+        let src = src_dir.join(file);
+        let dst = profile_dir.join(file);
+        if src.exists() {
+            std::fs::copy(&src, &dst).ok();
+        }
+    }
+
+    println!("cargo:rerun-if-changed=windivert/WinDivert.dll");
+    println!("cargo:rerun-if-changed=windivert/WinDivert64.sys");
+}

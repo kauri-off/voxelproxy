@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+package worker.v1;
+
+service Worker {
+  rpc Ping (PingRequest) returns (PingResponse);
+  rpc ManualStart (ManualStartRequest) returns (ManualStartResponse);
+  rpc AutoStart (AutoStartRequest) returns (AutoStartResponse);
+  rpc Join (JoinRequest) returns (JoinResponse);
+  rpc SendProtocolMetadata (SendProtocolMetadataRequest) returns (SendProtocolMetadataResponse);
+  rpc SendDeveloperMessage (SendDeveloperMessageRequest) returns (SendDeveloperMessageResponse);
+  // Returns the whole support conversation of `client.install_id`, oldest first.
+  rpc ListDeveloperMessages (ListDeveloperMessagesRequest) returns (ListDeveloperMessagesResponse);
+}
+
+message ClientInfo {
+  string version = 1;
+  string os = 2;
+  string username = 3;
+  // Random UUID generated on first launch and persisted; identifies the
+  // installation so developer replies can be routed back to it.
+  string install_id = 4;
+}
+
+message PingRequest {
+  ClientInfo client = 1;
+}
+message PingResponse {}
+
+message ManualStartRequest {
+  ClientInfo client = 1;
+  string server_addr = 2;
+}
+message ManualStartResponse {}
+
+message AutoStartRequest {
+  ClientInfo client = 1;
+  bool use_windivert = 2;
+}
+message AutoStartResponse {}
+
+message JoinRequest {
+  ClientInfo client = 1;
+  string session_id = 2;
+  string server_addr = 3;
+  string nickname = 4;
+  int32 protocol_version = 5;
+}
+message JoinResponse {}
+
+message SendProtocolMetadataRequest {
+  string session_id = 1;
+  string payload = 2;
+  bool custom = 3;
+}
+message SendProtocolMetadataResponse {}
+
+enum MessageAuthor {
+  MESSAGE_AUTHOR_UNSPECIFIED = 0;
+  MESSAGE_AUTHOR_USER = 1;
+  MESSAGE_AUTHOR_DEVELOPER = 2;
+}
+
+message DeveloperMessage {
+  string id = 1;
+  MessageAuthor author = 2;
+  string text = 3;
+  // Unix time in milliseconds, assigned by the server.
+  int64 created_at_ms = 4;
+}
+
+message SendDeveloperMessageRequest {
+  ClientInfo client = 1;
+  string message = 2;
+}
+message SendDeveloperMessageResponse {
+  // The stored message as the server saved it (id and timestamp filled in).
+  DeveloperMessage message = 1;
+}
+
+message ListDeveloperMessagesRequest {
+  ClientInfo client = 1;
+}
+message ListDeveloperMessagesResponse {
+  repeated DeveloperMessage messages = 1;
+}

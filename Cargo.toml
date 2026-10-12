@@ -1,0 +1,79 @@
+[package]
+name = "voxelproxy"
+version = "7.0.0"
+edition = "2024"
+authors = ["kauri-off <https://github.com/kauri-off>"]
+description = "Бесплатный аналог takker.ru"
+repository = "https://github.com/kauri-off/voxelproxy"
+homepage = "https://github.com/kauri-off/voxelproxy"
+readme = "README.md"
+license = "GPL-3.0-only"
+
+[dependencies]
+gpui-kit = "0.7.3"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+serde = { version = "1.0.229", features = ["derive"] }
+tokio = { version = "1.53.2", features = ["full"] }
+serde_json = "1.0.154"
+hickory-resolver = "0.26.3"
+reqwest = { version = "0.13.5", features = ["json", "stream"] }
+anyhow = "1.0.104"
+mc_protocol = "2.3.0"
+enum_dispatch = "0.3.13"
+open = "5.4.4"
+uuid = { version = "1.28.0", features = ["v4"] }
+semver = "1.0.28"
+futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
+futures = "0.3.34"
+tonic = { version = "0.14.6", features = ["tls-ring", "tls-webpki-roots"] }
+tonic-prost = "0.14.6"
+prost = "0.14.4"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Networking_WinSock",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windivert = "0.6.0"
+etherparse = "0.21.0"
+winreg = "0.56.0"
+
+[target.'cfg(not(windows))'.dependencies]
+if-addrs = "0.15.0"
+dirs = "7.0.0"
+
+[build-dependencies]
+tonic-prost-build = "0.14.6"
+protoc-bin-vendored = "3.3.0"
+winresource = "0.1.34"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[package.metadata.packager]
+product-name = "VoxelProxy"
+identifier = "com.kauri-off.voxelproxy"
+publisher = "kauri-off"
+before-packaging-command = "cargo build --release"
+license-file = "packaging/license.rtf"
+icons = ["icons/icon.ico"]
+formats = ["wix"]
+resources = [
+    { src = "windivert/WinDivert.dll", target = "WinDivert.dll" },
+    { src = "windivert/WinDivert64.sys", target = "WinDivert64.sys" },
+]
+
+[package.metadata.packager.wix]
+languages = ["ru-RU"]
+template = "packaging/wix/main.wxs"
+fragment-paths = ["packaging/wix/firewall.wxs"]
+component-refs = ["FirewallException"]
