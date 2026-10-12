@@ -1,0 +1,334 @@
+use std::net::SocketAddr;
+
+use anyhow::anyhow;
+use mc_protocol::packet::{RawPacket, UncompressedPacket};
+use serde_json::json;
+use tokio::{
+    io::AsyncWriteExt,
+    net::{TcpListener, TcpStream},
+    sync::mpsc::{self, Sender},
+};
+
+use crate::{
+    events::EventSink, packets::universal::status::s2c::StatusResponse, resolver::resolve_host_port,
+};
+
+use crate::{
+    controller::{ClientId, Controller, run_client, run_server},
+    packets::universal::{
+        Intent,
+        handshaking::c2s::Handshake,
+        login::s2c::{EncryptionRequest, LoginDisconnect, LoginSuccess, SetCompression},
+    },
+    protocols::{Version, VersionProtocol},
+};
+
+pub const DEFAULT_PORT: u16 = 25565;
+pub const BIND_PORT: u16 = 25565;
+pub const HANDSHAKE_CHANNEL_CAPACITY: usize = 32;
+const IO_CHANNEL_CAPACITY: usize = 100;
+
+/// Information extracted from a client's Minecraft Handshake packet.
+/// Used in automatic mode to determine the real remote server without manual input.
+pub struct AutoClientInfo {
+    pub stream: TcpStream,
+    pub protocol_version: i32,
+    pub server_host: String,
+    pub server_port: u16,
+}
+
+#[inline]
+pub async fn read_uncompressed(stream: &mut TcpStream) -> anyhow::Result<UncompressedPacket> {
+    Ok(RawPacket::read_async(stream).await?.as_uncompressed()?)
+}
+
+/// Accepts connections from `listener`, reads the Minecraft Handshake packet,
+/// proxies status pings directly, and sends `(stream, protocol_version)` for
+/// login intents to `tx`.
+pub async fn listen_and_dispatch(
+    listener: TcpListener,
+    tx: Sender<(TcpStream, i32)>,
+    remote_dns: String,
+    remote_addr: SocketAddr,
+) {
+    while let Ok((stream, _addr)) = listener.accept().await {
+        tokio::spawn(handle_connection(
+            stream,
+            tx.clone(),
+            remote_dns.clone(),
+            remote_addr,
+        ));
+    }
+}
+
+/// Auto-mode variant of `listen_and_dispatch`.
+/// Reads the Minecraft Handshake from each connection, handles status pings directly
+/// (resolving the server from the Handshake), and sends login-intent clients as
+/// `AutoClientInfo` so the caller can pair and proxy them dynamically.
+pub async fn listen_and_dispatch_auto(listener: TcpListener, tx: Sender<AutoClientInfo>) {
+    while let Ok((stream, _addr)) = listener.accept().await {
+        tokio::spawn(handle_connection_auto(stream, tx.clone()));
+    }
+}
+
+async fn handle_connection_auto(
+    mut stream: TcpStream,
+    tx: Sender<AutoClientInfo>,
+) -> anyhow::Result<()> {
+    let handshake: Handshake = read_uncompressed(&mut stream)
+        .await?
+        .deserialize_payload()?;
+
+    match Intent::try_from(handshake.intent.0) {
+        Ok(Intent::Status) => {
+            // Resolve the server from the handshake and proxy the ping directly
+            if let Some(remote_addr) = resolve_host_port(
+                &handshake.server_address,
+                handshake.server_port,
+                "minecraft",
+                "tcp",
+            )
+            .await
+            {
+                process_status(
+                    stream,
+                    remote_addr,
+                    handshake.server_address.clone(),
+                    handshake,
+                )
+                .await?;
+            }
+        }
+        Ok(Intent::Login) => {
+            tx.send(AutoClientInfo {
+                protocol_version: handshake.protocol_version.0,
+                server_host: handshake.server_address,
+                server_port: handshake.server_port,
+                stream,
+            })
+            .await?;
+        }
+        Err(_) => {}
+    }
+    Ok(())
+}
+
+async fn handle_connection(
+    mut stream: TcpStream,
+    tx: Sender<(TcpStream, i32)>,
+    remote_dns: String,
+    remote_addr: SocketAddr,
+) -> anyhow::Result<()> {
+    let handshake: Handshake = read_uncompressed(&mut stream)
+        .await?
+        .deserialize_payload()?;
+
+    match Intent::try_from(handshake.intent.0) {
+        Ok(Intent::Status) => process_status(stream, remote_addr, remote_dns, handshake).await?,
+        Ok(Intent::Login) => {
+            tx.send((stream, handshake.protocol_version.0)).await?;
+        }
+        Err(_) => {}
+    }
+
+    Ok(())
+}
+
+async fn process_status(
+    mut stream: TcpStream,
+    remote_addr: SocketAddr,
+    remote_dns: String,
+    mut handshake: Handshake,
+) -> anyhow::Result<()> {
+    if remote_addr == "127.0.0.1:25565".parse().unwrap() {
+        // Status request
+        RawPacket::read_async(&mut stream).await?;
+
+        // Status response
+        UncompressedPacket::from_packet(&StatusResponse {
+            response: json!({
+                "version": {
+                    "name": "VoxelProxy",
+                    "protocol": handshake.protocol_version.0
+                },
+                "players": {
+                    "max": 20,
+                    "online": 0,
+                    "sample": []
+                },
+                "description": {
+                    "text": "VoxelProxy Работает!"
+                }
+            })
+            .to_string(),
+        })?
+        .write_async(&mut stream)
+        .await?;
+
+        // PING
+        RawPacket::read_async(&mut stream)
+            .await?
+            .write_async(&mut stream)
+            .await?;
+        return Ok(());
+    }
+    handshake.server_address = remote_dns;
+    let mut remote_stream = TcpStream::connect(remote_addr).await?;
+
+    UncompressedPacket::from_packet(&handshake)?
+        .write_async(&mut remote_stream)
+        .await?;
+
+    // STATUS
+    RawPacket::read_async(&mut stream)
+        .await?
+        .write_async(&mut remote_stream)
+        .await?;
+    RawPacket::read_async(&mut remote_stream)
+        .await?
+        .write_async(&mut stream)
+        .await?;
+
+    // PING
+    RawPacket::read_async(&mut stream)
+        .await?
+        .write_async(&mut remote_stream)
+        .await?;
+    RawPacket::read_async(&mut remote_stream)
+        .await?
+        .write_async(&mut stream)
+        .await?;
+
+    Ok(())
+}
+
+/// Runs the post-handshake login sequence and then the proxy Controller.
+///
+/// # Preconditions
+/// - The Minecraft `Handshake` + `LoginStart` have been **read** from both
+///   `primary` and `secondary` streams.
+/// - The Minecraft `Handshake` + `LoginStart` have been **sent** to `remote`.
+/// - `version` has been constructed from the shared protocol number.
+pub async fn run_proxy_session(
+    mut primary: TcpStream,
+    mut secondary: TcpStream,
+    mut remote: TcpStream,
+    mut version: Version,
+    events: EventSink,
+) -> anyhow::Result<()> {
+    let mut threshold = None;
+
+    loop {
+        let packet = RawPacket::read_async(&mut remote)
+            .await?
+            .uncompress(threshold)?;
+
+        match packet.packet_id {
+            LoginDisconnect::PACKET_ID => {
+                send_login_error(
+                    &mut primary,
+                    &mut secondary,
+                    packet.deserialize_payload::<LoginDisconnect>()?.reason,
+                )
+                .await;
+                return Err(anyhow!("Disconnected by server"));
+            }
+            EncryptionRequest::PACKET_ID => {
+                send_login_error(
+                    &mut primary,
+                    &mut secondary,
+                    "Лицензионный сервер не поддерживается\nИспользуйте ViaProxy".to_string(),
+                )
+                .await;
+                return Err(anyhow!("Licensed server"));
+            }
+            LoginSuccess::PACKET_ID => {
+                let packet = packet.to_raw_packet_compressed(threshold)?;
+                packet.write_async(&mut primary).await?;
+                packet.write_async(&mut secondary).await?;
+                break;
+            }
+            SetCompression::PACKET_ID => {
+                let compression: SetCompression = packet.deserialize_payload()?;
+                threshold = Some(compression.threshold.0);
+
+                let packet = packet.to_raw_packet()?;
+                packet.write_async(&mut primary).await?;
+                packet.write_async(&mut secondary).await?;
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    let (primary_read, primary_write) = primary.into_split();
+    let (secondary_read, secondary_write) = secondary.into_split();
+    let (remote_read, remote_write) = remote.into_split();
+
+    let (event_tx, event_rx) = mpsc::channel(IO_CHANNEL_CAPACITY);
+    let (primary_tx, primary_rx) = mpsc::channel(IO_CHANNEL_CAPACITY);
+    let (secondary_tx, secondary_rx) = mpsc::channel(IO_CHANNEL_CAPACITY);
+    let (remote_tx, remote_rx) = mpsc::channel(IO_CHANNEL_CAPACITY);
+
+    version.update_threshold(threshold);
+    let controller = Controller::new(
+        ClientId::Primary,
+        primary_tx,
+        secondary_tx,
+        remote_tx,
+        event_rx,
+        version,
+        events,
+    );
+
+    let primary_task = tokio::spawn(run_client(
+        primary_read,
+        primary_write,
+        ClientId::Primary,
+        event_tx.clone(),
+        primary_rx,
+    ));
+    let secondary_task = tokio::spawn(run_client(
+        secondary_read,
+        secondary_write,
+        ClientId::Secondary,
+        event_tx.clone(),
+        secondary_rx,
+    ));
+    let server_task = tokio::spawn(run_server(remote_read, remote_write, event_tx, remote_rx));
+
+    controller.run().await;
+
+    // The controller has stopped, so the session is over. Abort the I/O tasks to drop their
+    // socket halves and close the connections. This is required for a half-open client whose
+    // read task is wedged in `read_async` (no FIN arrived): dropping the controller's channel
+    // ends alone won't unblock a task parked on the socket rather than on a channel.
+    primary_task.abort();
+    secondary_task.abort();
+    server_task.abort();
+    Ok(())
+}
+
+/// Sends a `LoginDisconnect` packet to a single client.
+pub async fn send_login_disconnect<W: AsyncWriteExt + Unpin>(stream: &mut W, message: String) {
+    let disconnect = UncompressedPacket::from_packet(&LoginDisconnect {
+        reason: json!({ "text": message }).to_string(),
+    })
+    .unwrap();
+
+    let _ = disconnect.write_async(stream).await;
+}
+
+/// Sends a `LoginDisconnect` packet to both clients.
+pub async fn send_login_error<W: AsyncWriteExt + Unpin>(
+    primary: &mut W,
+    secondary: &mut W,
+    message: String,
+) {
+    let disconnect = UncompressedPacket::from_packet(&LoginDisconnect {
+        reason: json!({"text": message}).to_string(),
+    })
+    .unwrap();
+
+    disconnect.write_async(primary).await.unwrap();
+    disconnect.write_async(secondary).await.unwrap();
+}
