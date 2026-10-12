@@ -294,6 +294,8 @@ impl AppView {
                             .justify_between()
                             .child(
                                 v_flex()
+                                    .flex_1()
+                                    .min_w_0()
                                     .gap_0p5()
                                     .child(div().text_sm().font_semibold().child(
                                         "Перехватывать трафик раздачи Wi-Fi",
@@ -304,6 +306,7 @@ impl AppView {
                                     )),
                             )
                             .child(
+                                div().flex_shrink_0().child(
                                 Switch::new("use-windivert")
                                     .checked(self.use_windivert)
                                     .disabled(blocked)
@@ -311,6 +314,7 @@ impl AppView {
                                         this.use_windivert = *checked;
                                         cx.notify();
                                     })),
+                                ),
                             ),
                     )
                     .when(self.use_windivert, |el| {
@@ -320,6 +324,8 @@ impl AppView {
                                 .justify_between()
                                 .child(
                                     v_flex()
+                                        .flex_1()
+                                        .min_w_0()
                                         .gap_0p5()
                                         .child(div().text_sm().font_semibold().child("Порты серверов"))
                                         .child(widgets::hint(
@@ -329,6 +335,7 @@ impl AppView {
                                 )
                                 .child(
                                     h_flex()
+                                        .flex_shrink_0()
                                         .gap_2()
                                         .child(
                                             div().w(px(96.)).child(
