@@ -130,7 +130,7 @@ impl AppView {
                             .child(if self.clients.any() {
                                 "Ждём второй клиент"
                             } else {
-                                "Ждём клиенты"
+                                "Ждём клиентов"
                             }),
                     )
                     .child(widgets::hint(note, cx)),
