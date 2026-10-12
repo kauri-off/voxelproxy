@@ -1,9 +1,6 @@
 name: Rust Release
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
 
 env:
@@ -33,11 +30,7 @@ jobs:
         id: version
         shell: bash
         run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            ver="${GITHUB_REF_NAME#v}"
-          else
-            ver=$(grep '^version =' Cargo.toml | head -1 | sed -E 's/version = "(.*)"/\1/')
-          fi
+          ver=$(grep '^version =' Cargo.toml | head -1 | sed -E 's/version = "(.*)"/\1/')
           echo "version=$ver" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
