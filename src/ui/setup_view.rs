@@ -2,6 +2,7 @@ use gpui_kit::component::{
     ActiveTheme, Disableable, Icon, Sizable, StyledExt,
     alert::Alert,
     button::{Button, ButtonVariants},
+    clipboard::Clipboard,
     collapsible::Collapsible,
     h_flex,
     input::Input,
@@ -217,17 +218,26 @@ impl AppView {
             cx,
         );
         let theme = cx.theme().clone();
-        let code = |text: &'static str| {
-            div()
+        let code = |id: &'static str, text: &'static str| {
+            h_flex()
+                .gap_2()
+                .items_start()
+                .justify_between()
                 .px_3()
                 .py_2()
                 .rounded(px(6.))
                 .bg(theme.background)
                 .border_1()
                 .border_color(theme.border)
-                .font_family(theme.mono_font_family.clone())
-                .text_sm()
-                .child(text)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .font_family(theme.mono_font_family.clone())
+                        .text_sm()
+                        .child(text),
+                )
+                .child(Clipboard::new(id).value(text).tooltip("Скопировать"))
         };
         let item = |title: &'static str, body: &'static str| {
             v_flex()
@@ -253,7 +263,7 @@ impl AppView {
                                 "Клиент не подключается или на втором устройстве пропал интернет",
                                 "Завис перехват трафика (WinDivert) или сама раздача Wi-Fi. Выполните в PowerShell от администратора, затем снова включите раздачу и перезапустите VoxelProxy:",
                             ))
-                            .child(code("sc.exe stop windivert\nStop-Service SharedAccess")),
+                            .child(code("troubleshooting-copy", "sc.exe stop windivert\nStop-Service SharedAccess")),
                     )
                     .child(item(
                         "На втором устройстве не открываются сайты",
