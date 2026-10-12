@@ -4,6 +4,7 @@ use gpui_kit::component::{
     h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::base::SelectableText;
 use gpui_kit::*;
 
 use super::{AppView, IconName};
@@ -51,6 +52,22 @@ impl AppView {
                     .child(div().flex_1())
                     .when(open && !self.logs.is_empty(), |el| {
                         el.child(
+                            Button::new("log-copy")
+                                .ghost()
+                                .xsmall()
+                                .label("Копировать")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    let text = this
+                                        .logs
+                                        .iter()
+                                        .map(|l| l.message.as_ref())
+                                        .collect::<Vec<_>>()
+                                        .join("\n");
+                                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                                })),
+                        )
+                        .child(
                             Button::new("log-clear")
                                 .ghost()
                                 .xsmall()
@@ -85,7 +102,7 @@ impl AppView {
                         .when(self.logs.is_empty(), |el| {
                             el.child(div().text_color(theme.muted_foreground).child("Пока пусто"))
                         })
-                        .children(self.logs.iter().map(|entry| {
+                        .children(self.logs.iter().enumerate().map(|(ix, entry)| {
                             let color = match entry.level {
                                 LogLevel::Info => theme.foreground.opacity(0.8),
                                 LogLevel::Success => theme.success,
@@ -95,7 +112,10 @@ impl AppView {
                             div()
                                 .py_0p5()
                                 .text_color(color)
-                                .child(entry.message.clone())
+                                .child(
+                                    SelectableText::new(("log-line", ix), entry.message.clone())
+                                        .document_order(ix as u64),
+                                )
                         })),
                 )
             })

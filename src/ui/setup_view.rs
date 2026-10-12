@@ -167,17 +167,20 @@ impl AppView {
                                 .outline()
                                 .icon(Icon::new(IconName::ShieldCheck))
                                 .label("Перезапустить")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    match backend::relaunch_as_admin() {
-                                        Ok(()) => cx.quit(),
-                                        Err(e) => {
-                                            this.push_log(
-                                                crate::events::LogLevel::Error,
-                                                format!("Не удалось перезапустить от администратора: {e}"),
-                                            );
-                                            cx.notify();
-                                        }
-                                    }
+                                .on_click(cx.listener(|_, _, _, cx| {
+                                    let this = cx.entity().downgrade();
+                                    super::dialogs::relaunch_as_admin(
+                                        move |e, cx| {
+                                            let _ = this.update(cx, |this, cx| {
+                                                this.push_log(
+                                                    crate::events::LogLevel::Error,
+                                                    format!("Не удалось перезапустить от администратора: {e}"),
+                                                );
+                                                cx.notify();
+                                            });
+                                        },
+                                        cx,
+                                    );
                                 })),
                         )
                     }),

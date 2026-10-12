@@ -185,6 +185,18 @@ pub fn open_manual_warning(
     });
 }
 
+// ShellExecuteW pumps messages while UAC is shown, so it must not run inside a GPUI callback.
+pub fn relaunch_as_admin(on_error: impl FnOnce(String, &mut App) + 'static, cx: &mut App) {
+    let job = cx
+        .background_executor()
+        .spawn(async { backend::relaunch_as_admin() });
+    cx.spawn(async move |cx| match job.await {
+        Ok(()) => cx.update(|cx| cx.quit()),
+        Err(e) => cx.update(|cx| on_error(e, cx)),
+    })
+    .detach();
+}
+
 pub fn open_admin_required(
     on_error: impl Fn(String, &mut App) + 'static,
     window: &mut Window,
@@ -226,12 +238,10 @@ pub fn open_admin_required(
                             .primary()
                             .icon(Icon::new(IconName::ShieldCheck))
                             .label("Перезапустить от администратора")
-                            .on_click(move |_, window, cx| match backend::relaunch_as_admin() {
-                                Ok(()) => cx.quit(),
-                                Err(e) => {
-                                    window.close_dialog(cx);
-                                    on_error(e, cx);
-                                }
+                            .on_click(move |_, window, cx| {
+                                window.close_dialog(cx);
+                                let on_error = on_error.clone();
+                                relaunch_as_admin(move |e, cx| on_error(e, cx), cx);
                             }),
                     ),
             )
