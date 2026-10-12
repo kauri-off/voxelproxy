@@ -1,0 +1,47 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":dependencyDashboard"],
+  "schedule": ["before 6am on monday"],
+  "prConcurrentLimit": 5,
+  "rangeStrategy": "bump",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on monday"]
+  },
+  "packageRules": [
+    {
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchCurrentVersion": "!/^0/",
+      "groupName": "rust non-major"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["patch"],
+      "matchCurrentVersion": "/^0/",
+      "groupName": "rust non-major"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["tonic", "tonic-prost", "tonic-prost-build", "prost"],
+      "groupName": "tonic/prost"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["futures", "futures-util"],
+      "groupName": "futures"
+    },
+    {
+      "matchManagers": ["github-actions", "custom.regex"],
+      "groupName": "ci"
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
+      "matchStrings": ["cargo install (?<depName>[a-z0-9_-]+) --version (?<currentValue>[0-9.]+)"],
+      "datasourceTemplate": "crate"
+    }
+  ]
+}
