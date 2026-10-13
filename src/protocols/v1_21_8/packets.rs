@@ -41,7 +41,7 @@ pub mod c2s {
         #[packet(15)] // ServerboundConfigurationAcknowledgedPacket
         pub struct ConfigurationAcknowledged {}
 
-        #[derive(Packet, Debug)]
+        #[derive(Packet, Debug, Default)]
         #[packet(29)] // ServerboundMovePlayerPacket.Pos
         pub struct Pos {
             pub x: f64,
@@ -50,7 +50,7 @@ pub mod c2s {
             pub flags: u8,
         }
 
-        #[derive(Packet, Debug)]
+        #[derive(Packet, Debug, Default)]
         #[packet(30)] // ServerboundMovePlayerPacket.PosRot
         pub struct PosRot {
             pub x: f64,
@@ -61,7 +61,7 @@ pub mod c2s {
             pub flags: u8,
         }
 
-        #[derive(Packet, Debug)]
+        #[derive(Packet, Debug, Default)]
         #[packet(31)] // ServerboundMovePlayerPacket.Rot
         pub struct Rot {
             pub yaw: f32,
