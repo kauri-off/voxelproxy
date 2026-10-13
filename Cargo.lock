@@ -7532,6 +7532,7 @@ dependencies = [
  "futures-util",
  "gpui-kit",
  "hickory-resolver",
+ "idna",
  "if-addrs",
  "image",
  "mc_protocol",
