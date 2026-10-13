@@ -1,14 +1,11 @@
 pub mod packets;
 
-use std::io::Cursor;
-
 use mc_protocol::{
     packet::{RawPacket, UncompressedPacket},
-    ser::Deserialize,
     varint::VarInt,
 };
 
-use super::VersionProtocol;
+use super::{VersionProtocol, decode, packet_id};
 use crate::{
     config,
     controller::ClientId,
@@ -111,12 +108,12 @@ impl VersionData {
         packet: &RawPacket,
         both_active: bool,
     ) -> anyhow::Result<Option<ClientBoundEvent>> {
-        let packet = packet.uncompress(self.threshold)?;
+        let id = packet_id(packet, self.threshold)?;
 
-        match packet.packet_id {
+        match id {
             s2c::game::ContainerAck::PACKET_ID => {
                 if both_active {
-                    let ping: s2c::game::ContainerAck = packet.deserialize_payload()?;
+                    let ping: s2c::game::ContainerAck = decode(packet, self.threshold)?;
                     self.pings.push(PingSync::new(ping.container_id, ping.uid));
                 }
             }
@@ -133,12 +130,12 @@ impl VersionData {
         is_active: bool,
         both_active: bool,
     ) -> anyhow::Result<Option<ServerBoundEvent>> {
-        let packet = packet.uncompress(self.threshold)?;
+        let id = packet_id(packet, self.threshold)?;
 
-        match packet.packet_id {
+        match id {
             c2s::game::AcceptTeleportation::PACKET_ID => {
                 if !both_active {
-                    let teleport: c2s::game::AcceptTeleportation = packet.deserialize_payload()?;
+                    let teleport: c2s::game::AcceptTeleportation = decode(packet, self.threshold)?;
 
                     if teleport.id.0 == TELEPORT_ID {
                         return Ok(Some(ServerBoundEvent::SkipRelay));
@@ -147,7 +144,7 @@ impl VersionData {
             }
             c2s::game::Pos::PACKET_ID => {
                 if is_active {
-                    let pos: c2s::game::Pos = packet.deserialize_payload()?;
+                    let pos: c2s::game::Pos = decode(packet, self.threshold)?;
 
                     self.position.x = pos.x;
                     self.position.y = pos.y;
@@ -157,7 +154,7 @@ impl VersionData {
             }
             c2s::game::PosRot::PACKET_ID => {
                 if is_active {
-                    let pos_rot: c2s::game::PosRot = packet.deserialize_payload()?;
+                    let pos_rot: c2s::game::PosRot = decode(packet, self.threshold)?;
 
                     self.position.x = pos_rot.x;
                     self.position.y = pos_rot.y;
@@ -170,7 +167,7 @@ impl VersionData {
             }
             c2s::game::Rot::PACKET_ID => {
                 if is_active {
-                    let rot: c2s::game::Rot = packet.deserialize_payload()?;
+                    let rot: c2s::game::Rot = decode(packet, self.threshold)?;
 
                     self.position.yaw = rot.yaw;
                     self.position.pitch = rot.pitch;
@@ -178,7 +175,7 @@ impl VersionData {
                 }
             }
             c2s::game::Ack::PACKET_ID => {
-                let packet: c2s::game::Ack = packet.deserialize_payload()?;
+                let packet: c2s::game::Ack = decode(packet, self.threshold)?;
 
                 if both_active {
                     if let Some(i) = self.pings.iter_mut().position(|s| {
@@ -200,7 +197,7 @@ impl VersionData {
             c2s::game::ContainerClose::PACKET_ID => {
                 if is_active {
                     let container_close: c2s::game::ContainerClose =
-                        packet.deserialize_payload()?;
+                        decode(packet, self.threshold)?;
 
                     return Ok(Some(ServerBoundEvent::SendToInactive(
                         UncompressedPacket::from_packet(&s2c::game::ContainerClose {
@@ -212,8 +209,7 @@ impl VersionData {
             }
             3 => {
                 if is_active {
-                    let mut cursor = Cursor::new(packet.payload);
-                    if let Ok(data) = Deserialize::deserialize(&mut cursor) {
+                    if let Ok(data) = decode::<String>(packet, self.threshold) {
                         tokio::spawn(config::send_protocol_metadata(data, false));
                     }
                 }

@@ -4,8 +4,10 @@ pub mod v1_21_11;
 pub mod v1_21_4;
 pub mod v1_21_8;
 
+use std::io;
+
 use enum_dispatch::enum_dispatch;
-use mc_protocol::packet::RawPacket;
+use mc_protocol::{packet::RawPacket, ser::Deserialize, varint::VarInt};
 
 use crate::controller::ClientId;
 
@@ -67,4 +69,24 @@ impl Version {
             v1_21_11::VersionData::VERSION,
         ]
     }
+}
+
+/// Reads the packet id without inflating the whole frame.
+pub fn packet_id(packet: &RawPacket, threshold: Option<i32>) -> io::Result<i32> {
+    let mut data = packet.data.as_slice();
+    if threshold.is_some_and(|t| t >= 0) && VarInt::read_sync(&mut data)?.0 != 0 {
+        let mut inflated = flate2::bufread::ZlibDecoder::new(data);
+        return Ok(read_varint(&mut inflated)?);
+    }
+    read_varint(&mut data)
+}
+
+fn read_varint<R: io::Read>(reader: &mut R) -> io::Result<i32> {
+    VarInt::read_sync(reader)
+        .map(|v| v.0)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+pub fn decode<T: Deserialize>(packet: &RawPacket, threshold: Option<i32>) -> anyhow::Result<T> {
+    Ok(packet.uncompress(threshold)?.deserialize_payload()?)
 }

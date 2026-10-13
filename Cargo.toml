@@ -26,6 +26,7 @@ uuid = { version = "1.28.0", features = ["v4"] }
 semver = "1.0.28"
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 futures = "0.3.34"
+flate2 = "1.1.10"
 tonic = { version = "0.14.6", features = ["tls-ring", "tls-webpki-roots"] }
 tonic-prost = "0.14.6"
 prost = "0.14.4"

@@ -7526,6 +7526,7 @@ dependencies = [
  "dirs 7.0.0",
  "enum_dispatch",
  "etherparse 0.21.0",
+ "flate2",
  "futures",
  "futures-util",
  "gpui-kit",
