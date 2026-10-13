@@ -34,6 +34,13 @@ impl ClientId {
         }
     }
 
+    pub fn index(self) -> usize {
+        match self {
+            ClientId::Primary => 0,
+            ClientId::Secondary => 1,
+        }
+    }
+
     fn which(self) -> WhichClient {
         match self {
             ClientId::Primary => WhichClient::Primary,
@@ -151,7 +158,7 @@ impl Controller {
                     let event = self.version.handle_c2s(
                         &packet,
                         client_id,
-                        client_id == self.active_client,
+                        self.active_client,
                         self.both_active(),
                     );
 
@@ -219,7 +226,10 @@ impl Controller {
                 }
 
                 ControllerEvent::ServerData(packet) => {
-                    if let Some(event) = self.version.handle_s2c(&packet, self.both_active()) {
+                    if let Some(event) =
+                        self.version
+                            .handle_s2c(&packet, self.active_client, self.both_active())
+                    {
                         match event {}
                     }
 

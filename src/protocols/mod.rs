@@ -18,10 +18,15 @@ pub trait VersionProtocol {
         &mut self,
         packet: &RawPacket,
         client_id: ClientId,
-        is_active: bool,
+        active: ClientId,
         both_active: bool,
     ) -> Option<ServerBoundEvent>;
-    fn handle_s2c(&mut self, packet: &RawPacket, both_active: bool) -> Option<ClientBoundEvent>;
+    fn handle_s2c(
+        &mut self,
+        packet: &RawPacket,
+        active: ClientId,
+        both_active: bool,
+    ) -> Option<ClientBoundEvent>;
     fn update_threshold(&mut self, threshold: Option<i32>);
     fn handle_client_disconnect(&mut self, new_active: ClientId) -> Option<ClientDisconnectEvent>;
     fn parse_login_start(&self, packet: &RawPacket) -> Option<String>;

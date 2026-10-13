@@ -54,14 +54,19 @@ impl VersionProtocol for VersionData {
         &mut self,
         packet: &RawPacket,
         client_id: ClientId,
-        is_active: bool,
+        active: ClientId,
         both_active: bool,
     ) -> Option<ServerBoundEvent> {
-        self.handle_c2s_game(packet, client_id, is_active, both_active)
+        self.handle_c2s_game(packet, client_id, client_id == active, both_active)
             .unwrap_or_default()
     }
 
-    fn handle_s2c(&mut self, packet: &RawPacket, both_active: bool) -> Option<ClientBoundEvent> {
+    fn handle_s2c(
+        &mut self,
+        packet: &RawPacket,
+        _active: ClientId,
+        both_active: bool,
+    ) -> Option<ClientBoundEvent> {
         self.handle_s2c_game(packet, both_active)
             .unwrap_or_default()
     }
