@@ -110,7 +110,10 @@ pub async fn listen_and_dispatch(
 /// Auto-mode variant of `listen_and_dispatch`: status pings are proxied to the
 /// server named in each Handshake.
 pub async fn listen_and_dispatch_auto(listener: TcpListener, tx: Sender<LoginClient>) {
-    accept_loop(listener, |stream| handle_connection(stream, tx.clone(), None)).await
+    accept_loop(listener, |stream| {
+        handle_connection(stream, tx.clone(), None)
+    })
+    .await
 }
 
 async fn handle_connection(
@@ -385,4 +388,158 @@ pub async fn send_login_error<W: AsyncWriteExt + Unpin>(
 
     let _ = disconnect.write_async(primary).await;
     let _ = disconnect.write_async(secondary).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::StreamExt;
+    use mc_protocol::varint::VarInt;
+
+    use super::*;
+    use crate::events::{AppEvent, WhichClient};
+
+    async fn socket_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (connected, accepted) = tokio::join!(TcpStream::connect(addr), listener.accept());
+        (accepted.unwrap().0, connected.unwrap())
+    }
+
+    fn frame(id: i32, payload: Vec<u8>, threshold: Option<i32>) -> RawPacket {
+        UncompressedPacket::new(id, payload)
+            .to_raw_packet_compressed(threshold)
+            .unwrap()
+    }
+
+    async fn sessions() -> (
+        TcpStream,
+        TcpStream,
+        TcpStream,
+        impl Future<Output = anyhow::Result<()>>,
+        crate::events::EventSink,
+        futures::channel::mpsc::UnboundedReceiver<AppEvent>,
+    ) {
+        let (primary, primary_peer) = socket_pair().await;
+        let (secondary, secondary_peer) = socket_pair().await;
+        let (remote, remote_peer) = socket_pair().await;
+        let (events, events_rx) = EventSink::channel();
+        let session = run_proxy_session(
+            primary,
+            secondary,
+            remote,
+            Version::from_protocol(774).unwrap(),
+            events.clone(),
+        );
+        (
+            primary_peer,
+            secondary_peer,
+            remote_peer,
+            session,
+            events,
+            events_rx,
+        )
+    }
+
+    #[tokio::test]
+    async fn login_is_forwarded_verbatim_and_plugin_requests_answered() {
+        let (mut primary, mut secondary, mut remote, session, _events, _rx) = sessions().await;
+        let session = tokio::spawn(session);
+        let threshold = Some(256);
+
+        let set_compression = frame(SetCompression::PACKET_ID, vec![0x80, 0x02], None);
+        set_compression.write_async(&mut remote).await.unwrap();
+
+        let mut request = Vec::new();
+        VarInt(5).write_sync(&mut request).unwrap();
+        mc_protocol::ser::Serialize::serialize("velocity:player_info", &mut request).unwrap();
+        frame(LoginPluginRequest::PACKET_ID, request, threshold)
+            .write_async(&mut remote)
+            .await
+            .unwrap();
+        let response = RawPacket::read_async(&mut remote)
+            .await
+            .unwrap()
+            .uncompress(threshold)
+            .unwrap();
+        assert_eq!(response.packet_id, LoginPluginResponse::PACKET_ID);
+        assert_eq!(response.payload, vec![5, 0]);
+
+        let success = frame(LoginSuccess::PACKET_ID, vec![1; 300], threshold);
+        success.write_async(&mut remote).await.unwrap();
+        let chunks: Vec<_> = (0..50)
+            .map(|i| frame(0x27, vec![i as u8; 100_000], threshold))
+            .collect();
+        for chunk in &chunks {
+            chunk.write_async(&mut remote).await.unwrap();
+        }
+
+        for client in [&mut primary, &mut secondary] {
+            let mut reader = tokio::io::BufReader::new(client);
+            for expected in [&set_compression, &success].into_iter().chain(&chunks) {
+                let got = RawPacket::read_async(&mut reader).await.unwrap();
+                assert_eq!(got.data, expected.data);
+            }
+        }
+
+        drop(remote);
+        tokio::time::timeout(Duration::from_secs(5), session)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn stalled_inactive_client_is_dropped_without_blocking_active() {
+        let (mut primary, secondary, mut remote, session, _events, mut events_rx) =
+            sessions().await;
+        let session = tokio::spawn(session);
+
+        frame(LoginSuccess::PACKET_ID, vec![], None)
+            .write_async(&mut remote)
+            .await
+            .unwrap();
+        let writer = tokio::spawn(async move {
+            for i in 0..48 {
+                frame(0x27, vec![i as u8; 2_000_000], None)
+                    .write_async(&mut remote)
+                    .await
+                    .unwrap();
+            }
+            remote
+        });
+
+        let mut reader = tokio::io::BufReader::new(&mut primary);
+        RawPacket::read_async(&mut reader).await.unwrap();
+        for i in 0..48 {
+            let got =
+                tokio::time::timeout(Duration::from_secs(10), RawPacket::read_async(&mut reader))
+                    .await
+                    .expect("active client stalled")
+                    .unwrap();
+            assert_eq!(got.data.last(), Some(&(i as u8)));
+        }
+
+        let kicked = tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(event) = events_rx.next().await {
+                if let AppEvent::ClientStatus {
+                    which: WhichClient::Secondary,
+                    online: false,
+                } = event
+                {
+                    return;
+                }
+            }
+        })
+        .await;
+        assert!(kicked.is_ok(), "stalled secondary was never dropped");
+
+        drop(secondary);
+        drop(writer.await.unwrap());
+        tokio::time::timeout(Duration::from_secs(5), session)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
 }

@@ -89,7 +89,11 @@ impl PeerLink {
     }
 
     fn try_send(&self, packet: Arc<RawPacket>) -> Result<(), TrySendError> {
-        let permit = match self.budget.clone().try_acquire_many_owned(Self::cost(&packet)) {
+        let permit = match self
+            .budget
+            .clone()
+            .try_acquire_many_owned(Self::cost(&packet))
+        {
             Ok(p) => p,
             Err(TryAcquireError::NoPermits) => return Err(TrySendError::Full),
             Err(TryAcquireError::Closed) => return Err(TrySendError::Closed),
@@ -163,8 +167,11 @@ impl Controller {
                         match event {
                             ServerBoundEvent::SendToInactive(raw_packet) => {
                                 if self.both_active() {
-                                    self.deliver(self.active_client.opposite(), Arc::new(raw_packet))
-                                        .await;
+                                    self.deliver(
+                                        self.active_client.opposite(),
+                                        Arc::new(raw_packet),
+                                    )
+                                    .await;
                                 }
                             }
                             ServerBoundEvent::SkipRelay => skip = true,
@@ -253,9 +260,8 @@ impl Controller {
             return;
         }
         if let Err(TrySendError::Full) = link.try_send(packet) {
-            Logger::new(&self.events).warn(
-                "Неактивный клиент не успевает принимать данные и был отключён",
-            );
+            Logger::new(&self.events)
+                .warn("Неактивный клиент не успевает принимать данные и был отключён");
             // Dropping the queue ends its writer task, which closes the socket's write half.
             *self.link_mut(client_id) = None;
             self.mark_offline(client_id);
