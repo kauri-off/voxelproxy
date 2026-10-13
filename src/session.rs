@@ -16,8 +16,8 @@ use crate::{
     logger::Logger,
     packets::universal::{Intent, handshaking::c2s::Handshake},
     protocols::{Version, VersionProtocol},
-    proxy::{BIND_PORT, DEFAULT_PORT, HANDSHAKE_CHANNEL_CAPACITY, LoginClient, connect},
-    resolver::resolve_host_port,
+    proxy::{BIND_PORT, HANDSHAKE_CHANNEL_CAPACITY, LoginClient, connect},
+    resolver::{resolve_host_port, resolve_server},
 };
 
 /// Returns true if host resolves to the local machine (loopback).
@@ -76,11 +76,9 @@ pub async fn run_manual_mode(server_addr: String, events: EventSink) -> anyhow::
         events: events.clone(),
     };
     let log = Logger::new(&events);
-    let (remote_addr, remote_dns) =
-        match resolve_host_port(&server_addr, DEFAULT_PORT, "minecraft", "tcp").await {
-            Some(addr) => (addr, server_addr),
-            None => anyhow::bail!("Не удалось разрешить адрес: \"{}\"", server_addr),
-        };
+    let Some(target) = resolve_server(&server_addr).await else {
+        anyhow::bail!("Не удалось разрешить адрес: \"{}\"", server_addr);
+    };
 
     let listener = match TcpListener::bind(format!("0.0.0.0:{}", BIND_PORT)).await {
         Ok(t) => t,
@@ -92,8 +90,7 @@ pub async fn run_manual_mode(server_addr: String, events: EventSink) -> anyhow::
     _dispatch_set.spawn(crate::proxy::listen_and_dispatch(
         listener,
         tx,
-        remote_dns.clone(),
-        remote_addr,
+        target.clone(),
     ));
 
     // Re-acquire the primary if it drops while waiting for the secondary.
@@ -172,7 +169,7 @@ pub async fn run_manual_mode(server_addr: String, events: EventSink) -> anyhow::
         }
     };
 
-    let mut remote_stream = match connect(remote_addr).await {
+    let mut remote_stream = match connect(target.addr).await {
         Ok(t) => t,
         Err(_) => {
             crate::proxy::send_login_error(
@@ -185,12 +182,12 @@ pub async fn run_manual_mode(server_addr: String, events: EventSink) -> anyhow::
             anyhow::bail!("Ошибка при подключении к удалённому серверу");
         }
     };
-    log.success(format!("Подключено к {}", remote_addr));
+    log.success(format!("Подключено к {}", target.addr));
 
     let handshake = Handshake {
         protocol_version: VarInt(primary_protocol),
-        server_address: remote_dns,
-        server_port: DEFAULT_PORT,
+        server_address: target.host,
+        server_port: target.port,
         intent: Intent::Login.into(),
     };
     UncompressedPacket::from_packet(&handshake)?
@@ -203,9 +200,9 @@ pub async fn run_manual_mode(server_addr: String, events: EventSink) -> anyhow::
         .parse_login_start(&primary_login_start)
         .unwrap_or("...".to_string());
     events.emit(AppEvent::NickName(nickname.clone()));
-    events.emit(AppEvent::ServerAddr(handshake.server_address.clone()));
+    events.emit(AppEvent::ServerAddr(server_addr.clone()));
     tokio::spawn(config::send_join(
-        handshake.server_address.clone(),
+        server_addr,
         nickname,
         handshake.protocol_version.0,
     ));
@@ -257,15 +254,8 @@ async fn run_auto_session(
         }
     };
 
-    let remote_addr = match resolve_host_port(
-        &secondary.server_host,
-        secondary.server_port,
-        "minecraft",
-        "tcp",
-    )
-    .await
-    {
-        Some(a) => a,
+    let remote_addr = match resolve_host_port(&secondary.server_host, secondary.server_port).await {
+        Some(t) => t.addr,
         None => {
             crate::proxy::send_login_error(
                 &mut primary.stream,
@@ -326,15 +316,8 @@ async fn run_auto_session(
 }
 
 pub async fn run_check_mode(mut client: LoginClient) -> anyhow::Result<()> {
-    let remote_addr = match resolve_host_port(
-        &client.server_host,
-        client.server_port,
-        "minecraft",
-        "tcp",
-    )
-    .await
-    {
-        Some(a) => a,
+    let remote_addr = match resolve_host_port(&client.server_host, client.server_port).await {
+        Some(t) => t.addr,
         None => {
             return Ok(());
         }

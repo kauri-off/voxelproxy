@@ -12,7 +12,9 @@ use tokio::{
 };
 
 use crate::{
-    events::EventSink, packets::universal::status::s2c::StatusResponse, resolver::resolve_host_port,
+    events::EventSink,
+    packets::universal::status::s2c::StatusResponse,
+    resolver::{ServerTarget, resolve_host_port},
 };
 
 use crate::{
@@ -97,15 +99,14 @@ where
 }
 
 /// Accepts connections from `listener`, reads the Minecraft Handshake packet,
-/// proxies status pings to `remote_addr`, and sends login-intent clients to `tx`.
+/// proxies status pings to `target`, and sends login-intent clients to `tx`.
 pub async fn listen_and_dispatch(
     listener: TcpListener,
     tx: Sender<LoginClient>,
-    remote_dns: String,
-    remote_addr: SocketAddr,
+    target: ServerTarget,
 ) {
     accept_loop(listener, |stream| {
-        handle_connection(stream, tx.clone(), Some((remote_dns.clone(), remote_addr)))
+        handle_connection(stream, tx.clone(), Some(target.clone()))
     })
     .await
 }
@@ -122,7 +123,7 @@ pub async fn listen_and_dispatch_auto(listener: TcpListener, tx: Sender<LoginCli
 async fn handle_connection(
     mut stream: TcpStream,
     tx: Sender<LoginClient>,
-    status_target: Option<(String, SocketAddr)>,
+    status_target: Option<ServerTarget>,
 ) -> anyhow::Result<()> {
     let handshake: Handshake = read_with_timeout(&mut stream, HANDSHAKE_TIMEOUT)
         .await?
@@ -131,24 +132,21 @@ async fn handle_connection(
 
     match Intent::try_from(handshake.intent.0) {
         Ok(Intent::Status) => {
+            // Auto mode keeps the client's own handshake: it was already resolved by vanilla.
             let target = match status_target {
                 Some(target) => Some(target),
-                None => resolve_host_port(
-                    &handshake.server_address,
-                    handshake.server_port,
-                    "minecraft",
-                    "tcp",
-                )
-                .await
-                .map(|addr| (handshake.server_address.clone(), addr)),
+                None => resolve_host_port(&handshake.server_address, handshake.server_port)
+                    .await
+                    .map(|t| ServerTarget {
+                        host: handshake.server_address.clone(),
+                        port: handshake.server_port,
+                        addr: t.addr,
+                    }),
             };
-            if let Some((remote_dns, remote_addr)) = target {
-                timeout(
-                    STATUS_TIMEOUT,
-                    process_status(stream, remote_addr, remote_dns, handshake),
-                )
-                .await
-                .context("status timed out")??;
+            if let Some(target) = target {
+                timeout(STATUS_TIMEOUT, process_status(stream, target, handshake))
+                    .await
+                    .context("status timed out")??;
             }
         }
         Ok(Intent::Login) => {
@@ -172,11 +170,10 @@ async fn handle_connection(
 
 async fn process_status(
     mut stream: TcpStream,
-    remote_addr: SocketAddr,
-    remote_dns: String,
+    target: ServerTarget,
     mut handshake: Handshake,
 ) -> anyhow::Result<()> {
-    if remote_addr == SocketAddr::from(([127, 0, 0, 1], 25565)) {
+    if target.addr == SocketAddr::from(([127, 0, 0, 1], 25565)) {
         // Status request
         RawPacket::read_async(&mut stream).await?;
 
@@ -208,8 +205,9 @@ async fn process_status(
             .await?;
         return Ok(());
     }
-    handshake.server_address = remote_dns;
-    let mut remote_stream = connect(remote_addr).await?;
+    handshake.server_address = target.host;
+    handshake.server_port = target.port;
+    let mut remote_stream = connect(target.addr).await?;
 
     UncompressedPacket::from_packet(&handshake)?
         .write_async(&mut remote_stream)
