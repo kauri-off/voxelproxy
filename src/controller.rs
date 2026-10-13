@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::VecDeque, sync::Arc};
 
 use mc_protocol::packet::RawPacket;
 use tokio::{
@@ -13,7 +13,7 @@ use tokio::{
 use crate::{
     events::{EventSink, WhichClient},
     logger::Logger,
-    protocols::{ServerBoundEvent, Version, VersionProtocol},
+    protocols::{ClientBoundEvent, ServerBoundEvent, Version, VersionProtocol},
 };
 
 const IO_BUFFER_SIZE: usize = 64 * 1024;
@@ -111,8 +111,16 @@ impl PeerLink {
     }
 }
 
+/// Packets for a client that has not acked a phase switch yet, like a vanilla server would wait.
+#[derive(Default)]
+struct HeldPackets {
+    queue: VecDeque<(Arc<RawPacket>, bool)>,
+    bytes: usize,
+}
+
 pub struct Controller {
     active_client: ClientId,
+    held: [Option<HeldPackets>; 2],
     /// Queue to the Primary client; `None` once it was dropped for stalling.
     primary: Option<PeerLink>,
     /// Queue to the Secondary client; `None` once it was dropped for stalling.
@@ -139,6 +147,7 @@ impl Controller {
     ) -> Self {
         Self {
             active_client,
+            held: [None, None],
             primary: Some(primary),
             secondary: Some(secondary),
             remote_tx,
@@ -168,14 +177,16 @@ impl Controller {
                         match event {
                             ServerBoundEvent::SendToInactive(raw_packet) => {
                                 if self.both_active() {
-                                    self.deliver(
+                                    self.relay(
                                         self.active_client.opposite(),
                                         Arc::new(raw_packet),
+                                        false,
                                     )
                                     .await;
                                 }
                             }
                             ServerBoundEvent::SkipRelay => skip = true,
+                            ServerBoundEvent::PhaseAcked => self.release(client_id).await,
                         }
                     }
 
@@ -226,18 +237,52 @@ impl Controller {
                 }
 
                 ControllerEvent::ServerData(packet) => {
-                    if let Some(event) = self.version.handle_s2c(&packet, self.both_active()) {
-                        match event {}
-                    }
+                    let phase_switch = matches!(
+                        self.version.handle_s2c(&packet, self.both_active()),
+                        Some(ClientBoundEvent::PhaseSwitch)
+                    );
 
                     let packet = Arc::new(packet);
                     let inactive = self.active_client.opposite();
-                    self.deliver(self.active_client, packet.clone()).await;
-                    self.deliver(inactive, packet).await;
+                    self.relay(self.active_client, packet.clone(), phase_switch)
+                        .await;
+                    self.relay(inactive, packet, phase_switch).await;
                 }
 
                 // Ending here also tears down half-open clients that never sent a FIN.
                 ControllerEvent::ServerDisconnected => return,
+            }
+        }
+    }
+
+    /// Delivers a packet unless the client is still switching phase; the vanilla client
+    /// crashes on packets of a phase it has not switched its outbound protocol to yet.
+    async fn relay(&mut self, client_id: ClientId, packet: Arc<RawPacket>, phase_switch: bool) {
+        if let Some(held) = &mut self.held[client_id.index()] {
+            held.bytes += packet.data.len();
+            held.queue.push_back((packet, phase_switch));
+            if held.bytes > PEER_QUEUE_BYTES {
+                self.drop_stalled(client_id);
+            }
+            return;
+        }
+        self.deliver(client_id, packet).await;
+        if phase_switch && self.is_online(client_id) {
+            self.held[client_id.index()] = Some(HeldPackets::default());
+        }
+    }
+
+    /// Sends what was held for the client, up to and including the next phase switch.
+    async fn release(&mut self, client_id: ClientId) {
+        let Some(mut held) = self.held[client_id.index()].take() else {
+            return;
+        };
+        while let Some((packet, phase_switch)) = held.queue.pop_front() {
+            held.bytes -= packet.data.len();
+            self.deliver(client_id, packet).await;
+            if phase_switch {
+                self.held[client_id.index()] = Some(held);
+                return;
             }
         }
     }
@@ -256,15 +301,19 @@ impl Controller {
             return;
         }
         if let Err(TrySendError::Full) = link.try_send(packet) {
-            Logger::new(&self.events)
-                .warn("Неактивный клиент не успевает принимать данные и был отключён");
-            // Dropping the queue ends its writer task, which closes the socket's write half.
-            *self.link_mut(client_id) = None;
-            self.mark_offline(client_id);
+            self.drop_stalled(client_id);
         }
     }
 
+    fn drop_stalled(&mut self, client_id: ClientId) {
+        Logger::new(&self.events).warn("Клиент не успевает принимать данные и был отключён");
+        // Dropping the queue ends its writer task, which closes the socket's write half.
+        *self.link_mut(client_id) = None;
+        self.mark_offline(client_id);
+    }
+
     fn mark_offline(&mut self, client_id: ClientId) {
+        self.held[client_id.index()] = None;
         match client_id {
             ClientId::Primary => self.primary_active = false,
             ClientId::Secondary => self.secondary_active = false,
