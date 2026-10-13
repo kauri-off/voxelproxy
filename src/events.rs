@@ -23,6 +23,7 @@ pub enum AppEvent {
     NickName(String),
     ServerAddr(String),
     UpdateProgress { downloaded: u64, total: u64 },
+    UpdateVerifying { waited_secs: u64 },
 }
 
 /// Cloneable handle the backend uses to push events to the UI.

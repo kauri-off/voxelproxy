@@ -109,10 +109,14 @@ impl Backend {
     }
 
     /// Downloads the MSI and launches the installer; the caller should quit afterwards.
-    pub fn download_and_install_update(&self, url: String) -> JoinHandle<Result<(), String>> {
+    pub fn download_and_install_update(
+        &self,
+        url: String,
+        tag: String,
+    ) -> JoinHandle<Result<(), String>> {
         let events = self.events.clone();
         self.spawn(async move {
-            crate::updater::download_and_install(url, events)
+            crate::updater::download_and_install(url, tag, events)
                 .await
                 .map_err(|e| e.to_string())
         })

@@ -525,6 +525,16 @@ impl AppView {
                         .value(progress.unwrap_or(0.0)),
                 )
                 .into_any_element(),
+            UpdateState::Verifying { waited_secs, .. } => widgets::card(cx)
+                .child(
+                    h_flex()
+                        .justify_between()
+                        .text_sm()
+                        .child("Ждём, пока антивирус проверит установщик")
+                        .child(format!("{waited_secs} с")),
+                )
+                .child(Progress::new("update-progress").loading(true))
+                .into_any_element(),
             UpdateState::DownloadFailed { error, .. } => widgets::card(cx)
                 .border_color(theme.danger)
                 .child(
@@ -534,7 +544,7 @@ impl AppView {
                         .child(
                             v_flex()
                                 .gap_0p5()
-                                .child(div().font_semibold().child("Не удалось скачать обновление"))
+                                .child(div().font_semibold().child("Не удалось установить обновление"))
                                 .child(widgets::hint(error.clone(), cx)),
                         )
                         .child(
