@@ -7,6 +7,7 @@ pub mod v1_21_8;
 use std::io;
 
 use enum_dispatch::enum_dispatch;
+use flate2::{Decompress, FlushDecompress};
 use mc_protocol::{packet::RawPacket, ser::Deserialize, varint::VarInt};
 
 use crate::controller::ClientId;
@@ -71,14 +72,29 @@ impl Version {
     }
 }
 
-/// Reads the packet id without inflating the whole frame.
-pub fn packet_id(packet: &RawPacket, threshold: Option<i32>) -> io::Result<i32> {
-    let mut data = packet.data.as_slice();
-    if threshold.is_some_and(|t| t >= 0) && read_varint(&mut data)? != 0 {
-        let mut inflated = flate2::bufread::ZlibDecoder::new(data);
-        return read_varint(&mut inflated);
+/// Reads packet ids without inflating the whole frame, reusing one inflate state.
+pub struct PacketIdReader(Decompress);
+
+impl Default for PacketIdReader {
+    fn default() -> Self {
+        Self(Decompress::new(true))
     }
-    read_varint(&mut data)
+}
+
+impl PacketIdReader {
+    pub fn read(&mut self, packet: &RawPacket, threshold: Option<i32>) -> io::Result<i32> {
+        let mut data = packet.data.as_slice();
+        if threshold.is_some_and(|t| t >= 0) && read_varint(&mut data)? != 0 {
+            self.0.reset(true);
+            let mut head = [0u8; 5];
+            // Finish on a fresh stream inflates straight into `head`, skipping the 32 KiB window.
+            self.0
+                .decompress(data, &mut head, FlushDecompress::Finish)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            return read_varint(&mut &head[..self.0.total_out() as usize]);
+        }
+        read_varint(&mut data)
+    }
 }
 
 fn read_varint<R: io::Read>(reader: &mut R) -> io::Result<i32> {
@@ -100,10 +116,29 @@ mod tests {
     #[test]
     fn packet_id_matches_full_decode() {
         let packet = UncompressedPacket::new(0x2c, vec![7; 4096]);
+        let mut ids = PacketIdReader::default();
         for threshold in [None, Some(-1), Some(0), Some(256), Some(1_000_000)] {
             let raw = packet.to_raw_packet_compressed(threshold).unwrap();
-            assert_eq!(packet_id(&raw, threshold).unwrap(), 0x2c, "{threshold:?}");
+            assert_eq!(ids.read(&raw, threshold).unwrap(), 0x2c, "{threshold:?}");
             assert_eq!(raw.uncompress(threshold).unwrap().packet_id, 0x2c);
+        }
+    }
+
+    #[test]
+    fn packet_id_reader_reuses_state() {
+        let mut ids = PacketIdReader::default();
+        let threshold = Some(64);
+        for (id, len) in [
+            (0x27, 100_000),
+            (0x0, 0),
+            (300, 200),
+            (0x2c, 64),
+            (i32::MAX, 100),
+        ] {
+            let raw = UncompressedPacket::new(id, vec![id as u8; len])
+                .to_raw_packet_compressed(threshold)
+                .unwrap();
+            assert_eq!(ids.read(&raw, threshold).unwrap(), id, "{id} {len}");
         }
     }
 }

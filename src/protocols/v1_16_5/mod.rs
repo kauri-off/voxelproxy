@@ -5,7 +5,7 @@ use mc_protocol::{
     varint::VarInt,
 };
 
-use super::{VersionProtocol, decode, packet_id};
+use super::{PacketIdReader, VersionProtocol, decode};
 use crate::{
     config,
     controller::ClientId,
@@ -19,6 +19,7 @@ pub struct VersionData {
     pub position: s2c::game::Position,
     pub pings: Vec<PingSync>,
     pub threshold: Option<i32>,
+    pub ids: PacketIdReader,
 }
 
 impl Default for VersionData {
@@ -43,6 +44,7 @@ impl VersionData {
             },
             pings: vec![],
             threshold: None,
+            ids: PacketIdReader::default(),
         }
     }
 }
@@ -114,7 +116,7 @@ impl VersionData {
         packet: &RawPacket,
         both_active: bool,
     ) -> anyhow::Result<Option<ClientBoundEvent>> {
-        let id = packet_id(packet, self.threshold)?;
+        let id = self.ids.read(packet, self.threshold)?;
 
         if id == s2c::game::ContainerAck::PACKET_ID && both_active {
             let ping: s2c::game::ContainerAck = decode(packet, self.threshold)?;
@@ -131,7 +133,7 @@ impl VersionData {
         is_active: bool,
         both_active: bool,
     ) -> anyhow::Result<Option<ServerBoundEvent>> {
-        let id = packet_id(packet, self.threshold)?;
+        let id = self.ids.read(packet, self.threshold)?;
 
         match id {
             c2s::game::AcceptTeleportation::PACKET_ID => {
