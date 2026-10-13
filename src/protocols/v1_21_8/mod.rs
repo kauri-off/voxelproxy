@@ -143,6 +143,7 @@ impl VersionData {
 
         if id == s2c::configuration::FinishConfiguration::PACKET_ID {
             self.state_in = State::Game;
+            return Ok(Some(ClientBoundEvent::PhaseSwitch));
         }
         Ok(None)
     }
@@ -156,6 +157,7 @@ impl VersionData {
         match id {
             s2c::game::StartConfiguration::PACKET_ID => {
                 self.state_in = State::Configuration;
+                return Ok(Some(ClientBoundEvent::PhaseSwitch));
             }
             s2c::game::Ping::PACKET_ID if both_active => {
                 let ping: s2c::game::Ping = decode(packet, self.threshold)?;
@@ -191,6 +193,7 @@ impl VersionData {
 
         if id == c2s::configuration::FinishConfiguration::PACKET_ID {
             *self.state_out_mut(client_id) = State::Game;
+            return Ok(Some(ServerBoundEvent::PhaseAcked));
         }
 
         Ok(None)
@@ -208,6 +211,7 @@ impl VersionData {
         match id {
             c2s::game::ConfigurationAcknowledged::PACKET_ID => {
                 *self.state_out_mut(client_id) = State::Configuration;
+                return Ok(Some(ServerBoundEvent::PhaseAcked));
             }
             c2s::game::AcceptTeleportation::PACKET_ID => {
                 if !both_active {

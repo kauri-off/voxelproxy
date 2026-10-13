@@ -30,9 +30,14 @@ pub trait VersionProtocol {
 pub enum ServerBoundEvent {
     SendToInactive(RawPacket),
     SkipRelay,
+    /// The client acked a protocol phase switch and can take packets of the new phase.
+    PhaseAcked,
 }
 
-pub enum ClientBoundEvent {}
+pub enum ClientBoundEvent {
+    /// Starts a new protocol phase; a client must ack it before getting further packets.
+    PhaseSwitch,
+}
 
 pub enum ClientDisconnectEvent {
     SendToServer(Vec<RawPacket>),
@@ -136,9 +141,13 @@ macro_rules! config_phase_tests {
             data.handle_c2s(&packet, client, client == active, both_active)
         }
 
-        fn s2c<T: PacketId + Serialize>(data: &mut VersionData, packet: &T, both_active: bool) {
+        fn s2c<T: PacketId + Serialize>(
+            data: &mut VersionData,
+            packet: &T,
+            both_active: bool,
+        ) -> Option<ClientBoundEvent> {
             let packet = raw(data, packet);
-            data.handle_s2c(&packet, both_active);
+            data.handle_s2c(&packet, both_active)
         }
 
         fn mirrored(
@@ -151,7 +160,7 @@ macro_rules! config_phase_tests {
                     assert_eq!(id, s2c::game::Position::PACKET_ID);
                     Some(super::super::decode(&packet, threshold).unwrap())
                 }
-                ServerBoundEvent::SkipRelay => panic!("movement must still be relayed"),
+                _ => panic!("expected a mirrored position"),
             }
         }
 
@@ -187,6 +196,42 @@ macro_rules! config_phase_tests {
             }
             s2c(&mut data, &s2c::configuration::FinishConfiguration {}, true);
             data
+        }
+
+        #[test]
+        fn phase_switches_and_acks_are_reported() {
+            let mut data = VersionData::new();
+            login(&mut data, P);
+            assert!(matches!(
+                c2s(
+                    &mut data,
+                    &c2s::configuration::FinishConfiguration {},
+                    P,
+                    P,
+                    true
+                ),
+                Some(ServerBoundEvent::PhaseAcked)
+            ));
+            assert!(matches!(
+                s2c(&mut data, &s2c::configuration::FinishConfiguration {}, true),
+                Some(ClientBoundEvent::PhaseSwitch)
+            ));
+            assert!(s2c(&mut data, &s2c::game::Ping { id: 1 }, true).is_none());
+            assert!(matches!(
+                s2c(&mut data, &s2c::game::StartConfiguration {}, true),
+                Some(ClientBoundEvent::PhaseSwitch)
+            ));
+            assert!(matches!(
+                c2s(
+                    &mut data,
+                    &c2s::game::ConfigurationAcknowledged {},
+                    P,
+                    P,
+                    true
+                ),
+                Some(ServerBoundEvent::PhaseAcked)
+            ));
+            assert!(c2s(&mut data, &c2s::login::LoginAcknowledged {}, S, P, true).is_none());
         }
 
         #[test]

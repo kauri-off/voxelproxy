@@ -487,6 +487,115 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn next_phase_waits_for_each_clients_ack() {
+        use crate::protocols::v1_21_4::packets::{c2s, s2c};
+
+        let (primary, secondary, mut remote, session, _events, _rx) = sessions_for(769).await;
+        let session = tokio::spawn(session);
+        let threshold = Some(256);
+        let (primary_read, mut primary) = primary.into_split();
+        let (secondary_read, mut secondary) = secondary.into_split();
+        let mut primary_read = tokio::io::BufReader::new(primary_read);
+        let mut secondary_read = tokio::io::BufReader::new(secondary_read);
+        let id = |p: &RawPacket| p.uncompress(threshold).unwrap().packet_id;
+        let quiet = Duration::from_millis(300);
+
+        frame(SetCompression::PACKET_ID, vec![0x80, 0x02], None)
+            .write_async(&mut remote)
+            .await
+            .unwrap();
+        frame(LoginSuccess::PACKET_ID, vec![], threshold)
+            .write_async(&mut remote)
+            .await
+            .unwrap();
+        for reader in [&mut primary_read, &mut secondary_read] {
+            for _ in 0..2 {
+                RawPacket::read_async(reader).await.unwrap();
+            }
+        }
+        encode(&c2s::login::LoginAcknowledged {}, threshold)
+            .write_async(&mut primary)
+            .await
+            .unwrap();
+        RawPacket::read_async(&mut remote).await.unwrap();
+
+        // Server finishes configuration; play packets follow the primary's ack.
+        encode(&s2c::configuration::FinishConfiguration {}, threshold)
+            .write_async(&mut remote)
+            .await
+            .unwrap();
+        let got = RawPacket::read_async(&mut primary_read).await.unwrap();
+        assert_eq!(id(&got), s2c::configuration::FinishConfiguration::PACKET_ID);
+        encode(&c2s::configuration::FinishConfiguration {}, threshold)
+            .write_async(&mut primary)
+            .await
+            .unwrap();
+        RawPacket::read_async(&mut remote).await.unwrap();
+        let chunk_batch_finished = frame(0x0c, vec![1], threshold);
+        chunk_batch_finished.write_async(&mut remote).await.unwrap();
+        let got = RawPacket::read_async(&mut primary_read).await.unwrap();
+        assert_eq!(got.data, chunk_batch_finished.data);
+
+        let got = RawPacket::read_async(&mut secondary_read).await.unwrap();
+        assert_eq!(id(&got), s2c::configuration::FinishConfiguration::PACKET_ID);
+        assert!(
+            tokio::time::timeout(quiet, RawPacket::read_async(&mut secondary_read))
+                .await
+                .is_err(),
+            "play packet reached the secondary before it finished configuration"
+        );
+        encode(&c2s::login::LoginAcknowledged {}, threshold)
+            .write_async(&mut secondary)
+            .await
+            .unwrap();
+        encode(&c2s::configuration::FinishConfiguration {}, threshold)
+            .write_async(&mut secondary)
+            .await
+            .unwrap();
+        let got = RawPacket::read_async(&mut secondary_read).await.unwrap();
+        assert_eq!(got.data, chunk_batch_finished.data);
+
+        // Reconfiguration: configuration packets wait for ConfigurationAcknowledged.
+        encode(&s2c::game::StartConfiguration {}, threshold)
+            .write_async(&mut remote)
+            .await
+            .unwrap();
+        let got = RawPacket::read_async(&mut primary_read).await.unwrap();
+        assert_eq!(id(&got), s2c::game::StartConfiguration::PACKET_ID);
+        encode(&c2s::game::ConfigurationAcknowledged {}, threshold)
+            .write_async(&mut primary)
+            .await
+            .unwrap();
+        RawPacket::read_async(&mut remote).await.unwrap();
+        let registry_data = frame(0x07, vec![2; 500], threshold);
+        registry_data.write_async(&mut remote).await.unwrap();
+        let got = RawPacket::read_async(&mut primary_read).await.unwrap();
+        assert_eq!(got.data, registry_data.data);
+
+        let got = RawPacket::read_async(&mut secondary_read).await.unwrap();
+        assert_eq!(id(&got), s2c::game::StartConfiguration::PACKET_ID);
+        assert!(
+            tokio::time::timeout(quiet, RawPacket::read_async(&mut secondary_read))
+                .await
+                .is_err(),
+            "configuration packet reached the secondary before it acked"
+        );
+        encode(&c2s::game::ConfigurationAcknowledged {}, threshold)
+            .write_async(&mut secondary)
+            .await
+            .unwrap();
+        let got = RawPacket::read_async(&mut secondary_read).await.unwrap();
+        assert_eq!(got.data, registry_data.data);
+
+        drop(remote);
+        tokio::time::timeout(Duration::from_secs(5), session)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
     async fn rotation_reaches_secondary_after_late_login_ack() {
         use crate::protocols::v1_21_4::packets::{c2s, s2c};
 
