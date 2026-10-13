@@ -143,12 +143,6 @@ impl Controller {
         }
     }
 
-    /// Main event loop. Runs until the channel closes (both I/O tasks have exited).
-    ///
-    /// Each iteration handles one of three event types:
-    /// - `ClientData`         — position sync, ping tracking, relay to server
-    /// - `ClientDisconnected` — update state, optionally switch active client & replay sync packets
-    /// - `ServerData`         — track new pings, broadcast to active clients
     pub async fn run(mut self) {
         let log = Logger::new(&self.events);
         while let Some(event) = self.event_rx.recv().await {
@@ -235,12 +229,7 @@ impl Controller {
                     self.deliver(inactive, packet).await;
                 }
 
-                // The upstream server is the session's lifeline: without it the proxy has
-                // nothing to relay, so end the session. `run_proxy_session` then aborts the
-                // client I/O tasks, closing their sockets, and `ClientStatusOfflineGuard`
-                // marks both clients offline. This is what tears down a session whose active
-                // client went half-open (no FIN) and therefore never produced a
-                // `ClientDisconnected` of its own.
+                // Ending here also tears down half-open clients that never sent a FIN.
                 ControllerEvent::ServerDisconnected => return,
             }
         }
@@ -318,11 +307,6 @@ async fn write_loop(
     Ok(())
 }
 
-/// Drives a single client connection using two concurrent tasks:
-/// - **Read task**: reads packets from the TCP socket and sends them to the Controller
-///   as `Event::ClientData`; sends `Event::ClientDisconnected` on any read error.
-/// - **Write task**: receives packets from the Controller via `packet_rx` and writes
-///   them to the TCP socket; exits silently on write error.
 pub async fn run_client(
     read_half: OwnedReadHalf,
     write_half: OwnedWriteHalf,
@@ -358,11 +342,6 @@ pub async fn run_client(
     );
 }
 
-/// Drives the upstream server connection using two concurrent tasks:
-/// - **Read task**: reads packets from the server and sends them to the Controller
-///   as `Event::ServerData`; exits on read error.
-/// - **Write task**: receives packets from the Controller via `packet_rx` and writes
-///   them to the server socket; exits silently on write error.
 pub async fn run_server(
     read_half: OwnedReadHalf,
     write_half: OwnedWriteHalf,

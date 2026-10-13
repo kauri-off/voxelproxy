@@ -49,17 +49,7 @@ impl Config {
     }
 }
 
-/// Lazily-initialised, process-wide gRPC channel to the telemetry worker.
-///
-/// `connect_lazy` never blocks: the TCP/HTTP2 connection is established on the
-/// first RPC and transparently re-established on failure. Returns `None` when
-/// telemetry is disabled (debug builds / empty URL) or the URL is invalid, so
-/// every caller becomes a cheap no-op in those cases.
-///
-/// TLS is configured with the bundled webpki roots, which is what lets the
-/// `https://` endpoint connect at all — without it tonic refuses the https
-/// scheme and every RPC fails silently. Plaintext `http://` URLs ignore the
-/// TLS config and connect in cleartext (useful for local dev).
+/// Lazy telemetry channel; `None` when disabled. webpki roots are required for `https://`.
 fn channel() -> Option<Channel> {
     CHANNEL
         .get_or_init(|| {

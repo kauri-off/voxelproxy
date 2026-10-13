@@ -235,13 +235,7 @@ async fn process_status(
     Ok(())
 }
 
-/// Runs the post-handshake login sequence and then the proxy Controller.
-///
-/// # Preconditions
-/// - The Minecraft `Handshake` + `LoginStart` have been **read** from both
-///   `primary` and `secondary` streams.
-/// - The Minecraft `Handshake` + `LoginStart` have been **sent** to `remote`.
-/// - `version` has been constructed from the shared protocol number.
+/// Finishes login and runs the Controller; expects `Handshake` + `LoginStart` already exchanged.
 pub async fn run_proxy_session(
     mut primary: TcpStream,
     mut secondary: TcpStream,

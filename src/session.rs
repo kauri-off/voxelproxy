@@ -52,26 +52,13 @@ fn is_loopback_host(host: &str) -> bool {
     }
 }
 
-/// Resolves when `stream` is closed by the peer, errors, or (unexpectedly)
-/// sends more bytes. Assumes the client's `LoginStart` has already been read,
-/// so a healthy client keeps the socket unreadable until it disconnects; used to
-/// notice a client that vanished while we wait for its partner to connect. `peek`
-/// consumes nothing, so this is cancellation-safe inside `select!`.
+/// Resolves when an idle post-login client disconnects; `peek` keeps it cancellation-safe.
 async fn wait_for_disconnect(stream: &mut TcpStream) {
     let mut probe = [0u8; 1];
     let _ = stream.peek(&mut probe).await;
 }
 
-/// Emits `online: false` for both clients when dropped, i.e. whenever a session
-/// ends — early return (version mismatch, unsupported, resolve/connect failure),
-/// an `?` error during login, a login-phase abort inside `run_proxy_session`, or
-/// a normal disconnect. The `online: true` events are emitted at pairing time
-/// (`run_auto_mode`) or as clients connect (`run_manual_mode`), so without
-/// this guard any exit before the controller loop starts would leave the UI
-/// desynced, still showing both clients connected. This matters most in auto
-/// mode, where a single failed pairing does not end the surrounding accept loop
-/// and so never emits `AppEvent::SessionEnded`. Re-emitting on a normal disconnect is
-/// idempotent (the controller already marked them offline).
+/// Marks both clients offline on any session exit, including early errors.
 struct ClientStatusOfflineGuard {
     events: EventSink,
 }
@@ -109,10 +96,7 @@ pub async fn run_manual_mode(server_addr: String, events: EventSink) -> anyhow::
         remote_addr,
     ));
 
-    // Acquire a live primary, then wait for the secondary while watching the
-    // primary for an early disconnect. If the primary drops before the secondary
-    // arrives, mark it offline and re-acquire a fresh primary instead of carrying
-    // a dead stream into the session.
+    // Re-acquire the primary if it drops while waiting for the secondary.
     let (
         mut primary_stream,
         primary_protocol,
