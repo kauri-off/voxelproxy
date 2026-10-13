@@ -1,7 +1,5 @@
 use std::fmt;
 use std::net::SocketAddr;
-#[cfg(target_os = "windows")]
-use std::net::{IpAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -24,38 +22,6 @@ use crate::{
     proxy::{BIND_PORT, HANDSHAKE_CHANNEL_CAPACITY, LoginClient, connect},
     resolver::{resolve_host_port, resolve_server},
 };
-
-/// Returns true if host resolves to the local machine (loopback).
-#[cfg(target_os = "windows")]
-fn is_loopback_host(host: &str) -> bool {
-    let h = host
-        .split('\0')
-        .next()
-        .unwrap_or(host)
-        .trim()
-        .trim_start_matches('[')
-        .trim_end_matches(']');
-
-    if h.is_empty() {
-        return false;
-    }
-
-    // Literal IP: decide locally, no resolution.
-    if let Ok(ip) = h.parse::<IpAddr>() {
-        return ip.is_loopback();
-    }
-
-    // Hostname: ask the system resolver (it honours the hosts file), so anything
-    // mapped to 127.0.0.1 — kubernetes.docker.internal or any custom entry — is
-    // caught without a hardcoded list.
-    match (h, 0u16).to_socket_addrs() {
-        Ok(addrs) => {
-            let addrs: Vec<_> = addrs.collect();
-            !addrs.is_empty() && addrs.iter().all(|a| a.ip().is_loopback())
-        }
-        Err(_) => false,
-    }
-}
 
 /// Resolves when an idle post-login client disconnects; `peek` keeps it cancellation-safe.
 async fn wait_for_disconnect(stream: &mut TcpStream) {
@@ -386,7 +352,7 @@ pub async fn run_auto_mode(
             continue;
         }
         #[cfg(target_os = "windows")]
-        if pending.is_none() && is_loopback_host(&client.server_host) {
+        if pending.is_none() && client.is_loopback {
             log.warn("Клиент подключился к 127.0.0.1 раньше второго клиента — отклонён");
             let mut stream = client.stream;
             session_set.spawn(async move {

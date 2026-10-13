@@ -1,4 +1,8 @@
-use std::{future::Future, net::SocketAddr, time::Duration};
+use std::{
+    future::Future,
+    net::{IpAddr, SocketAddr},
+    time::Duration,
+};
 
 use anyhow::{Context, anyhow};
 use mc_protocol::packet::{RawPacket, UncompressedPacket};
@@ -53,6 +57,8 @@ pub struct LoginClient {
     pub server_host: String,
     pub server_port: u16,
     pub login_start: RawPacket,
+    /// Whether `server_host` points at this machine; only computed in auto mode on Windows.
+    pub is_loopback: bool,
 }
 
 /// Disables Nagle: the proxy relays many small packets and must not delay them.
@@ -120,6 +126,34 @@ pub async fn listen_and_dispatch_auto(listener: TcpListener, tx: Sender<LoginCli
     .await
 }
 
+fn strip_host(host: &str) -> &str {
+    host.split('\0')
+        .next()
+        .unwrap_or(host)
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+}
+
+/// Returns true if host resolves to the local machine (loopback).
+async fn is_loopback_host(host: &str) -> bool {
+    let h = strip_host(host);
+    if h.is_empty() {
+        return false;
+    }
+    if let Ok(ip) = h.parse::<IpAddr>() {
+        return ip.is_loopback();
+    }
+    // The system resolver honours the hosts file, so custom 127.0.0.1 entries are caught.
+    match timeout(HANDSHAKE_TIMEOUT, tokio::net::lookup_host((h, 0u16))).await {
+        Ok(Ok(addrs)) => {
+            let addrs: Vec<_> = addrs.collect();
+            !addrs.is_empty() && addrs.iter().all(|a| a.ip().is_loopback())
+        }
+        _ => false,
+    }
+}
+
 async fn handle_connection(
     mut stream: TcpStream,
     tx: Sender<LoginClient>,
@@ -153,12 +187,16 @@ async fn handle_connection(
             // Read here rather than in the session loop, so a client that stalls
             // after its Handshake cannot block pairing of everyone else.
             let login_start = read_with_timeout(&mut stream, HANDSHAKE_TIMEOUT).await?;
+            let is_loopback = cfg!(target_os = "windows")
+                && status_target.is_none()
+                && is_loopback_host(&handshake.server_address).await;
             tx.send(LoginClient {
                 protocol_version: handshake.protocol_version.0,
                 server_host: handshake.server_address,
                 server_port: handshake.server_port,
                 login_start,
                 stream,
+                is_loopback,
             })
             .await
             .map_err(|_| anyhow!("dispatcher closed"))?;
@@ -392,6 +430,18 @@ mod tests {
 
     use super::*;
     use crate::events::AppEvent;
+
+    #[tokio::test]
+    async fn loopback_host_literals() {
+        assert!(is_loopback_host("127.0.0.1").await);
+        assert!(is_loopback_host(" 127.0.0.5 ").await);
+        assert!(is_loopback_host("[::1]").await);
+        assert!(is_loopback_host("127.0.0.1\0FML3\0").await);
+        assert!(!is_loopback_host("10.0.0.1").await);
+        assert!(!is_loopback_host("[2001:db8::1]").await);
+        assert!(!is_loopback_host("").await);
+        assert!(!is_loopback_host("\0FML\0").await);
+    }
 
     async fn socket_pair() -> (TcpStream, TcpStream) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
