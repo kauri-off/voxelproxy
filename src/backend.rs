@@ -1,7 +1,9 @@
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use futures::FutureExt;
 use futures::future::{AbortHandle, abortable};
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
@@ -88,8 +90,10 @@ impl Backend {
                 let _ = prev.task.await;
             }
             events.emit(AppEvent::SessionStarted);
-            if let Ok(Err(e)) = fut.await {
-                Logger::new(&events).error(e.to_string());
+            match AssertUnwindSafe(fut).catch_unwind().await {
+                Ok(Ok(Err(e))) => Logger::new(&events).error(e.to_string()),
+                Err(_) => Logger::new(&events).error("Сессия аварийно завершилась"),
+                _ => {}
             }
             events.emit(AppEvent::SessionEnded);
         });
@@ -320,5 +324,25 @@ mod tests {
             }
             expected_started = !expected_started;
         }
+    }
+
+    #[test]
+    fn panicking_session_still_ends() {
+        let (events, mut rx) = EventSink::channel();
+        let backend = Backend::new(events);
+        backend.start_session(async { panic!("boom") });
+
+        assert!(matches!(
+            block_on(rx.next()),
+            Some(AppEvent::SessionStarted)
+        ));
+        assert!(matches!(
+            block_on(rx.next()),
+            Some(AppEvent::Log {
+                level: crate::events::LogLevel::Error,
+                ..
+            })
+        ));
+        assert!(matches!(block_on(rx.next()), Some(AppEvent::SessionEnded)));
     }
 }
