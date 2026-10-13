@@ -11,7 +11,7 @@ use tokio::{
 };
 
 use crate::{
-    events::{EventSink, WhichClient},
+    events::{ClientId, EventSink},
     logger::Logger,
     protocols::{ClientBoundEvent, ServerBoundEvent, Version, VersionProtocol},
 };
@@ -19,35 +19,6 @@ use crate::{
 const IO_BUFFER_SIZE: usize = 64 * 1024;
 /// Bytes a peer may have queued but not yet written before it is considered stalled.
 const PEER_QUEUE_BYTES: usize = 64 * 1024 * 1024;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClientId {
-    Primary,
-    Secondary,
-}
-
-impl ClientId {
-    pub fn opposite(&self) -> ClientId {
-        match self {
-            ClientId::Primary => ClientId::Secondary,
-            ClientId::Secondary => ClientId::Primary,
-        }
-    }
-
-    pub fn index(self) -> usize {
-        match self {
-            ClientId::Primary => 0,
-            ClientId::Secondary => 1,
-        }
-    }
-
-    fn which(self) -> WhichClient {
-        match self {
-            ClientId::Primary => WhichClient::Primary,
-            ClientId::Secondary => WhichClient::Secondary,
-        }
-    }
-}
 
 #[derive(Debug)]
 pub enum ControllerEvent {
@@ -121,16 +92,12 @@ struct HeldPackets {
 pub struct Controller {
     active_client: ClientId,
     held: [Option<HeldPackets>; 2],
-    /// Queue to the Primary client; `None` once it was dropped for stalling.
-    primary: Option<PeerLink>,
-    /// Queue to the Secondary client; `None` once it was dropped for stalling.
-    secondary: Option<PeerLink>,
+    /// Queues to the clients, indexed by `ClientId`; `None` once a client went offline.
+    peers: [Option<PeerLink>; 2],
     /// Channel for sending packets to the upstream server.
     remote_tx: Sender<RawPacket>,
     /// Receives events (client data, disconnections, server data) from I/O tasks.
     event_rx: Receiver<ControllerEvent>,
-    primary_active: bool,
-    secondary_active: bool,
     version: Version,
     events: EventSink,
 }
@@ -148,12 +115,9 @@ impl Controller {
         Self {
             active_client,
             held: [None, None],
-            primary: Some(primary),
-            secondary: Some(secondary),
+            peers: [Some(primary), Some(secondary)],
             remote_tx,
             event_rx,
-            primary_active: true,
-            secondary_active: true,
             version,
             events,
         }
@@ -205,7 +169,7 @@ impl Controller {
                 ControllerEvent::ClientDisconnected(client_id) => {
                     self.mark_offline(client_id);
 
-                    if !(self.primary_active || self.secondary_active) {
+                    if self.peers.iter().all(Option::is_none) {
                         return;
                     }
 
@@ -267,7 +231,7 @@ impl Controller {
             return;
         }
         self.deliver(client_id, packet).await;
-        if phase_switch && self.is_online(client_id) {
+        if phase_switch && self.peers[client_id.index()].is_some() {
             self.held[client_id.index()] = Some(HeldPackets::default());
         }
     }
@@ -290,10 +254,7 @@ impl Controller {
     /// The active client gets backpressure; an inactive one that falls too far behind
     /// is dropped instead, so it can never stall the session.
     async fn deliver(&mut self, client_id: ClientId, packet: Arc<RawPacket>) {
-        if !self.is_online(client_id) {
-            return;
-        }
-        let Some(link) = self.link(client_id) else {
+        let Some(link) = &self.peers[client_id.index()] else {
             return;
         };
         if client_id == self.active_client {
@@ -307,60 +268,98 @@ impl Controller {
 
     fn drop_stalled(&mut self, client_id: ClientId) {
         Logger::new(&self.events).warn("Клиент не успевает принимать данные и был отключён");
-        // Dropping the queue ends its writer task, which closes the socket's write half.
-        *self.link_mut(client_id) = None;
         self.mark_offline(client_id);
     }
 
+    /// Dropping the queue ends its writer task, which closes the socket's write half.
     fn mark_offline(&mut self, client_id: ClientId) {
         self.held[client_id.index()] = None;
-        match client_id {
-            ClientId::Primary => self.primary_active = false,
-            ClientId::Secondary => self.secondary_active = false,
-        }
-        self.events.client_status(client_id.which(), false);
-    }
-
-    fn is_online(&self, client_id: ClientId) -> bool {
-        match client_id {
-            ClientId::Primary => self.primary_active,
-            ClientId::Secondary => self.secondary_active,
-        }
-    }
-
-    fn link(&self, client_id: ClientId) -> Option<&PeerLink> {
-        match client_id {
-            ClientId::Primary => self.primary.as_ref(),
-            ClientId::Secondary => self.secondary.as_ref(),
-        }
-    }
-
-    fn link_mut(&mut self, client_id: ClientId) -> &mut Option<PeerLink> {
-        match client_id {
-            ClientId::Primary => &mut self.primary,
-            ClientId::Secondary => &mut self.secondary,
-        }
+        self.peers[client_id.index()] = None;
+        self.events.client_status(client_id, false);
     }
 
     fn both_active(&self) -> bool {
-        self.primary_active && self.secondary_active
+        self.peers.iter().all(Option::is_some)
+    }
+}
+
+trait PacketQueue {
+    type Item;
+
+    async fn recv(&mut self) -> Option<Self::Item>;
+    fn try_recv(&mut self) -> Option<Self::Item>;
+    fn packet(item: &Self::Item) -> &RawPacket;
+}
+
+impl PacketQueue for UnboundedReceiver<Outgoing> {
+    type Item = Outgoing;
+
+    async fn recv(&mut self) -> Option<Outgoing> {
+        UnboundedReceiver::recv(self).await
+    }
+
+    fn try_recv(&mut self) -> Option<Outgoing> {
+        UnboundedReceiver::try_recv(self).ok()
+    }
+
+    fn packet((packet, _permit): &Outgoing) -> &RawPacket {
+        packet
+    }
+}
+
+impl PacketQueue for Receiver<RawPacket> {
+    type Item = RawPacket;
+
+    async fn recv(&mut self) -> Option<RawPacket> {
+        Receiver::recv(self).await
+    }
+
+    fn try_recv(&mut self) -> Option<RawPacket> {
+        Receiver::try_recv(self).ok()
+    }
+
+    fn packet(packet: &RawPacket) -> &RawPacket {
+        packet
     }
 }
 
 /// Writes queued packets through one buffer, flushing only once the queue is drained.
-async fn write_loop(
+async fn write_loop<Q: PacketQueue>(
     write_half: OwnedWriteHalf,
-    mut packet_rx: UnboundedReceiver<Outgoing>,
+    mut queue: Q,
 ) -> anyhow::Result<()> {
     let mut writer = BufWriter::with_capacity(IO_BUFFER_SIZE, write_half);
-    while let Some((packet, _permit)) = packet_rx.recv().await {
-        packet.write_async(&mut writer).await?;
-        while let Ok((packet, _permit)) = packet_rx.try_recv() {
-            packet.write_async(&mut writer).await?;
+    while let Some(item) = queue.recv().await {
+        Q::packet(&item).write_async(&mut writer).await?;
+        while let Some(item) = queue.try_recv() {
+            Q::packet(&item).write_async(&mut writer).await?;
         }
         writer.flush().await?;
     }
     Ok(())
+}
+
+/// Forwards packets as events until the stream fails, then reports `eof_event`.
+async fn read_loop(
+    read_half: OwnedReadHalf,
+    event_tx: Sender<ControllerEvent>,
+    on_packet: impl Fn(RawPacket) -> ControllerEvent,
+    eof_event: ControllerEvent,
+) {
+    let mut reader = BufReader::with_capacity(IO_BUFFER_SIZE, read_half);
+    loop {
+        match RawPacket::read_async(&mut reader).await {
+            Ok(packet) => {
+                if event_tx.send(on_packet(packet)).await.is_err() {
+                    return;
+                }
+            }
+            Err(_) => {
+                event_tx.send(eof_event).await.ok();
+                return;
+            }
+        }
+    }
 }
 
 pub async fn run_client(
@@ -370,30 +369,13 @@ pub async fn run_client(
     event_tx: Sender<ControllerEvent>,
     packet_rx: UnboundedReceiver<Outgoing>,
 ) {
-    let mut client_read = BufReader::with_capacity(IO_BUFFER_SIZE, read_half);
     let _ = tokio::join!(
-        async move {
-            loop {
-                match RawPacket::read_async(&mut client_read).await {
-                    Ok(packet) => {
-                        if event_tx
-                            .send(ControllerEvent::ClientData(client_id, packet))
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                    Err(_) => {
-                        event_tx
-                            .send(ControllerEvent::ClientDisconnected(client_id))
-                            .await
-                            .ok();
-                        break;
-                    }
-                }
-            }
-        },
+        read_loop(
+            read_half,
+            event_tx,
+            |packet| ControllerEvent::ClientData(client_id, packet),
+            ControllerEvent::ClientDisconnected(client_id),
+        ),
         write_loop(write_half, packet_rx)
     );
 }
@@ -402,42 +384,15 @@ pub async fn run_server(
     read_half: OwnedReadHalf,
     write_half: OwnedWriteHalf,
     event_tx: Sender<ControllerEvent>,
-    mut packet_rx: Receiver<RawPacket>,
+    packet_rx: Receiver<RawPacket>,
 ) {
-    let mut server_read = BufReader::with_capacity(IO_BUFFER_SIZE, read_half);
     let _ = tokio::join!(
-        async move {
-            loop {
-                match RawPacket::read_async(&mut server_read).await {
-                    Ok(packet) => {
-                        if event_tx
-                            .send(ControllerEvent::ServerData(packet))
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                    Err(_) => {
-                        event_tx
-                            .send(ControllerEvent::ServerDisconnected)
-                            .await
-                            .ok();
-                        break;
-                    }
-                }
-            }
-        },
-        async move {
-            let mut writer = BufWriter::with_capacity(IO_BUFFER_SIZE, write_half);
-            while let Some(packet) = packet_rx.recv().await {
-                packet.write_async(&mut writer).await?;
-                while let Ok(packet) = packet_rx.try_recv() {
-                    packet.write_async(&mut writer).await?;
-                }
-                writer.flush().await?;
-            }
-            anyhow::Ok(())
-        }
+        read_loop(
+            read_half,
+            event_tx,
+            ControllerEvent::ServerData,
+            ControllerEvent::ServerDisconnected,
+        ),
+        write_loop(write_half, packet_rx)
     );
 }

@@ -8,7 +8,7 @@ use mc_protocol::{
 use super::{PacketIdReader, VersionProtocol, decode};
 use crate::{
     config,
-    controller::ClientId,
+    events::ClientId,
     protocols::{ClientBoundEvent, ClientDisconnectEvent, ServerBoundEvent},
 };
 use packets::{c2s, s2c};

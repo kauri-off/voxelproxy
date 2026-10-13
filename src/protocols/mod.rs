@@ -10,7 +10,7 @@ use enum_dispatch::enum_dispatch;
 use flate2::{Decompress, FlushDecompress};
 use mc_protocol::{packet::RawPacket, ser::Deserialize, varint::VarInt};
 
-use crate::controller::ClientId;
+use crate::events::ClientId;
 
 #[enum_dispatch(Version)]
 pub trait VersionProtocol {

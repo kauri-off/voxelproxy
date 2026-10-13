@@ -12,13 +12,13 @@ use tokio::{
 };
 
 use crate::{
-    events::EventSink,
+    events::{ClientId, EventSink},
     packets::universal::status::s2c::StatusResponse,
     resolver::{ServerTarget, resolve_host_port},
 };
 
 use crate::{
-    controller::{ClientId, Controller, PeerLink, run_client, run_server},
+    controller::{Controller, PeerLink, run_client, run_server},
     packets::universal::{
         Intent,
         handshaking::c2s::Handshake,
@@ -391,7 +391,7 @@ mod tests {
     use mc_protocol::varint::VarInt;
 
     use super::*;
-    use crate::events::{AppEvent, WhichClient};
+    use crate::events::AppEvent;
 
     async fn socket_pair() -> (TcpStream, TcpStream) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -768,7 +768,7 @@ mod tests {
         let kicked = tokio::time::timeout(Duration::from_secs(5), async {
             while let Some(event) = events_rx.next().await {
                 if let AppEvent::ClientStatus {
-                    which: WhichClient::Secondary,
+                    which: ClientId::Secondary,
                     online: false,
                 } = event
                 {
@@ -781,6 +781,51 @@ mod tests {
 
         drop(secondary);
         drop(writer.await.unwrap());
+        tokio::time::timeout(Duration::from_secs(5), session)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn active_client_disconnect_hands_over_to_secondary() {
+        let (primary, mut secondary, mut remote, session, _events, mut events_rx) =
+            sessions().await;
+        let session = tokio::spawn(session);
+
+        frame(LoginSuccess::PACKET_ID, vec![], None)
+            .write_async(&mut remote)
+            .await
+            .unwrap();
+        let mut reader = tokio::io::BufReader::new(&mut secondary);
+        RawPacket::read_async(&mut reader).await.unwrap();
+
+        drop(primary);
+        let dropped = tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(event) = events_rx.next().await {
+                if let AppEvent::ClientStatus {
+                    which: ClientId::Primary,
+                    online: false,
+                } = event
+                {
+                    return;
+                }
+            }
+        })
+        .await;
+        assert!(dropped.is_ok(), "primary disconnect was never reported");
+
+        let chunk = frame(0x27, vec![7; 1000], None);
+        chunk.write_async(&mut remote).await.unwrap();
+        let got = tokio::time::timeout(Duration::from_secs(5), RawPacket::read_async(&mut reader))
+            .await
+            .expect("secondary stopped receiving")
+            .unwrap();
+        assert_eq!(got.data, chunk.data);
+
+        drop(reader);
+        drop(secondary);
         tokio::time::timeout(Duration::from_secs(5), session)
             .await
             .unwrap()

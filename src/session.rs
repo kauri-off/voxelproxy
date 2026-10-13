@@ -12,7 +12,7 @@ use tokio::{
 
 use crate::{
     config,
-    events::{AppEvent, EventSink, WhichClient},
+    events::{AppEvent, ClientId, EventSink},
     logger::Logger,
     packets::universal::{Intent, handshaking::c2s::Handshake},
     protocols::{Version, VersionProtocol},
@@ -65,7 +65,7 @@ struct ClientStatusOfflineGuard {
 
 impl Drop for ClientStatusOfflineGuard {
     fn drop(&mut self) {
-        for which in [WhichClient::Primary, WhichClient::Secondary] {
+        for which in [ClientId::Primary, ClientId::Secondary] {
             self.events.client_status(which, false);
         }
     }
@@ -110,7 +110,7 @@ pub async fn run_manual_mode(server_addr: String, events: EventSink) -> anyhow::
             Some(p) => p,
             None => anyhow::bail!("Диспетчер подключений завершился"),
         };
-        events.client_status(WhichClient::Primary, true);
+        events.client_status(ClientId::Primary, true);
 
         enum Sec {
             Got(LoginClient),
@@ -136,13 +136,13 @@ pub async fn run_manual_mode(server_addr: String, events: EventSink) -> anyhow::
             }
             Sec::PrimaryGone => {
                 log.warn("Основной клиент отключился, не дождавшись второго");
-                events.client_status(WhichClient::Primary, false);
+                events.client_status(ClientId::Primary, false);
                 continue;
             }
             Sec::Closed => anyhow::bail!("Диспетчер подключений завершился"),
         }
     };
-    events.client_status(WhichClient::Secondary, true);
+    events.client_status(ClientId::Secondary, true);
 
     if primary_protocol != secondary_protocol {
         crate::proxy::send_login_error(
@@ -412,7 +412,7 @@ pub async fn run_auto_mode(
             Step::Finished(_) => continue,
             Step::SecondaryGone => {
                 log.warn("Второй клиент отключился, не дождавшись основного");
-                events.client_status(WhichClient::Secondary, false);
+                events.client_status(ClientId::Secondary, false);
                 pending = None;
                 continue;
             }
@@ -442,11 +442,11 @@ pub async fn run_auto_mode(
         }
         match pending.take() {
             Some(secondary) => {
-                events.client_status(WhichClient::Primary, true);
+                events.client_status(ClientId::Primary, true);
                 session_set.spawn(run_auto_session(client, secondary, events.clone()));
             }
             None => {
-                events.client_status(WhichClient::Secondary, true);
+                events.client_status(ClientId::Secondary, true);
                 pending = Some(client);
             }
         }
@@ -492,7 +492,7 @@ pub async fn run_auto_mode(
         };
         let client = match step {
             Step::SecondaryGone => {
-                events.client_status(WhichClient::Secondary, false);
+                events.client_status(ClientId::Secondary, false);
                 pending = None;
                 continue;
             }
@@ -506,11 +506,11 @@ pub async fn run_auto_mode(
         }
         match pending.take() {
             Some(secondary) => {
-                events.client_status(WhichClient::Primary, true);
+                events.client_status(ClientId::Primary, true);
                 session_set.spawn(run_auto_session(client, secondary, events.clone()));
             }
             None => {
-                events.client_status(WhichClient::Secondary, true);
+                events.client_status(ClientId::Secondary, true);
                 pending = Some(client);
             }
         }
