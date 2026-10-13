@@ -1,9 +1,12 @@
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use futures::FutureExt;
+use futures::future::{AbortHandle, abortable};
 use tokio::runtime::Runtime;
-use tokio::task::{AbortHandle, JoinHandle};
+use tokio::task::JoinHandle;
 
 use crate::{
     changelog::{self, ChangelogEntry},
@@ -18,11 +21,16 @@ pub use crate::updater::NewVersion as UpdateInfo;
 pub const RELEASES_URL: &str = "https://github.com/kauri-off/voxelproxy/releases";
 pub const REPO_URL: &str = "https://github.com/kauri-off/voxelproxy";
 
+struct Session {
+    task: JoinHandle<()>,
+    abort: AbortHandle,
+}
+
 /// Owns the tokio runtime and the currently running proxy session.
 pub struct Backend {
     rt: Runtime,
     events: EventSink,
-    session: Mutex<Option<AbortHandle>>,
+    session: Mutex<Option<Session>>,
     check_mode: Arc<AtomicBool>,
 }
 
@@ -69,22 +77,32 @@ impl Backend {
     where
         F: Future<Output = anyhow::Result<()>> + Send + 'static,
     {
-        self.abort_existing();
-        self.events.emit(AppEvent::SessionStarted);
+        let mut session = self.session.lock().unwrap();
+        let prev = session.take();
+        if let Some(prev) = &prev {
+            prev.abort.abort();
+        }
 
+        let (fut, abort) = abortable(fut);
         let events = self.events.clone();
-        let handle = self.rt.spawn(async move {
-            if let Err(e) = fut.await {
-                Logger::new(&events).error(e.to_string());
+        let task = self.rt.spawn(async move {
+            if let Some(prev) = prev {
+                let _ = prev.task.await;
+            }
+            events.emit(AppEvent::SessionStarted);
+            match AssertUnwindSafe(fut).catch_unwind().await {
+                Ok(Ok(Err(e))) => Logger::new(&events).error(e.to_string()),
+                Err(_) => Logger::new(&events).error("Сессия аварийно завершилась"),
+                _ => {}
             }
             events.emit(AppEvent::SessionEnded);
         });
-        *self.session.lock().unwrap() = Some(handle.abort_handle());
+        *session = Some(Session { task, abort });
     }
 
+    /// The session task emits `SessionEnded` itself once fully torn down.
     pub fn stop(&self) {
         self.abort_existing();
-        self.events.emit(AppEvent::SessionEnded);
     }
 
     pub fn set_check_mode(&self, value: bool) {
@@ -92,8 +110,8 @@ impl Backend {
     }
 
     fn abort_existing(&self) {
-        if let Some(h) = self.session.lock().unwrap().take() {
-            h.abort();
+        if let Some(s) = self.session.lock().unwrap().as_ref() {
+            s.abort.abort();
         }
     }
 
@@ -258,4 +276,73 @@ pub fn manual_warning_acknowledged() -> bool {
 
 pub fn acknowledge_manual_warning() -> Result<(), String> {
     prefs::acknowledge_manual_warning()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::StreamExt;
+    use futures::channel::oneshot;
+    use futures::executor::block_on;
+    use tokio::net::TcpListener;
+
+    fn start_listener(backend: &Backend, port: u16) -> oneshot::Receiver<bool> {
+        let (tx, rx) = oneshot::channel();
+        backend.start_session(async move {
+            let listener = TcpListener::bind(("127.0.0.1", port)).await;
+            let _ = tx.send(listener.is_ok());
+            let _listener = listener?;
+            std::future::pending::<()>().await;
+            Ok(())
+        });
+        rx
+    }
+
+    #[test]
+    fn restart_rebinds_port_after_old_session_is_torn_down() {
+        let (events, mut rx) = EventSink::channel();
+        let backend = Backend::new(events);
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+
+        assert!(block_on(start_listener(&backend, port)).unwrap());
+        for _ in 0..20 {
+            backend.stop();
+            assert!(block_on(start_listener(&backend, port)).unwrap());
+        }
+        backend.stop();
+
+        let mut expected_started = true;
+        for _ in 0..42 {
+            match block_on(rx.next()).unwrap() {
+                AppEvent::SessionStarted => assert!(expected_started),
+                AppEvent::SessionEnded => assert!(!expected_started),
+                other => panic!("unexpected event {other:?}"),
+            }
+            expected_started = !expected_started;
+        }
+    }
+
+    #[test]
+    fn panicking_session_still_ends() {
+        let (events, mut rx) = EventSink::channel();
+        let backend = Backend::new(events);
+        backend.start_session(async { panic!("boom") });
+
+        assert!(matches!(
+            block_on(rx.next()),
+            Some(AppEvent::SessionStarted)
+        ));
+        assert!(matches!(
+            block_on(rx.next()),
+            Some(AppEvent::Log {
+                level: crate::events::LogLevel::Error,
+                ..
+            })
+        ));
+        assert!(matches!(block_on(rx.next()), Some(AppEvent::SessionEnded)));
+    }
 }
