@@ -34,6 +34,13 @@ impl ClientId {
         }
     }
 
+    pub fn index(self) -> usize {
+        match self {
+            ClientId::Primary => 0,
+            ClientId::Secondary => 1,
+        }
+    }
+
     fn which(self) -> WhichClient {
         match self {
             ClientId::Primary => WhichClient::Primary,

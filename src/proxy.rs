@@ -406,7 +406,9 @@ mod tests {
             .unwrap()
     }
 
-    async fn sessions() -> (
+    async fn sessions_for(
+        protocol: i32,
+    ) -> (
         TcpStream,
         TcpStream,
         TcpStream,
@@ -422,7 +424,7 @@ mod tests {
             primary,
             secondary,
             remote,
-            Version::from_protocol(774).unwrap(),
+            Version::from_protocol(protocol).unwrap(),
             events.clone(),
         );
         (
@@ -461,6 +463,117 @@ mod tests {
             matches!(dropped, Ok(Err(_))),
             "connection task outlived accept loop"
         );
+    }
+
+    async fn sessions() -> (
+        TcpStream,
+        TcpStream,
+        TcpStream,
+        impl Future<Output = anyhow::Result<()>>,
+        crate::events::EventSink,
+        futures::channel::mpsc::UnboundedReceiver<AppEvent>,
+    ) {
+        sessions_for(774).await
+    }
+
+    fn encode<T: mc_protocol::packet::PacketId + mc_protocol::ser::Serialize>(
+        packet: &T,
+        threshold: Option<i32>,
+    ) -> RawPacket {
+        UncompressedPacket::from_packet(packet)
+            .unwrap()
+            .to_raw_packet_compressed(threshold)
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn rotation_reaches_secondary_after_late_login_ack() {
+        use crate::protocols::v1_21_4::packets::{c2s, s2c};
+
+        let (primary, secondary, mut remote, session, _events, _rx) = sessions_for(769).await;
+        let session = tokio::spawn(session);
+        let threshold = Some(256);
+        let (primary_read, mut primary) = primary.into_split();
+        let (secondary_read, mut secondary) = secondary.into_split();
+        let mut primary_read = tokio::io::BufReader::new(primary_read);
+        let mut secondary_read = tokio::io::BufReader::new(secondary_read);
+
+        frame(SetCompression::PACKET_ID, vec![0x80, 0x02], None)
+            .write_async(&mut remote)
+            .await
+            .unwrap();
+        frame(LoginSuccess::PACKET_ID, vec![], threshold)
+            .write_async(&mut remote)
+            .await
+            .unwrap();
+        for reader in [&mut primary_read, &mut secondary_read] {
+            for _ in 0..2 {
+                RawPacket::read_async(reader).await.unwrap();
+            }
+        }
+
+        encode(&c2s::login::LoginAcknowledged {}, threshold)
+            .write_async(&mut primary)
+            .await
+            .unwrap();
+        encode(&c2s::configuration::FinishConfiguration {}, threshold)
+            .write_async(&mut primary)
+            .await
+            .unwrap();
+        for _ in 0..2 {
+            RawPacket::read_async(&mut remote).await.unwrap();
+        }
+        encode(&s2c::configuration::FinishConfiguration {}, threshold)
+            .write_async(&mut remote)
+            .await
+            .unwrap();
+        RawPacket::read_async(&mut secondary_read).await.unwrap();
+
+        encode(&c2s::login::LoginAcknowledged {}, threshold)
+            .write_async(&mut secondary)
+            .await
+            .unwrap();
+        encode(&c2s::configuration::FinishConfiguration {}, threshold)
+            .write_async(&mut secondary)
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let rot = c2s::game::Rot {
+            yaw: 90.0,
+            pitch: 30.0,
+            on_ground: true,
+        };
+        encode(&rot, threshold)
+            .write_async(&mut primary)
+            .await
+            .unwrap();
+        let relayed = RawPacket::read_async(&mut remote).await.unwrap();
+        assert_eq!(
+            relayed.uncompress(threshold).unwrap().packet_id,
+            c2s::game::Rot::PACKET_ID
+        );
+
+        let mirrored = tokio::time::timeout(
+            Duration::from_secs(5),
+            RawPacket::read_async(&mut secondary_read),
+        )
+        .await
+        .expect("rotation never reached the secondary")
+        .unwrap();
+        let position: s2c::game::Position = mirrored
+            .uncompress(threshold)
+            .unwrap()
+            .deserialize_payload()
+            .unwrap();
+        assert_eq!((position.yaw, position.pitch), (90.0, 30.0));
+
+        drop(remote);
+        tokio::time::timeout(Duration::from_secs(5), session)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test]

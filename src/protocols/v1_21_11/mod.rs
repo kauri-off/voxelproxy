@@ -15,7 +15,7 @@ use packets::{c2s, s2c};
 
 const TELEPORT_ID: i32 = 1000;
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub enum State {
     Login,
     Configuration,
@@ -23,10 +23,9 @@ pub enum State {
 }
 
 pub struct VersionData {
-    pub active_state_in: State,
-    pub active_state_out: State,
-    pub inactive_state_in: State,
-    pub inactive_state_out: State,
+    /// Shared by both clients: they read the same server stream.
+    pub state_in: State,
+    pub state_out: [State; 2],
     pub position: s2c::game::Position,
     pub pings: Vec<PingSync>,
     pub threshold: Option<i32>,
@@ -44,10 +43,9 @@ impl VersionData {
 
     pub fn new() -> Self {
         Self {
-            active_state_in: State::Login,
-            active_state_out: State::Login,
-            inactive_state_in: State::Login,
-            inactive_state_out: State::Login,
+            // The controller starts after LoginSuccess was relayed to both clients.
+            state_in: State::Configuration,
+            state_out: [State::Login; 2],
             position: s2c::game::Position {
                 id: VarInt(TELEPORT_ID),
                 x: 0.0,
@@ -75,25 +73,16 @@ impl VersionProtocol for VersionData {
         is_active: bool,
         both_active: bool,
     ) -> Option<ServerBoundEvent> {
-        if is_active {
-            match self.active_state_out {
-                State::Login => self.handle_c2s_login(packet, is_active),
-                State::Configuration => self.handle_c2s_configuration(packet, is_active),
-                State::Game => self.handle_c2s_game(packet, client_id, is_active, both_active),
-            }
-            .unwrap_or_default()
-        } else {
-            match self.inactive_state_out {
-                State::Login => self.handle_c2s_login(packet, is_active),
-                State::Configuration => self.handle_c2s_configuration(packet, is_active),
-                State::Game => self.handle_c2s_game(packet, client_id, is_active, both_active),
-            }
-            .unwrap_or_default()
+        match self.state_out[client_id.index()] {
+            State::Login => self.handle_c2s_login(packet, client_id),
+            State::Configuration => self.handle_c2s_configuration(packet, client_id),
+            State::Game => self.handle_c2s_game(packet, client_id, is_active, both_active),
         }
+        .unwrap_or_default()
     }
 
     fn handle_s2c(&mut self, packet: &RawPacket, both_active: bool) -> Option<ClientBoundEvent> {
-        match self.active_state_in {
+        match self.state_in {
             State::Login => Ok(None),
             State::Configuration => self.handle_s2c_configuration(packet),
             State::Game => self.handle_s2c_game(packet, both_active),
@@ -142,6 +131,10 @@ impl VersionProtocol for VersionData {
 }
 
 impl VersionData {
+    fn state_out_mut(&mut self, client_id: ClientId) -> &mut State {
+        &mut self.state_out[client_id.index()]
+    }
+
     fn handle_s2c_configuration(
         &mut self,
         packet: &RawPacket,
@@ -149,8 +142,7 @@ impl VersionData {
         let id = self.ids.read(packet, self.threshold)?;
 
         if id == s2c::configuration::FinishConfiguration::PACKET_ID {
-            self.active_state_in = State::Game;
-            self.inactive_state_in = State::Game;
+            self.state_in = State::Game;
         }
         Ok(None)
     }
@@ -163,8 +155,7 @@ impl VersionData {
 
         match id {
             s2c::game::StartConfiguration::PACKET_ID => {
-                self.active_state_in = State::Configuration;
-                self.inactive_state_in = State::Configuration;
+                self.state_in = State::Configuration;
             }
             s2c::game::Ping::PACKET_ID if both_active => {
                 let ping: s2c::game::Ping = decode(packet, self.threshold)?;
@@ -179,18 +170,13 @@ impl VersionData {
     fn handle_c2s_login(
         &mut self,
         packet: &RawPacket,
-        is_active: bool,
+        client_id: ClientId,
     ) -> anyhow::Result<Option<ServerBoundEvent>> {
         let id = self.ids.read(packet, self.threshold)?;
 
         if id == c2s::login::LoginAcknowledged::PACKET_ID {
-            if is_active {
-                self.active_state_in = State::Configuration;
-                self.active_state_out = State::Configuration;
-            } else {
-                self.inactive_state_in = State::Configuration;
-                self.inactive_state_out = State::Configuration;
-            }
+            // Inbound state follows the server stream, so a late ack must not reset it.
+            *self.state_out_mut(client_id) = State::Configuration;
         }
 
         Ok(None)
@@ -199,16 +185,12 @@ impl VersionData {
     fn handle_c2s_configuration(
         &mut self,
         packet: &RawPacket,
-        is_active: bool,
+        client_id: ClientId,
     ) -> anyhow::Result<Option<ServerBoundEvent>> {
         let id = self.ids.read(packet, self.threshold)?;
 
         if id == c2s::configuration::FinishConfiguration::PACKET_ID {
-            if is_active {
-                self.active_state_out = State::Game;
-            } else {
-                self.inactive_state_out = State::Game;
-            }
+            *self.state_out_mut(client_id) = State::Game;
         }
 
         Ok(None)
@@ -225,11 +207,7 @@ impl VersionData {
 
         match id {
             c2s::game::ConfigurationAcknowledged::PACKET_ID => {
-                if is_active {
-                    self.active_state_out = State::Configuration;
-                } else {
-                    self.inactive_state_out = State::Configuration;
-                }
+                *self.state_out_mut(client_id) = State::Configuration;
             }
             c2s::game::AcceptTeleportation::PACKET_ID => {
                 if !both_active {
@@ -297,7 +275,7 @@ impl VersionData {
                     let container_close: c2s::game::ContainerClose =
                         decode(packet, self.threshold)?;
 
-                    if self.inactive_state_in == State::Game {
+                    if self.state_in == State::Game {
                         return Ok(Some(ServerBoundEvent::SendToInactive(
                             UncompressedPacket::from_packet(&s2c::game::ContainerClose {
                                 container_id: container_close.container_id,
@@ -319,7 +297,7 @@ impl VersionData {
     }
 
     fn send_position_to_inactive(&self) -> anyhow::Result<Option<ServerBoundEvent>> {
-        if self.inactive_state_in == State::Game {
+        if self.state_in == State::Game {
             Ok(Some(ServerBoundEvent::SendToInactive(
                 UncompressedPacket::from_packet(&self.position)?
                     .to_raw_packet_compressed(self.threshold)?,
@@ -360,4 +338,9 @@ impl PingSync {
             ClientId::Secondary => self.secondary_sent,
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    super::super::config_phase_tests!();
 }

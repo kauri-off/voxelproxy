@@ -107,6 +107,286 @@ pub fn decode<T: Deserialize>(packet: &RawPacket, threshold: Option<i32>) -> any
     Ok(packet.uncompress(threshold)?.deserialize_payload()?)
 }
 
+/// Shared tests for the 1.21.x modules, which differ only in packet ids.
+#[cfg(test)]
+macro_rules! config_phase_tests {
+    () => {
+        use mc_protocol::{packet::PacketId, ser::Serialize};
+
+        use super::*;
+
+        const P: ClientId = ClientId::Primary;
+        const S: ClientId = ClientId::Secondary;
+
+        fn raw<T: PacketId + Serialize>(data: &VersionData, packet: &T) -> RawPacket {
+            UncompressedPacket::from_packet(packet)
+                .unwrap()
+                .to_raw_packet_compressed(data.threshold)
+                .unwrap()
+        }
+
+        fn c2s<T: PacketId + Serialize>(
+            data: &mut VersionData,
+            packet: &T,
+            client: ClientId,
+            active: ClientId,
+            both_active: bool,
+        ) -> Option<ServerBoundEvent> {
+            let packet = raw(data, packet);
+            data.handle_c2s(&packet, client, client == active, both_active)
+        }
+
+        fn s2c<T: PacketId + Serialize>(data: &mut VersionData, packet: &T, both_active: bool) {
+            let packet = raw(data, packet);
+            data.handle_s2c(&packet, both_active);
+        }
+
+        fn mirrored(
+            threshold: Option<i32>,
+            event: Option<ServerBoundEvent>,
+        ) -> Option<s2c::game::Position> {
+            match event? {
+                ServerBoundEvent::SendToInactive(packet) => {
+                    let id = packet.uncompress(threshold).unwrap().packet_id;
+                    assert_eq!(id, s2c::game::Position::PACKET_ID);
+                    Some(super::super::decode(&packet, threshold).unwrap())
+                }
+                ServerBoundEvent::SkipRelay => panic!("movement must still be relayed"),
+            }
+        }
+
+        fn login(data: &mut VersionData, client: ClientId) {
+            c2s(data, &c2s::login::LoginAcknowledged {}, client, P, true);
+        }
+
+        fn finish_config(data: &mut VersionData, client: ClientId) {
+            c2s(
+                data,
+                &c2s::configuration::FinishConfiguration {},
+                client,
+                P,
+                true,
+            );
+        }
+
+        fn rot(yaw: f32, pitch: f32) -> c2s::game::Rot {
+            c2s::game::Rot {
+                yaw,
+                pitch,
+                ..Default::default()
+            }
+        }
+
+        /// Both clients went through login and configuration; the server is in Game.
+        fn in_game(threshold: Option<i32>) -> VersionData {
+            let mut data = VersionData::new();
+            data.update_threshold(threshold);
+            for client in [P, S] {
+                login(&mut data, client);
+                finish_config(&mut data, client);
+            }
+            s2c(&mut data, &s2c::configuration::FinishConfiguration {}, true);
+            data
+        }
+
+        #[test]
+        fn rotation_reaches_inactive_after_late_login_ack() {
+            for threshold in [None, Some(0), Some(256)] {
+                let mut data = VersionData::new();
+                data.update_threshold(threshold);
+                login(&mut data, P);
+                finish_config(&mut data, P);
+                s2c(&mut data, &s2c::configuration::FinishConfiguration {}, true);
+                // The secondary is slower and acks login after the server already finished configuration.
+                login(&mut data, S);
+                finish_config(&mut data, S);
+
+                let event = c2s(&mut data, &rot(90.0, 30.0), P, P, true);
+                let pos = mirrored(data.threshold, event).expect("rotation was not mirrored");
+                assert_eq!((pos.yaw, pos.pitch), (90.0, 30.0), "{threshold:?}");
+            }
+        }
+
+        #[test]
+        fn movement_is_mirrored_to_inactive() {
+            let mut data = in_game(Some(256));
+
+            let pos = c2s::game::Pos {
+                x: 1.0,
+                y: 2.0,
+                z: 3.0,
+                ..Default::default()
+            };
+            let got = mirrored(data.threshold, c2s(&mut data, &pos, P, P, true)).unwrap();
+            assert_eq!((got.x, got.y, got.z), (1.0, 2.0, 3.0));
+
+            let got = mirrored(
+                data.threshold,
+                c2s(&mut data, &rot(45.0, -10.0), P, P, true),
+            )
+            .unwrap();
+            assert_eq!((got.x, got.y, got.z), (1.0, 2.0, 3.0));
+            assert_eq!((got.yaw, got.pitch), (45.0, -10.0));
+
+            let pos_rot = c2s::game::PosRot {
+                x: 4.0,
+                y: 5.0,
+                z: 6.0,
+                yaw: 180.0,
+                pitch: 90.0,
+                ..Default::default()
+            };
+            let got = mirrored(data.threshold, c2s(&mut data, &pos_rot, P, P, true)).unwrap();
+            assert_eq!((got.x, got.y, got.z), (4.0, 5.0, 6.0));
+            assert_eq!((got.yaw, got.pitch), (180.0, 90.0));
+            assert_eq!(got.id.0, TELEPORT_ID);
+            assert_eq!(got.relative_flags, 0);
+            assert_eq!((got.delta_x, got.delta_y, got.delta_z), (0.0, 0.0, 0.0));
+        }
+
+        #[test]
+        fn inactive_movement_is_not_mirrored() {
+            let mut data = in_game(None);
+            assert!(c2s(&mut data, &rot(10.0, 10.0), S, P, true).is_none());
+            let got = mirrored(data.threshold, c2s(&mut data, &rot(1.0, 2.0), P, P, true)).unwrap();
+            assert_eq!((got.yaw, got.pitch), (1.0, 2.0));
+        }
+
+        #[test]
+        fn nothing_is_mirrored_during_reconfiguration() {
+            let mut data = in_game(None);
+            s2c(&mut data, &s2c::game::StartConfiguration {}, true);
+            assert!(c2s(&mut data, &rot(1.0, 1.0), P, P, true).is_none());
+
+            for client in [P, S] {
+                c2s(
+                    &mut data,
+                    &c2s::game::ConfigurationAcknowledged {},
+                    client,
+                    P,
+                    true,
+                );
+            }
+            for client in [P, S] {
+                finish_config(&mut data, client);
+            }
+            s2c(&mut data, &s2c::configuration::FinishConfiguration {}, true);
+
+            let got = mirrored(data.threshold, c2s(&mut data, &rot(5.0, 6.0), P, P, true)).unwrap();
+            assert_eq!((got.yaw, got.pitch), (5.0, 6.0));
+        }
+
+        #[test]
+        fn container_close_is_mirrored_in_game_only() {
+            let mut data = in_game(None);
+            let close = c2s::game::ContainerClose {
+                container_id: VarInt(3),
+            };
+            let Some(ServerBoundEvent::SendToInactive(packet)) = c2s(&mut data, &close, P, P, true)
+            else {
+                panic!("container close was not mirrored");
+            };
+            let got: s2c::game::ContainerClose = super::super::decode(&packet, None).unwrap();
+            assert_eq!(got.container_id.0, 3);
+            assert!(c2s(&mut data, &close, S, P, true).is_none());
+
+            s2c(&mut data, &s2c::game::StartConfiguration {}, true);
+            assert!(c2s(&mut data, &close, P, P, true).is_none());
+        }
+
+        #[test]
+        fn failover_keeps_new_active_client_state() {
+            let mut data = in_game(None);
+            s2c(&mut data, &s2c::game::StartConfiguration {}, true);
+            c2s(
+                &mut data,
+                &c2s::game::ConfigurationAcknowledged {},
+                P,
+                P,
+                true,
+            );
+
+            // The primary drops before the secondary acked the reconfiguration.
+            data.handle_client_disconnect(S);
+            assert_eq!(data.state_out[S.index()], State::Game);
+
+            let ack = c2s::game::AcceptTeleportation {
+                id: VarInt(TELEPORT_ID),
+            };
+            assert!(matches!(
+                c2s(&mut data, &ack, S, S, false),
+                Some(ServerBoundEvent::SkipRelay)
+            ));
+            c2s(
+                &mut data,
+                &c2s::game::ConfigurationAcknowledged {},
+                S,
+                S,
+                false,
+            );
+            assert_eq!(data.state_out[S.index()], State::Configuration);
+        }
+
+        #[test]
+        fn own_teleport_ack_is_skipped_only_without_peer() {
+            let mut data = in_game(None);
+            let ours = c2s::game::AcceptTeleportation {
+                id: VarInt(TELEPORT_ID),
+            };
+            let servers = c2s::game::AcceptTeleportation { id: VarInt(1) };
+            assert!(c2s(&mut data, &ours, P, P, true).is_none());
+            assert!(c2s(&mut data, &servers, S, S, false).is_none());
+            assert!(matches!(
+                c2s(&mut data, &ours, S, S, false),
+                Some(ServerBoundEvent::SkipRelay)
+            ));
+        }
+
+        #[test]
+        fn pong_sent_only_by_new_active_is_relayed_on_failover() {
+            let mut data = in_game(Some(256));
+            s2c(&mut data, &s2c::game::Ping { id: 7 }, true);
+            c2s(&mut data, &c2s::game::Pong { id: 7 }, S, P, true);
+
+            let Some(ClientDisconnectEvent::SendToServer(packets)) =
+                data.handle_client_disconnect(S)
+            else {
+                panic!("pong was not relayed");
+            };
+            assert_eq!(packets.len(), 1);
+            let pong: c2s::game::Pong = super::super::decode(&packets[0], data.threshold).unwrap();
+            assert_eq!(pong.id, 7);
+            assert!(data.pings.is_empty());
+        }
+
+        #[test]
+        fn pong_already_relayed_is_skipped_after_failover() {
+            let mut data = in_game(None);
+            s2c(&mut data, &s2c::game::Ping { id: 8 }, true);
+            c2s(&mut data, &c2s::game::Pong { id: 8 }, P, P, true);
+
+            assert!(data.handle_client_disconnect(S).is_none());
+            assert!(matches!(
+                c2s(&mut data, &c2s::game::Pong { id: 8 }, S, S, false),
+                Some(ServerBoundEvent::SkipRelay)
+            ));
+            assert!(c2s(&mut data, &c2s::game::Pong { id: 9 }, S, S, false).is_none());
+        }
+
+        #[test]
+        fn pong_answered_by_both_is_forgotten() {
+            let mut data = in_game(None);
+            s2c(&mut data, &s2c::game::Ping { id: 1 }, true);
+            c2s(&mut data, &c2s::game::Pong { id: 1 }, P, P, true);
+            c2s(&mut data, &c2s::game::Pong { id: 1 }, S, P, true);
+            assert!(data.pings.is_empty());
+            assert!(data.handle_client_disconnect(S).is_none());
+        }
+    };
+}
+#[cfg(test)]
+use config_phase_tests;
+
 #[cfg(test)]
 mod tests {
     use mc_protocol::packet::UncompressedPacket;
