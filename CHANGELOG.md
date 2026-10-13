@@ -1,4 +1,4 @@
-# Voxelproxy Changelog
+# VoxelProxy Changelog
 
 ## 7.0.2
 

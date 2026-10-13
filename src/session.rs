@@ -66,7 +66,7 @@ async fn wait_for_disconnect(stream: &mut TcpStream) {
 /// ends — early return (version mismatch, unsupported, resolve/connect failure),
 /// an `?` error during login, a login-phase abort inside `run_proxy_session`, or
 /// a normal disconnect. The `online: true` events are emitted at pairing time
-/// (`run_automatic_mode`) or as clients connect (`run_manual_mode`), so without
+/// (`run_auto_mode`) or as clients connect (`run_manual_mode`), so without
 /// this guard any exit before the controller loop starts would leave the UI
 /// desynced, still showing both clients connected. This matters most in auto
 /// mode, where a single failed pairing does not end the surrounding accept loop
@@ -375,7 +375,7 @@ pub async fn run_panic_mode(mut client: LoginClient) -> anyhow::Result<()> {
 }
 
 #[cfg(target_os = "windows")]
-pub async fn run_automatic_mode(
+pub async fn run_auto_mode(
     use_windivert: bool,
     port_min: u16,
     port_max: u16,
@@ -384,21 +384,19 @@ pub async fn run_automatic_mode(
 ) -> anyhow::Result<()> {
     let log = Logger::new(&events);
     use crate::hotspot_redirect;
-    use std::sync::Arc;
 
     let _redirect_handle;
 
     if use_windivert {
-        if !hotspot_redirect::is_admin() {
-            anyhow::bail!("Автоматический режим требует прав администратора.");
+        if !crate::backend::is_elevated() {
+            anyhow::bail!("Режим «Через раздачу Wi-Fi» требует прав администратора.");
         }
 
-        let (nat_table, redirect) =
+        let redirect =
             match hotspot_redirect::start_redirect(BIND_PORT, port_min, port_max, events.clone()) {
-                Ok(t) => t,
+                Ok(r) => r,
                 Err(e) => anyhow::bail!("WinDivert недоступен: {}", e),
             };
-        hotspot_redirect::start_nat_cleanup(Arc::clone(&nat_table));
         _redirect_handle = Some(redirect);
         log.success("WinDivert перехват активен");
     } else {
@@ -483,7 +481,7 @@ pub async fn run_automatic_mode(
 }
 
 #[cfg(not(target_os = "windows"))]
-pub async fn run_automatic_mode(
+pub async fn run_auto_mode(
     _use_windivert: bool,
     _port_min: u16,
     _port_max: u16,

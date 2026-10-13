@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::sync::{Arc, Mutex, Weak};
+use std::time::{Duration, Instant};
 
 use etherparse::SlicedPacket;
 use windivert::{
@@ -15,32 +15,20 @@ use windows::Win32::Foundation::HANDLE;
 use crate::events::EventSink;
 use crate::logger::Logger;
 
-// Re-declare WinDivert FFI functions so we can call them from a different thread
-// than the one doing recv() — the Rust wrapper requires &mut self which prevents
-// sharing, but the underlying Windows API is fully thread-safe for these operations.
+// Raw FFI so another thread can shut down handles blocked in recv().
 unsafe extern "C" {
     fn WinDivertShutdown(handle: HANDLE, how: u32) -> u32;
     fn WinDivertClose(handle: HANDLE) -> u32;
 }
 
-/// Reads the raw Windows HANDLE out of a `WinDivert<L>`.
-///
 /// # Safety
-/// `WinDivert<L>` has `handle: HANDLE` as its first declared field.
-/// With Rust's default repr, HANDLE (a pointer, align 8 on 64-bit) sorts first
-/// — confirmed by reading windivert-0.6.0 source code. The struct is not
-/// `repr(C)` but this layout is stable for this field combination.
+/// Relies on `handle` being laid out first in windivert-0.6.0's `WinDivert<L>`.
 unsafe fn wd_raw_handle<L: WinDivertLayerTrait>(wd: &WinDivert<L>) -> HANDLE {
     unsafe { (wd as *const WinDivert<L> as *const HANDLE).read() }
 }
 
-/// Drops the WinDivert intercept handles, unblocking any threads blocked in `recv()`.
-///
-/// When dropped, calls `WinDivertShutdown` + `WinDivertClose` on each stored handle.
-/// This causes any pending `WinDivertRecv` call to return with an error, which makes
-/// the worker thread loops break and exit cleanly.
+/// Closes the WinDivert handles on drop, which stops the worker threads.
 pub(crate) struct RedirectHandle {
-    // Store handle as usize (the raw pointer value) to avoid !Send from *mut c_void.
     handles: Vec<usize>,
 }
 
@@ -60,7 +48,7 @@ impl Drop for RedirectHandle {
     }
 }
 
-pub(crate) struct NatEntry {
+struct NatEntry {
     client_addr: Ipv4Addr,
     client_port: u16,
     original_dst_ip: Ipv4Addr,
@@ -70,35 +58,8 @@ pub(crate) struct NatEntry {
     timestamp: Instant,
 }
 
-pub(crate) type NatTable = Arc<Mutex<HashMap<(Ipv4Addr, u16), NatEntry>>>;
-
-pub fn is_admin() -> bool {
-    use windows::Win32::{
-        Foundation::{CloseHandle, HANDLE},
-        Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation},
-        System::Threading::{GetCurrentProcess, OpenProcessToken},
-    };
-
-    unsafe {
-        let mut token = HANDLE::default();
-        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
-            return false;
-        }
-
-        let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
-        let mut return_length = 0u32;
-        let result = GetTokenInformation(
-            token,
-            TokenElevation,
-            Some(&mut elevation as *mut _ as *mut _),
-            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
-            &mut return_length,
-        );
-
-        let _ = CloseHandle(token);
-        result.is_ok() && elevation.TokenIsElevated != 0
-    }
-}
+type NatMap = Mutex<HashMap<(Ipv4Addr, u16), NatEntry>>;
+type NatTable = Arc<NatMap>;
 
 fn rewrite_dst(data: &mut [u8], ip_header_len: usize, new_addr: Ipv4Addr, new_port: u16) {
     data[16..20].copy_from_slice(&new_addr.octets());
@@ -110,18 +71,13 @@ fn rewrite_src(data: &mut [u8], ip_header_len: usize, new_addr: Ipv4Addr, new_po
     data[ip_header_len..ip_header_len + 2].copy_from_slice(&new_port.to_be_bytes());
 }
 
-/// Opens WinDivert handles and spawns worker threads for NAT redirect.
-///
-/// Inbound path:  forward layer captures CLIENT→EXTERNAL, rewrites to loopback,
-///                injects via network layer so our proxy receives the connection.
-/// Return path:   network layer captures proxy response, rewrites src/dst back,
-///                injects via network layer with the hotspot interface index.
+/// Redirects hotspot client traffic to the local proxy and rewrites replies back.
 pub(crate) fn start_redirect(
     bind_port: u16,
     port_min: u16,
     port_max: u16,
     events: EventSink,
-) -> anyhow::Result<(NatTable, RedirectHandle)> {
+) -> anyhow::Result<RedirectHandle> {
     let nat: NatTable = Arc::new(Mutex::new(HashMap::new()));
 
     let client_filter = format!(
@@ -148,8 +104,6 @@ pub(crate) fn start_redirect(
     let wd_return = WinDivert::network(&return_filter, 0, flags)
         .map_err(|e| anyhow::anyhow!("WinDivert (return): {}", e))?;
 
-    // Extract raw HANDLEs before moving handles into threads.
-    // RedirectHandle will close them on drop, unblocking any pending recv() calls.
     let raw_forward = unsafe { wd_raw_handle(&wd_forward).0 } as usize;
     let raw_inject = unsafe { wd_raw_handle(&wd_inject).0 } as usize;
     let raw_return = unsafe { wd_raw_handle(&wd_return).0 } as usize;
@@ -163,23 +117,23 @@ pub(crate) fn start_redirect(
         run_client_intercept_loop(wd_forward, wd_inject, bind_port, nat_client, events2)
     });
 
-    let nat_return = Arc::clone(&nat);
-    std::thread::spawn(move || run_return_intercept_loop(wd_return, nat_return, events));
+    let nat_cleanup = Arc::downgrade(&nat);
+    std::thread::spawn(move || run_return_intercept_loop(wd_return, nat, events));
+    std::thread::spawn(move || run_nat_cleanup(nat_cleanup));
 
-    Ok((nat, redirect))
+    Ok(redirect)
 }
 
-/// Spawns a background thread that prunes NAT entries older than 5 minutes.
-pub(crate) fn start_nat_cleanup(nat: NatTable) {
-    std::thread::spawn(move || {
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(60));
-            let cutoff = Instant::now()
-                .checked_sub(std::time::Duration::from_secs(300))
-                .unwrap_or_else(Instant::now);
-            nat.lock().unwrap().retain(|_, v| v.timestamp > cutoff);
-        }
-    });
+// Exits once both intercept loops have stopped and dropped the table.
+fn run_nat_cleanup(nat: Weak<NatMap>) {
+    loop {
+        std::thread::sleep(Duration::from_secs(60));
+        let Some(nat) = nat.upgrade() else { break };
+        let cutoff = Instant::now()
+            .checked_sub(Duration::from_secs(300))
+            .unwrap_or_else(Instant::now);
+        nat.lock().unwrap().retain(|_, v| v.timestamp > cutoff);
+    }
 }
 
 fn run_client_intercept_loop(
