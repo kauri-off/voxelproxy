@@ -1,552 +1,164 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>VoxelProxy — прокси для Minecraft</title>
-  <meta name="description" content="VoxelProxy — прокси для Minecraft: два клиента под одним ником на одном сервере. Поддержка 1.16.5, 1.20.1, 1.21.4, 1.21.8, 1.21.11." />
-  <meta name="theme-color" content="#0e0e10" />
-  <link rel="icon" type="image/png" href="icon.png" />
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VoxelProxy — прокси для Minecraft</title>
+<meta name="description" content="Два клиента Minecraft под одним ником на одном сервере. Версии 1.16.5, 1.20.1, 1.21.4, 1.21.8, 1.21.11.">
+<meta name="theme-color" content="#111113">
+<link rel="icon" type="image/png" href="icon.png">
+<meta property="og:type" content="website">
+<meta property="og:title" content="VoxelProxy">
+<meta property="og:description" content="Два клиента Minecraft под одним ником на одном сервере.">
+<meta property="og:image" content="https://kauri-off.github.io/voxelproxy/gui.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+  :root {
+    --bg: #111113;
+    --fg: #e4e4e7;
+    --dim: #9a9aa3;
+    --line: #2a2a2f;
+    --code: #1b1b1f;
+    --accent: #f2732e;
+    --mono: ui-monospace, "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.6 -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  main, .top, footer { max-width: 760px; margin: 0 auto; padding: 0 20px; }
+  a { color: var(--fg); text-underline-offset: 3px; text-decoration-color: var(--dim); }
+  a:hover { text-decoration-color: var(--accent); }
+  code, pre { font-family: var(--mono); font-size: 0.9em; }
+  code { background: var(--code); padding: 1px 5px; border-radius: 3px; }
 
-  <!-- Open Graph -->
-  <meta property="og:type" content="website" />
-  <meta property="og:title" content="VoxelProxy — прокси для Minecraft" />
-  <meta property="og:description" content="Два клиента под одним ником на одном сервере." />
-  <meta property="og:image" content="gui.png" />
-  <meta name="twitter:card" content="summary_large_image" />
+  .top { display: flex; align-items: center; gap: 10px; padding-top: 20px; padding-bottom: 20px; }
+  .top img { width: 28px; height: 28px; }
+  .top b { font-weight: 600; }
+  .top nav { margin-left: auto; display: flex; gap: 18px; font-size: 0.95rem; }
+  .top nav a { color: var(--dim); text-decoration: none; }
+  .top nav a:hover { color: var(--fg); }
 
-  <style>
-    :root {
-      --c-bg:       #0e0e10;
-      --c-surface:  #18181c;
-      --c-surface2: #202026;
-      --c-border:   #2c2c34;
-      --c-accent:   #5b8dee;
-      --c-orange:   #f5481f;
-      --c-text:     #dddde8;
-      --c-muted:    #7878a0;
-      --c-warn:     #fbbf24;
-    }
+  h1 { font-size: 2rem; line-height: 1.25; font-weight: 650; margin: 48px 0 12px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.15rem; font-weight: 600; margin: 56px 0 12px; }
+  p { margin: 0 0 14px; }
+  .lead { color: var(--dim); font-size: 1.1rem; max-width: 34em; }
 
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+  .dl { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; margin: 28px 0 8px; }
+  .btn {
+    display: inline-block;
+    background: var(--accent);
+    color: #1a0b02;
+    font-weight: 600;
+    padding: 10px 18px;
+    border-radius: 6px;
+    text-decoration: none;
+  }
+  .btn:hover { background: #ff8547; }
+  .meta { color: var(--dim); font-size: 0.9rem; }
 
-    html { scroll-behavior: smooth; }
+  figure { margin: 40px 0 0; }
+  figure img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; }
 
-    body {
-      background: var(--c-bg);
-      color: var(--c-text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      line-height: 1.6;
-      -webkit-font-smoothing: antialiased;
-      overflow-x: hidden;
-      position: relative;
-    }
+  pre.scheme {
+    background: var(--code);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    line-height: 1.25;
+    margin: 0 0 14px;
+  }
 
-    /* ---- Animated background layers ---- */
-    .bg-fx {
-      position: fixed;
-      inset: 0;
-      z-index: -2;
-      overflow: hidden;
-      pointer-events: none;
-    }
-    .blob {
-      position: absolute;
-      border-radius: 50%;
-      filter: blur(90px);
-      opacity: 0.5;
-      will-change: transform;
-    }
-    .blob.b1 {
-      width: 520px; height: 520px;
-      background: radial-gradient(circle, rgba(91,141,238,0.55), transparent 70%);
-      top: -160px; left: 50%;
-      transform: translateX(-50%);
-      animation: drift1 18s ease-in-out infinite;
-    }
-    .blob.b2 {
-      width: 420px; height: 420px;
-      background: radial-gradient(circle, rgba(245,72,31,0.40), transparent 70%);
-      top: 40%; left: -120px;
-      animation: drift2 22s ease-in-out infinite;
-    }
-    .blob.b3 {
-      width: 460px; height: 460px;
-      background: radial-gradient(circle, rgba(120,120,200,0.30), transparent 70%);
-      top: 55%; right: -140px;
-      animation: drift3 26s ease-in-out infinite;
-    }
-    @keyframes drift1 {
-      0%,100% { transform: translateX(-50%) translateY(0) scale(1); }
-      50%     { transform: translateX(-50%) translateY(60px) scale(1.12); }
-    }
-    @keyframes drift2 {
-      0%,100% { transform: translate(0,0) scale(1); }
-      50%     { transform: translate(80px,-50px) scale(1.18); }
-    }
-    @keyframes drift3 {
-      0%,100% { transform: translate(0,0) scale(1.05); }
-      50%     { transform: translate(-70px,40px) scale(0.9); }
-    }
+  table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 12px 10px 0; border-bottom: 1px solid var(--line); }
+  th { font-weight: 600; white-space: nowrap; }
+  td { color: var(--dim); }
+  .tag { font-size: 0.8rem; font-weight: 500; margin-left: 6px; }
+  .ok { color: #4ade80; }
+  .bad { color: #f87171; }
 
-    /* subtle moving grid */
-    .grid-fx {
-      position: fixed;
-      inset: -50%;
-      z-index: -1;
-      background-image:
-        linear-gradient(to right, rgba(91,141,238,0.05) 1px, transparent 1px),
-        linear-gradient(to bottom, rgba(91,141,238,0.05) 1px, transparent 1px);
-      background-size: 46px 46px;
-      mask-image: radial-gradient(circle at 50% 30%, #000 0%, transparent 65%);
-      -webkit-mask-image: radial-gradient(circle at 50% 30%, #000 0%, transparent 65%);
-      animation: gridpan 40s linear infinite;
-      pointer-events: none;
-    }
-    @keyframes gridpan {
-      from { background-position: 0 0; }
-      to   { background-position: 46px 46px; }
-    }
+  ol { padding-left: 1.4em; margin: 0; }
+  ol li { margin-bottom: 8px; }
+  ol li::marker { color: var(--dim); }
 
-    .wrap {
-      max-width: 920px;
-      margin: 0 auto;
-      padding: 0 24px;
-    }
+  .versions { font-family: var(--mono); }
 
-    a { color: var(--c-accent); text-decoration: none; }
-    a:hover { text-decoration: underline; }
+  footer { margin-top: 72px; padding-bottom: 40px; color: var(--dim); font-size: 0.9rem; }
+  footer div { padding-top: 20px; border-top: 1px solid var(--line); }
+  footer a { color: var(--dim); }
 
-    /* ---- Scroll reveal ---- */
-    .reveal {
-      opacity: 0;
-      transform: translateY(28px);
-      transition: opacity .7s cubic-bezier(.2,.7,.2,1), transform .7s cubic-bezier(.2,.7,.2,1);
-    }
-    .reveal.in {
-      opacity: 1;
-      transform: none;
-    }
-
-    /* ---- Hero ---- */
-    header.hero {
-      text-align: center;
-      padding: 96px 0 56px;
-    }
-
-    .logo {
-      width: 96px;
-      height: 96px;
-      margin: 0 auto 22px;
-      display: block;
-      filter: drop-shadow(0 6px 22px rgba(245, 72, 31, 0.45));
-      animation: floaty 5s ease-in-out infinite;
-    }
-    @keyframes floaty {
-      0%,100% { transform: translateY(0) rotate(-1deg); }
-      50%     { transform: translateY(-12px) rotate(1deg); }
-    }
-
-    .hero h1 {
-      font-size: 3rem;
-      font-weight: 800;
-      letter-spacing: -0.02em;
-      color: #fff;
-    }
-
-    .hero .tagline {
-      color: var(--c-muted);
-      font-size: 1.2rem;
-      margin-top: 10px;
-    }
-
-    /* ---- Version chips ---- */
-    .versions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      justify-content: center;
-      margin-top: 26px;
-    }
-    .chip {
-      background: var(--c-surface2);
-      border: 1px solid var(--c-border);
-      border-radius: 999px;
-      padding: 5px 14px;
-      font-size: 0.9rem;
-      color: var(--c-text);
-      font-variant-numeric: tabular-nums;
-      transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease, color .18s ease;
-      opacity: 0;
-      transform: translateY(12px) scale(.9);
-      animation: chipIn .5s cubic-bezier(.2,.7,.2,1) forwards;
-    }
-    .chip:hover {
-      transform: translateY(-3px) scale(1.05);
-      border-color: var(--c-accent);
-      color: #fff;
-      box-shadow: 0 6px 18px rgba(91,141,238,0.30);
-    }
-    @keyframes chipIn {
-      to { opacity: 1; transform: none; }
-    }
-    .chip:nth-child(1) { animation-delay: .15s; }
-    .chip:nth-child(2) { animation-delay: .25s; }
-    .chip:nth-child(3) { animation-delay: .35s; }
-    .chip:nth-child(4) { animation-delay: .45s; }
-    .chip:nth-child(5) { animation-delay: .55s; }
-
-    /* ---- CTA ---- */
-    .cta {
-      display: flex;
-      gap: 14px;
-      justify-content: center;
-      flex-wrap: wrap;
-      margin-top: 34px;
-    }
-    .btn {
-      position: relative;
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 13px 26px;
-      border-radius: 12px;
-      font-weight: 700;
-      font-size: 1.02rem;
-      border: 1px solid transparent;
-      overflow: hidden;
-      transition: transform .14s ease, background .15s ease, border-color .15s ease, box-shadow .15s ease;
-    }
-    /* shine sweep */
-    .btn::after {
-      content: "";
-      position: absolute;
-      top: 0; left: -130%;
-      width: 60%; height: 100%;
-      background: linear-gradient(100deg, transparent, rgba(255,255,255,0.35), transparent);
-      transform: skewX(-20deg);
-      transition: left .6s ease;
-    }
-    .btn:hover::after { left: 130%; }
-    .btn:hover { text-decoration: none; transform: translateY(-3px); }
-    .btn:active { transform: translateY(-1px) scale(.98); }
-    .btn-primary {
-      background: linear-gradient(120deg, var(--c-accent), #6f9bf0);
-      color: #fff;
-      box-shadow: 0 8px 24px rgba(91, 141, 238, 0.35);
-    }
-    .btn-primary:hover { box-shadow: 0 12px 32px rgba(91, 141, 238, 0.55); }
-    .btn-ghost {
-      background: var(--c-surface);
-      color: var(--c-text);
-      border-color: var(--c-border);
-    }
-    .btn-ghost:hover { background: var(--c-surface2); border-color: var(--c-accent); }
-
-    /* ---- Screenshot ---- */
-    .shot {
-      margin: 56px 0;
-      perspective: 1200px;
-    }
-    .shot img {
-      width: 100%;
-      height: auto;
-      display: block;
-      border-radius: 14px;
-      border: 1px solid var(--c-border);
-      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
-      transition: transform .4s cubic-bezier(.2,.7,.2,1), box-shadow .4s ease;
-    }
-    .shot:hover img {
-      transform: rotateX(4deg) translateY(-6px) scale(1.01);
-      box-shadow: 0 36px 80px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(91,141,238,0.4);
-    }
-
-    /* ---- Sections ---- */
-    section { padding: 28px 0; }
-    h2 {
-      font-size: 1.6rem;
-      font-weight: 700;
-      margin-bottom: 22px;
-      letter-spacing: -0.01em;
-      position: relative;
-      display: inline-block;
-    }
-    h2::after {
-      content: "";
-      position: absolute;
-      left: 0; bottom: -6px;
-      height: 3px; width: 0;
-      border-radius: 3px;
-      background: linear-gradient(90deg, var(--c-accent), #6f9bf0);
-      transition: width .8s cubic-bezier(.2,.7,.2,1);
-    }
-    h2.in::after { width: 100%; }
-
-    .cards {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 18px;
-    }
-    .card {
-      position: relative;
-      background: var(--c-surface);
-      border: 1px solid var(--c-border);
-      border-radius: 14px;
-      padding: 22px 24px;
-      overflow: hidden;
-      transition: transform .25s ease, border-color .25s ease, box-shadow .25s ease;
-    }
-    /* glow follows cursor */
-    .card::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      border-radius: inherit;
-      background: radial-gradient(260px circle at var(--mx,50%) var(--my,0%), rgba(91,141,238,0.16), transparent 60%);
-      opacity: 0;
-      transition: opacity .3s ease;
-      pointer-events: none;
-    }
-    .card:hover {
-      transform: translateY(-5px);
-      border-color: rgba(91,141,238,0.5);
-      box-shadow: 0 18px 40px rgba(0,0,0,0.4);
-    }
-    .card:hover::before { opacity: 1; }
-    .card h3 {
-      font-size: 1.18rem;
-      margin-bottom: 8px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-    .card .badge {
-      font-size: 0.72rem;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: var(--c-accent);
-      background: rgba(91, 141, 238, 0.12);
-      border-radius: 6px;
-      padding: 2px 8px;
-    }
-    .card p { color: var(--c-muted); }
-    .card .note {
-      margin-top: 12px;
-      color: var(--c-warn);
-      font-size: 0.92rem;
-    }
-
-    /* ---- Install steps ---- */
-    ol.steps {
-      list-style: none;
-      counter-reset: step;
-      display: grid;
-      gap: 12px;
-    }
-    ol.steps li {
-      counter-increment: step;
-      position: relative;
-      background: var(--c-surface);
-      border: 1px solid var(--c-border);
-      border-radius: 12px;
-      padding: 16px 20px 16px 62px;
-      transition: transform .2s ease, border-color .2s ease;
-    }
-    ol.steps li:hover {
-      transform: translateX(6px);
-      border-color: rgba(91,141,238,0.5);
-    }
-    ol.steps li::before {
-      content: counter(step);
-      position: absolute;
-      left: 16px;
-      top: 50%;
-      transform: translateY(-50%);
-      width: 30px;
-      height: 30px;
-      border-radius: 50%;
-      background: linear-gradient(135deg, var(--c-accent), #6f9bf0);
-      color: #fff;
-      font-weight: 700;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      box-shadow: 0 4px 12px rgba(91,141,238,0.4);
-    }
-    ol.steps li:hover::before {
-      animation: pulse 1.2s ease-in-out infinite;
-    }
-    @keyframes pulse {
-      0%,100% { box-shadow: 0 4px 12px rgba(91,141,238,0.4); }
-      50%     { box-shadow: 0 4px 22px rgba(91,141,238,0.8); }
-    }
-    ol.steps code {
-      background: var(--c-surface2);
-      border: 1px solid var(--c-border);
-      border-radius: 6px;
-      padding: 1px 6px;
-      font-size: 0.9em;
-    }
-
-    /* ---- Footer ---- */
-    footer {
-      border-top: 1px solid var(--c-border);
-      margin-top: 56px;
-      padding: 32px 0 56px;
-      text-align: center;
-      color: var(--c-muted);
-      font-size: 0.92rem;
-    }
-    footer a { color: var(--c-muted); transition: color .2s ease; }
-    footer a:hover { color: var(--c-accent); }
-    footer .sep { opacity: 0.4; margin: 0 8px; }
-
-    @media (max-width: 640px) {
-      .hero { padding: 64px 0 40px; }
-      .hero h1 { font-size: 2.2rem; }
-      .cards { grid-template-columns: 1fr; }
-    }
-
-    /* ---- Respect reduced motion ---- */
-    @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after {
-        animation: none !important;
-        transition: none !important;
-      }
-      .reveal { opacity: 1; transform: none; }
-      .chip { opacity: 1; transform: none; }
-      h2::after { width: 100%; }
-    }
-  </style>
+  @media (max-width: 560px) {
+    h1 { font-size: 1.6rem; margin-top: 28px; }
+    .top nav { gap: 12px; }
+    th { white-space: normal; }
+  }
+</style>
 </head>
 <body>
-  <div class="bg-fx" aria-hidden="true">
-    <div class="blob b1"></div>
-    <div class="blob b2"></div>
-    <div class="blob b3"></div>
-  </div>
-  <div class="grid-fx" aria-hidden="true"></div>
 
-  <header class="hero">
-    <div class="wrap">
-      <img class="logo" src="icon.png" alt="VoxelProxy" />
-      <h1>VoxelProxy</h1>
-      <p class="tagline">Два клиента под одним ником на одном сервере</p>
+<header class="top">
+  <img src="icon.png" alt="">
+  <b>VoxelProxy</b>
+  <nav>
+    <a href="https://github.com/kauri-off/voxelproxy/blob/master/CHANGELOG.md">Изменения</a>
+    <a href="https://github.com/kauri-off/voxelproxy">GitHub</a>
+  </nav>
+</header>
 
-      <div class="versions">
-        <span class="chip">1.16.5</span>
-        <span class="chip">1.20.1</span>
-        <span class="chip">1.21.4</span>
-        <span class="chip">1.21.8</span>
-        <span class="chip">1.21.11</span>
-      </div>
+<main>
+  <h1>Два клиента Minecraft под одним ником на одном сервере</h1>
+  <p class="lead">Локальный прокси: сервер видит одного игрока, а управлять им можно с любого из двух клиентов и переключаться без перезахода.</p>
 
-      <div class="cta">
-        <a class="btn btn-primary" href="https://github.com/kauri-off/voxelproxy/releases/latest">Скачать для Windows</a>
-        <a class="btn btn-ghost" href="https://github.com/kauri-off/voxelproxy">GitHub</a>
-      </div>
-    </div>
-  </header>
-
-  <div class="wrap">
-    <div class="shot reveal">
-      <img src="gui.png" alt="Интерфейс VoxelProxy" />
-    </div>
-
-    <section>
-      <h2 class="reveal">Что это?</h2>
-      <p class="reveal" style="color:var(--c-muted); max-width:680px;">
-        VoxelProxy — это локальный прокси для Minecraft. Он позволяет держать
-        <strong style="color:var(--c-text)">одно подключение к серверу под одним ником</strong>,
-        но управлять им сразу с двух игровых сессий. Оба клиента подключаются не
-        напрямую к серверу, а к прокси на вашем компьютере, и тот держит единое
-        соединение с сервером. Для самого сервера это выглядит как один обычный
-        игрок — он не видит, что за ником стоят два клиента.
-      </p>
-      <p class="reveal" style="color:var(--c-muted); max-width:680px; margin-top:14px;">
-        Активной в каждый момент остаётся одна сессия — та, что управляет
-        персонажем. Вторая ждёт наготове. Переключение между ними происходит
-        <strong style="color:var(--c-text)">без выхода с сервера</strong>: персонаж
-        не выпадает из игры, не телепортируется в спавн и не теряет очередь.
-      </p>
-    </section>
-
-    <section>
-      <h2 class="reveal">Зачем это нужно</h2>
-      <div class="cards">
-        <div class="card reveal">
-          <h3>Два компьютера — одна игра</h3>
-          <p>
-            Заходите на сервер с основного ПК, а в нужный момент перехватываете
-            того же персонажа со второго — ноутбука, рабочего компьютера или
-            устройства в той же сети. Аккаунт при этом остаётся онлайн.
-          </p>
-        </div>
-        <div class="card reveal">
-          <h3>Прохождение проверок на читы</h3>
-          <p>
-            Держите чистый клиент на втором компьютере отдельно от основного.
-            Когда зовут на проверку, переключаетесь на чистую сессию
-            и показываете её — персонаж при этом не выходит с сервера.
-          </p>
-        </div>
-        <div class="card reveal">
-          <h3>Работает локально</h3>
-          <p>
-            Весь трафик идёт через прокси на вашем компьютере, без сторонних
-            серверов и посредников. Поддерживаются как лицензионные, так и
-            пиратские серверы.
-          </p>
-        </div>
-      </div>
-    </section>
-
-    <section>
-      <h2 class="reveal">Установка</h2>
-      <ol class="steps">
-        <li class="reveal">Скачайте <code>voxelproxy_x.x.x_x64_ru-RU.msi</code> из <a href="https://github.com/kauri-off/voxelproxy/releases/latest">Releases</a>.</li>
-        <li class="reveal">Установите и запустите приложение (для режима «Авто» — от администратора).</li>
-        <li class="reveal">Выберите режим — «Авто», если этот ПК раздаёт Wi-Fi, или «Ручной» с адресом сервера.</li>
-        <li class="reveal">Нажмите «Запустить» и подключите оба клиента по показанному адресу.</li>
-      </ol>
-    </section>
+  <div class="dl">
+    <a class="btn" href="https://github.com/kauri-off/voxelproxy/releases/latest">Скачать для Windows</a>
+    <span class="meta">.msi, x64 · бесплатно, GPL-3.0</span>
   </div>
 
-  <footer>
-    <div class="wrap">
-      <a href="https://github.com/kauri-off/voxelproxy">Исходный код</a>
-      <span class="sep">·</span>
-      <a href="https://github.com/kauri-off/voxelproxy/blob/master/LICENSE">Лицензия GPL-3.0</a>
-    </div>
-  </footer>
+  <figure>
+    <img src="gui.png" width="1226" height="900" alt="Главное окно VoxelProxy: выбор режима и список шагов перед запуском">
+  </figure>
 
-  <script>
-    // Scroll-reveal with stagger per group
-    const io = new IntersectionObserver((entries) => {
-      entries.forEach((e) => {
-        if (e.isIntersecting) {
-          e.target.classList.add('in');
-          io.unobserve(e.target);
-        }
-      });
-    }, { threshold: 0.15 });
+  <h2>Как это работает</h2>
+<pre class="scheme">клиент 1 ──┐
+           ├──  VoxelProxy  ──  сервер
+клиент 2 ──┘</pre>
+  <p>Оба клиента подключаются к прокси, а прокси держит одно соединение с сервером. В каждый момент персонажем управляет один клиент, второй ждёт. При переключении персонаж остаётся на сервере: не выходит, не попадает на спавн и не теряет место в очереди.</p>
+  <p>Например, играете с основного ПК, а когда вызывают на проверку, показываете чистый клиент со второго устройства. Игровой трафик идёт только через ваш компьютер. Работает на лицензионных и пиратских серверах.</p>
 
-    document.querySelectorAll('.reveal, h2').forEach((el, i) => {
-      el.style.transitionDelay = (Math.min(i % 4, 3) * 80) + 'ms';
-      io.observe(el);
-    });
+  <h2>Режимы</h2>
+  <table>
+    <tr>
+      <th>Через раздачу Wi-Fi <span class="tag ok">рекомендуется</span></th>
+      <td>Этот ПК раздаёт Wi-Fi («Мобильный хот-спот»), второе устройство подключено к нему. Нужен запуск от администратора.</td>
+    </tr>
+    <tr>
+      <th>Ручной <span class="tag bad">детектится</span></th>
+      <td>Оба клиента заходят на адрес этого ПК в локальной сети. Проще настроить, но сервер может это заметить.</td>
+    </tr>
+  </table>
 
-    // Cursor-follow glow on cards
-    document.querySelectorAll('.card').forEach((card) => {
-      card.addEventListener('pointermove', (ev) => {
-        const r = card.getBoundingClientRect();
-        card.style.setProperty('--mx', (ev.clientX - r.left) + 'px');
-        card.style.setProperty('--my', (ev.clientY - r.top) + 'px');
-      });
-    });
-  </script>
+  <h2>Установка</h2>
+  <ol>
+    <li>Скачайте <code>voxelproxy_x.x.x_x64_ru-RU.msi</code> со <a href="https://github.com/kauri-off/voxelproxy/releases/latest">страницы релиза</a> и установите.</li>
+    <li>Запустите от имени администратора и выберите режим.</li>
+    <li>Пройдите список шагов на экране и нажмите «Запустить».</li>
+    <li>Зайдите на адрес, который покажет приложение: сначала с основного клиента, потом со второго.</li>
+  </ol>
+  <p style="margin-top:14px">Если что-то не работает, в приложении есть раздел «Если что-то пошло не так» и кнопка «Поддержка»: ответ придёт прямо в окно программы.</p>
+
+  <h2>Версии Minecraft</h2>
+  <p class="versions">1.16.5 · 1.20.1 · 1.21.4 · 1.21.8 · 1.21.11</p>
+</main>
+
+<footer><div>
+  <a href="https://github.com/kauri-off/voxelproxy">Исходный код</a> ·
+  <a href="https://github.com/kauri-off/voxelproxy/blob/master/LICENSE">GPL-3.0</a>
+</div></footer>
+
 </body>
 </html>
