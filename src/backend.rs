@@ -61,7 +61,7 @@ impl Backend {
         let events = self.events.clone();
         let panic_mode = self.panic_mode.clone();
         self.start_session(async move {
-            session::run_automatic_mode(use_windivert, port_min, port_max, events, panic_mode).await
+            session::run_auto_mode(use_windivert, port_min, port_max, events, panic_mode).await
         });
     }
 
@@ -147,15 +147,38 @@ pub fn is_windows() -> bool {
     cfg!(windows)
 }
 
+#[cfg(windows)]
 pub fn is_elevated() -> bool {
-    #[cfg(windows)]
-    {
-        crate::hotspot_redirect::is_admin()
+    use windows::Win32::{
+        Foundation::{CloseHandle, HANDLE},
+        Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation},
+        System::Threading::{GetCurrentProcess, OpenProcessToken},
+    };
+
+    unsafe {
+        let mut token = HANDLE::default();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+            return false;
+        }
+
+        let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+        let mut return_length = 0u32;
+        let result = GetTokenInformation(
+            token,
+            TokenElevation,
+            Some(&mut elevation as *mut _ as *mut _),
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut return_length,
+        );
+
+        let _ = CloseHandle(token);
+        result.is_ok() && elevation.TokenIsElevated != 0
     }
-    #[cfg(not(windows))]
-    {
-        true
-    }
+}
+
+#[cfg(not(windows))]
+pub fn is_elevated() -> bool {
+    true
 }
 
 pub fn open_url(url: &str) {
