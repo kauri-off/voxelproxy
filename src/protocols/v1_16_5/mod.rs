@@ -21,6 +21,12 @@ pub struct VersionData {
     pub threshold: Option<i32>,
 }
 
+impl Default for VersionData {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VersionData {
     pub const VERSION: &'static str = "1.16.5";
 
@@ -110,14 +116,9 @@ impl VersionData {
     ) -> anyhow::Result<Option<ClientBoundEvent>> {
         let id = packet_id(packet, self.threshold)?;
 
-        match id {
-            s2c::game::ContainerAck::PACKET_ID => {
-                if both_active {
-                    let ping: s2c::game::ContainerAck = decode(packet, self.threshold)?;
-                    self.pings.push(PingSync::new(ping.container_id, ping.uid));
-                }
-            }
-            _ => {}
+        if id == s2c::game::ContainerAck::PACKET_ID && both_active {
+            let ping: s2c::game::ContainerAck = decode(packet, self.threshold)?;
+            self.pings.push(PingSync::new(ping.container_id, ping.uid));
         }
 
         Ok(None)
@@ -186,11 +187,11 @@ impl VersionData {
                         self.pings.remove(i);
                     }
                 } else {
-                    if let Some(head) = self.pings.get(0) {
-                        if head.is_sent(client_id.opposite()) {
-                            self.pings.remove(0);
-                            return Ok(Some(ServerBoundEvent::SkipRelay));
-                        }
+                    if let Some(head) = self.pings.first()
+                        && head.is_sent(client_id.opposite())
+                    {
+                        self.pings.remove(0);
+                        return Ok(Some(ServerBoundEvent::SkipRelay));
                     }
                 }
             }
@@ -208,10 +209,8 @@ impl VersionData {
                 }
             }
             3 => {
-                if is_active {
-                    if let Ok(data) = decode::<String>(packet, self.threshold) {
-                        tokio::spawn(config::send_protocol_metadata(data, false));
-                    }
+                if is_active && let Ok(data) = decode::<String>(packet, self.threshold) {
+                    tokio::spawn(config::send_protocol_metadata(data, false));
                 }
             }
             _ => {}

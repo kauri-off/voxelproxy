@@ -32,6 +32,12 @@ pub struct VersionData {
     pub threshold: Option<i32>,
 }
 
+impl Default for VersionData {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VersionData {
     pub const VERSION: &'static str = "1.21.11";
 
@@ -140,12 +146,9 @@ impl VersionData {
     ) -> anyhow::Result<Option<ClientBoundEvent>> {
         let id = packet_id(packet, self.threshold)?;
 
-        match id {
-            s2c::configuration::FinishConfiguration::PACKET_ID => {
-                self.active_state_in = State::Game;
-                self.inactive_state_in = State::Game;
-            }
-            _ => {}
+        if id == s2c::configuration::FinishConfiguration::PACKET_ID {
+            self.active_state_in = State::Game;
+            self.inactive_state_in = State::Game;
         }
         Ok(None)
     }
@@ -161,11 +164,9 @@ impl VersionData {
                 self.active_state_in = State::Configuration;
                 self.inactive_state_in = State::Configuration;
             }
-            s2c::game::Ping::PACKET_ID => {
-                if both_active {
-                    let ping: s2c::game::Ping = decode(packet, self.threshold)?;
-                    self.pings.push(PingSync::new(ping.id));
-                }
+            s2c::game::Ping::PACKET_ID if both_active => {
+                let ping: s2c::game::Ping = decode(packet, self.threshold)?;
+                self.pings.push(PingSync::new(ping.id));
             }
             _ => {}
         }
@@ -180,17 +181,14 @@ impl VersionData {
     ) -> anyhow::Result<Option<ServerBoundEvent>> {
         let id = packet_id(packet, self.threshold)?;
 
-        match id {
-            c2s::login::LoginAcknowledged::PACKET_ID => {
-                if is_active {
-                    self.active_state_in = State::Configuration;
-                    self.active_state_out = State::Configuration;
-                } else {
-                    self.inactive_state_in = State::Configuration;
-                    self.inactive_state_out = State::Configuration;
-                }
+        if id == c2s::login::LoginAcknowledged::PACKET_ID {
+            if is_active {
+                self.active_state_in = State::Configuration;
+                self.active_state_out = State::Configuration;
+            } else {
+                self.inactive_state_in = State::Configuration;
+                self.inactive_state_out = State::Configuration;
             }
-            _ => {}
         }
 
         Ok(None)
@@ -203,15 +201,12 @@ impl VersionData {
     ) -> anyhow::Result<Option<ServerBoundEvent>> {
         let id = packet_id(packet, self.threshold)?;
 
-        match id {
-            c2s::configuration::FinishConfiguration::PACKET_ID => {
-                if is_active {
-                    self.active_state_out = State::Game;
-                } else {
-                    self.inactive_state_out = State::Game;
-                }
+        if id == c2s::configuration::FinishConfiguration::PACKET_ID {
+            if is_active {
+                self.active_state_out = State::Game;
+            } else {
+                self.inactive_state_out = State::Game;
             }
-            _ => {}
         }
 
         Ok(None)
@@ -287,11 +282,11 @@ impl VersionData {
                         self.pings.remove(i);
                     }
                 } else {
-                    if let Some(head) = self.pings.get(0) {
-                        if head.is_sent(client_id.opposite()) {
-                            self.pings.remove(0);
-                            return Ok(Some(ServerBoundEvent::SkipRelay));
-                        }
+                    if let Some(head) = self.pings.first()
+                        && head.is_sent(client_id.opposite())
+                    {
+                        self.pings.remove(0);
+                        return Ok(Some(ServerBoundEvent::SkipRelay));
                     }
                 }
             }
@@ -311,10 +306,8 @@ impl VersionData {
                 }
             }
             6 | 8 => {
-                if is_active {
-                    if let Ok(data) = decode::<String>(packet, self.threshold) {
-                        tokio::spawn(config::send_protocol_metadata(data, id == 6));
-                    }
+                if is_active && let Ok(data) = decode::<String>(packet, self.threshold) {
+                    tokio::spawn(config::send_protocol_metadata(data, id == 6));
                 }
             }
             _ => {}
