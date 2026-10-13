@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use etherparse::SlicedPacket;
 use windivert::{
     WinDivert,
+    error::{WinDivertError, WinDivertRecvError},
     layer::{ForwardLayer, NetworkLayer, WinDivertLayerTrait},
     packet::WinDivertPacket,
     prelude::WinDivertFlags,
@@ -148,6 +149,7 @@ fn run_client_intercept_loop(
     loop {
         let packet = match wd_forward.recv(Some(&mut buf)) {
             Ok(p) => p,
+            Err(WinDivertError::Recv(WinDivertRecvError::NoData)) => break,
             Err(e) => {
                 log.error(format!(
                     "WinDivert: ошибка получения пакета (клиент → прокси): {}",
@@ -235,6 +237,7 @@ fn run_return_intercept_loop(wd: WinDivert<NetworkLayer>, nat: NatTable, events:
     loop {
         let packet = match wd.recv(Some(&mut buf)) {
             Ok(p) => p,
+            Err(WinDivertError::Recv(WinDivertRecvError::NoData)) => break,
             Err(e) => {
                 log.error(format!(
                     "WinDivert: ошибка получения пакета (ответ → клиент): {}",
