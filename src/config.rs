@@ -204,3 +204,27 @@ pub async fn list_developer_messages() -> anyhow::Result<Vec<ChatMessage>> {
     messages.sort_by_key(|m| m.created_at_ms);
     Ok(messages)
 }
+
+pub struct LatestRelease {
+    pub version: String,
+    pub download_url: String,
+}
+
+pub async fn latest_release() -> anyhow::Result<LatestRelease> {
+    let mut client = client().ok_or_else(|| anyhow::anyhow!("сервер не настроен"))?;
+    let request = GetLatestReleaseRequest {
+        client: Some(client_info()),
+    };
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        client.get_latest_release(request),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("таймаут"))?
+    .map_err(|status| anyhow::anyhow!("{}", status.message()))?
+    .into_inner();
+    Ok(LatestRelease {
+        version: response.version,
+        download_url: response.download_url,
+    })
+}

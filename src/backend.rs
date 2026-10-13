@@ -116,11 +116,12 @@ impl Backend {
     }
 
     pub fn check_updates(&self) -> JoinHandle<Result<Option<UpdateInfo>, String>> {
-        self.spawn(async {
+        let log = Logger::new(&self.events);
+        self.spawn(async move {
             if cfg!(debug_assertions) || !cfg!(windows) {
                 return Ok(None);
             }
-            crate::updater::has_update(env!("CARGO_PKG_VERSION"))
+            crate::updater::has_update(env!("CARGO_PKG_VERSION"), &log)
                 .await
                 .map_err(|e| e.to_string())
         })
