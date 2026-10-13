@@ -2,14 +2,21 @@ use reqwest::{
     Client,
     header::{HeaderMap, HeaderValue},
 };
+use semver::Version;
 use serde_json::Value;
+use std::time::Duration;
 
-use crate::events::EventSink;
+use crate::{events::EventSink, logger::Logger};
 
 #[derive(Debug, Clone)]
 pub struct NewVersion {
     pub tag: String,
     pub link: String,
+}
+
+struct Release {
+    version: Version,
+    link: String,
 }
 
 fn build_github_headers() -> HeaderMap {
@@ -26,14 +33,30 @@ fn build_github_headers() -> HeaderMap {
     headers
 }
 
-pub async fn has_update(current_version: &str) -> anyhow::Result<Option<NewVersion>> {
+fn parse_version(raw: &str) -> anyhow::Result<Version> {
+    let stripped = raw.strip_prefix('v').unwrap_or(raw);
+    Version::parse(stripped).map_err(|e| anyhow::anyhow!("некорректная версия {raw:?}: {e}"))
+}
+
+async fn server_release() -> anyhow::Result<Release> {
+    let release = crate::config::latest_release().await?;
+    if release.download_url.is_empty() {
+        anyhow::bail!("сервер не вернул ссылку на установщик");
+    }
+    Ok(Release {
+        version: parse_version(&release.version)?,
+        link: release.download_url,
+    })
+}
+
+async fn github_release() -> anyhow::Result<Release> {
     if env!("UPDATE_URL").is_empty() {
-        return Ok(None);
+        anyhow::bail!("UPDATE_URL не задан");
     }
 
-    let client = Client::new();
-
-    let release: Value = client
+    let release: Value = Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()?
         .get(env!("UPDATE_URL"))
         .headers(build_github_headers())
         .send()
@@ -42,27 +65,54 @@ pub async fn has_update(current_version: &str) -> anyhow::Result<Option<NewVersi
         .json()
         .await?;
 
-    let latest_version = release
+    let tag = release
         .get("tag_name")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("Missing or invalid 'tag_name' field"))?;
 
-    let latest_stripped = latest_version.strip_prefix('v').unwrap_or(latest_version);
-    if latest_stripped == current_version {
-        return Ok(None);
-    }
-
-    let download_url = release
+    let link = release
         .get("assets")
         .and_then(Value::as_array)
-        .and_then(|assets| assets.first())
+        .and_then(|assets| {
+            assets.iter().find(|asset| {
+                asset
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|name| name.to_ascii_lowercase().ends_with(".msi"))
+            })
+        })
         .and_then(|asset| asset.get("browser_download_url"))
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("Missing or invalid asset download URL"))?;
 
-    Ok(Some(NewVersion {
-        tag: latest_version.to_string(),
-        link: download_url.to_string(),
+    Ok(Release {
+        version: parse_version(tag)?,
+        link: link.to_string(),
+    })
+}
+
+/// Asks the update server first and falls back to GitHub; fails only if both fail.
+pub async fn has_update(current_version: &str, log: &Logger) -> anyhow::Result<Option<NewVersion>> {
+    if env!("TELEMETRY_URL").is_empty() && env!("UPDATE_URL").is_empty() {
+        return Ok(None);
+    }
+
+    let current = parse_version(current_version)?;
+    let release = match server_release().await {
+        Ok(release) => release,
+        Err(server_err) => {
+            log.warn(format!(
+                "Сервер обновлений недоступен ({server_err}), проверяю через GitHub"
+            ));
+            github_release().await.map_err(|github_err| {
+                anyhow::anyhow!("сервер обновлений: {server_err}; GitHub: {github_err}")
+            })?
+        }
+    };
+
+    Ok((release.version > current).then(|| NewVersion {
+        tag: format!("v{}", release.version),
+        link: release.link,
     }))
 }
 

@@ -11,6 +11,8 @@ service Worker {
   rpc SendDeveloperMessage (SendDeveloperMessageRequest) returns (SendDeveloperMessageResponse);
   // Returns the whole support conversation of `client.install_id`, oldest first.
   rpc ListDeveloperMessages (ListDeveloperMessagesRequest) returns (ListDeveloperMessagesResponse);
+  // Latest published release; NOT_FOUND when none is published yet.
+  rpc GetLatestRelease (GetLatestReleaseRequest) returns (GetLatestReleaseResponse);
 }
 
 message ClientInfo {
@@ -83,4 +85,14 @@ message ListDeveloperMessagesRequest {
 }
 message ListDeveloperMessagesResponse {
   repeated DeveloperMessage messages = 1;
+}
+
+message GetLatestReleaseRequest {
+  ClientInfo client = 1;
+}
+message GetLatestReleaseResponse {
+  // Semver without the leading "v", e.g. "7.0.2".
+  string version = 1;
+  // Direct link to the MSI installer.
+  string download_url = 2;
 }
