@@ -309,7 +309,8 @@ async fn serve_auto_pair(
 ) -> anyhow::Result<()> {
     let log = Logger::new(&events);
     let mut pair: JoinSet<anyhow::Result<()>> = JoinSet::new();
-    let mut connections: JoinSet<anyhow::Result<()>> = JoinSet::new();
+    let mut checks: JoinSet<anyhow::Result<()>> = JoinSet::new();
+    let mut rejections: JoinSet<()> = JoinSet::new();
     let mut pending: Option<LoginClient> = None;
     let mut paired = false;
 
@@ -318,19 +319,21 @@ async fn serve_auto_pair(
             Client(Option<LoginClient>),
             SecondaryGone,
             PairFinished(Result<anyhow::Result<()>, tokio::task::JoinError>),
-            ConnectionFinished(Result<anyhow::Result<()>, tokio::task::JoinError>),
+            CheckFinished(Result<anyhow::Result<()>, tokio::task::JoinError>),
+            Rejected,
         }
         let step = tokio::select! {
             recv = rx.recv() => Step::Client(recv),
             _ = wait_for_pending(&mut pending) => Step::SecondaryGone,
             Some(res) = pair.join_next() => Step::PairFinished(res),
-            Some(res) = connections.join_next() => Step::ConnectionFinished(res),
+            Some(res) = checks.join_next() => Step::CheckFinished(res),
+            Some(_) = rejections.join_next() => Step::Rejected,
         };
         let client = match step {
             Step::PairFinished(res) => {
                 let res =
                     res.unwrap_or_else(|_| Err(anyhow::anyhow!("Сессия аварийно завершилась")));
-                if connections.is_empty() {
+                if checks.is_empty() {
                     return res;
                 }
                 if let Err(e) = res {
@@ -339,11 +342,12 @@ async fn serve_auto_pair(
                 log.info("Сессия завершится, когда закончатся подключения режима проверки");
                 continue;
             }
-            Step::ConnectionFinished(res) => {
+            Step::Rejected => continue,
+            Step::CheckFinished(res) => {
                 if let Ok(Err(e)) = res {
                     log.error(e.to_string());
                 }
-                if paired && pair.is_empty() && connections.is_empty() {
+                if paired && pair.is_empty() && checks.is_empty() {
                     return Ok(());
                 }
                 continue;
@@ -359,7 +363,7 @@ async fn serve_auto_pair(
         };
 
         if check_mode.load(Ordering::Relaxed) {
-            connections.spawn(run_check_mode(client));
+            checks.spawn(run_check_mode(client));
             continue;
         }
         if paired {
@@ -371,9 +375,8 @@ async fn serve_auto_pair(
                  Дождитесь её окончания и запустите новую в приложении VoxelProxy."
             };
             let mut stream = client.stream;
-            connections.spawn(async move {
+            rejections.spawn(async move {
                 crate::proxy::send_login_disconnect(&mut stream, reason.to_string()).await;
-                Ok(())
             });
             continue;
         }
@@ -381,7 +384,7 @@ async fn serve_auto_pair(
         if pending.is_none() && client.is_loopback {
             log.warn("Клиент подключился к 127.0.0.1 раньше второго клиента — отклонён");
             let mut stream = client.stream;
-            connections.spawn(async move {
+            rejections.spawn(async move {
                 crate::proxy::send_login_disconnect(
                     &mut stream,
                     "Неправильный порядок подключения.\n\n\
@@ -391,7 +394,6 @@ async fn serve_auto_pair(
                         .to_string(),
                 )
                 .await;
-                Ok(())
             });
             continue;
         }
@@ -435,6 +437,7 @@ mod tests {
             login_start: UncompressedPacket::new(0, vec![])
                 .to_raw_packet_compressed(None)
                 .unwrap(),
+            is_loopback: false,
         };
         (client, peer)
     }
@@ -473,7 +476,6 @@ mod tests {
         expect_login_disconnect(&mut primary_peer).await;
     }
 
-    #[cfg(not(target_os = "windows"))]
     #[tokio::test]
     async fn auto_mode_serves_one_pair_and_outlives_it_for_check_mode() {
         let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
