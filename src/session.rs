@@ -325,7 +325,7 @@ async fn run_auto_session(
     .await
 }
 
-pub async fn run_panic_mode(mut client: LoginClient) -> anyhow::Result<()> {
+pub async fn run_check_mode(mut client: LoginClient) -> anyhow::Result<()> {
     let remote_addr = match resolve_host_port(
         &client.server_host,
         client.server_port,
@@ -364,7 +364,7 @@ pub async fn run_auto_mode(
     port_min: u16,
     port_max: u16,
     events: EventSink,
-    panic_mode: Arc<AtomicBool>,
+    check_mode: Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
     let log = Logger::new(&events);
     use crate::hotspot_redirect;
@@ -429,8 +429,8 @@ pub async fn run_auto_mode(
             Step::Client(None) => break,
         };
 
-        if panic_mode.load(Ordering::Relaxed) {
-            session_set.spawn(run_panic_mode(client));
+        if check_mode.load(Ordering::Relaxed) {
+            session_set.spawn(run_check_mode(client));
             continue;
         }
         if pending.is_none() && is_loopback_host(&client.server_host) {
@@ -470,7 +470,7 @@ pub async fn run_auto_mode(
     _port_min: u16,
     _port_max: u16,
     events: EventSink,
-    panic_mode: Arc<AtomicBool>,
+    check_mode: Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(format!("0.0.0.0:{}", BIND_PORT)).await?;
 
@@ -509,8 +509,8 @@ pub async fn run_auto_mode(
             Step::Client(None) => break,
         };
 
-        if panic_mode.load(Ordering::Relaxed) {
-            session_set.spawn(run_panic_mode(client));
+        if check_mode.load(Ordering::Relaxed) {
+            session_set.spawn(run_check_mode(client));
             continue;
         }
         match pending.take() {
