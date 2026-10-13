@@ -403,22 +403,30 @@ pub async fn run_auto_mode(
     let mut pending: Option<LoginClient> = None;
 
     loop {
-        while session_set.try_join_next().is_some() {}
-
         // Receive the next client; while a secondary is pending, also watch its
         // socket so we notice if it disconnects before the primary connects.
         enum Step {
             Client(Option<LoginClient>),
             SecondaryGone,
+            Finished(Result<anyhow::Result<()>, tokio::task::JoinError>),
         }
         let step = match pending.as_mut() {
             Some(sec) => tokio::select! {
                 recv = rx.recv() => Step::Client(recv),
                 _ = wait_for_disconnect(&mut sec.stream) => Step::SecondaryGone,
+                Some(res) = session_set.join_next() => Step::Finished(res),
             },
-            None => Step::Client(rx.recv().await),
+            None => tokio::select! {
+                recv = rx.recv() => Step::Client(recv),
+                Some(res) = session_set.join_next() => Step::Finished(res),
+            },
         };
         let mut client = match step {
+            Step::Finished(Ok(Err(e))) => {
+                log.error(e.to_string());
+                continue;
+            }
+            Step::Finished(_) => continue,
             Step::SecondaryGone => {
                 log.warn("Второй клиент отключился, не дождавшись основного");
                 events.client_status(WhichClient::Secondary, false);
