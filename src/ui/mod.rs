@@ -111,6 +111,10 @@ pub enum UpdateState {
         info: UpdateInfo,
         progress: Option<f32>,
     },
+    Verifying {
+        info: UpdateInfo,
+        waited_secs: u64,
+    },
     DownloadFailed {
         info: UpdateInfo,
         error: String,
@@ -361,6 +365,16 @@ impl AppView {
                         (total > 0).then(|| (downloaded as f32 / total as f32 * 100.0).min(100.0));
                 }
             }
+            AppEvent::UpdateVerifying { waited_secs } => {
+                if let UpdateState::Downloading { info, .. } | UpdateState::Verifying { info, .. } =
+                    &self.update
+                {
+                    self.update = UpdateState::Verifying {
+                        info: info.clone(),
+                        waited_secs,
+                    };
+                }
+            }
         }
         cx.notify();
     }
@@ -526,7 +540,9 @@ impl AppView {
         };
         cx.notify();
 
-        let job = self.backend.download_and_install_update(info.link.clone());
+        let job = self
+            .backend
+            .download_and_install_update(info.link.clone(), info.tag.clone());
         cx.spawn(async move |this, cx| {
             let result = job.await.map_err(|e| e.to_string()).and_then(|r| r);
             let _ = this.update(cx, |this, cx| match result {
