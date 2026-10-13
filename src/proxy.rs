@@ -77,16 +77,19 @@ pub async fn read_with_timeout<R: AsyncRead + Unpin>(
 
 /// Accepts connections forever; transient accept errors (fd exhaustion, aborted
 /// handshakes) are retried instead of silently ending the listener.
+/// Connection tasks are owned by the loop and get aborted when it is dropped.
 async fn accept_loop<F, Fut>(listener: TcpListener, mut handle: F)
 where
     F: FnMut(TcpStream) -> Fut,
     Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
 {
+    let mut connections = JoinSet::new();
     loop {
+        while connections.try_join_next().is_some() {}
         match listener.accept().await {
             Ok((stream, _addr)) => {
                 tune(&stream);
-                tokio::spawn(handle(stream));
+                connections.spawn(handle(stream));
             }
             Err(_) => tokio::time::sleep(ACCEPT_RETRY_DELAY).await,
         }
@@ -432,6 +435,34 @@ mod tests {
             events,
             events_rx,
         )
+    }
+
+    #[tokio::test]
+    async fn aborting_accept_loop_cancels_connection_tasks() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (started_tx, mut started_rx) = mpsc::channel(1);
+        let (alive_tx, alive_rx) = tokio::sync::oneshot::channel::<()>();
+        let mut alive_tx = Some(alive_tx);
+        let accept = tokio::spawn(accept_loop(listener, move |stream| {
+            let started = started_tx.clone();
+            let alive = alive_tx.take();
+            async move {
+                let _held = (stream, alive);
+                started.send(()).await.unwrap();
+                std::future::pending::<anyhow::Result<()>>().await
+            }
+        }));
+
+        let _client = TcpStream::connect(addr).await.unwrap();
+        started_rx.recv().await.unwrap();
+        accept.abort();
+
+        let dropped = tokio::time::timeout(Duration::from_secs(5), alive_rx).await;
+        assert!(
+            matches!(dropped, Ok(Err(_))),
+            "connection task outlived accept loop"
+        );
     }
 
     #[tokio::test]
