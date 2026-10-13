@@ -126,8 +126,8 @@ impl Render for ManualWarningView {
                     .flex_wrap()
                     .gap_1()
                     .child("Ручной режим")
-                    .child(strong("детектится", theme.danger))
-                    .child("сервером, и за его использование")
+                    .child(strong("палится", theme.danger))
+                    .child("на проверке: когда модератор смотрит ваш ПК через AnyDesk или Discord, он видит, что игра подключена к локальному адресу, а не к серверу, и за это")
                     .child(strong("банят.", theme.danger)),
             )
             .child(div().child(
