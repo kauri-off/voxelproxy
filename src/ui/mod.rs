@@ -517,7 +517,7 @@ impl AppView {
 
     pub fn set_check_mode(&mut self, value: bool, cx: &mut Context<Self>) {
         self.check_mode = value;
-        self.backend.set_panic_mode(value);
+        self.backend.set_check_mode(value);
         self.push_log(
             LogLevel::Info,
             if value {

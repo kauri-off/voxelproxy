@@ -23,7 +23,7 @@ pub struct Backend {
     rt: Runtime,
     events: EventSink,
     session: Mutex<Option<AbortHandle>>,
-    panic_mode: Arc<AtomicBool>,
+    check_mode: Arc<AtomicBool>,
 }
 
 impl Backend {
@@ -37,7 +37,7 @@ impl Backend {
             rt,
             events,
             session: Mutex::new(None),
-            panic_mode: Arc::new(AtomicBool::new(false)),
+            check_mode: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -57,11 +57,11 @@ impl Backend {
 
     pub fn start_auto(&self, use_windivert: bool, port_min: u16, port_max: u16) {
         self.spawn(config::send_start_auto(use_windivert));
-        self.set_panic_mode(false);
+        self.set_check_mode(false);
         let events = self.events.clone();
-        let panic_mode = self.panic_mode.clone();
+        let check_mode = self.check_mode.clone();
         self.start_session(async move {
-            session::run_auto_mode(use_windivert, port_min, port_max, events, panic_mode).await
+            session::run_auto_mode(use_windivert, port_min, port_max, events, check_mode).await
         });
     }
 
@@ -87,8 +87,8 @@ impl Backend {
         self.events.emit(AppEvent::SessionEnded);
     }
 
-    pub fn set_panic_mode(&self, value: bool) {
-        self.panic_mode.store(value, Ordering::Relaxed);
+    pub fn set_check_mode(&self, value: bool) {
+        self.check_mode.store(value, Ordering::Relaxed);
     }
 
     fn abort_existing(&self) {
