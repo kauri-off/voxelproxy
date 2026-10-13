@@ -182,11 +182,11 @@ impl Controller {
                         continue;
                     }
 
-                    if client_id == self.active_client {
-                        if let Err(e) = self.remote_tx.send(packet).await {
-                            log.error(format!("Ошибка отправки пакета на сервер: {}", e));
-                            return;
-                        }
+                    if client_id == self.active_client
+                        && let Err(e) = self.remote_tx.send(packet).await
+                    {
+                        log.error(format!("Ошибка отправки пакета на сервер: {}", e));
+                        return;
                     }
                 }
 

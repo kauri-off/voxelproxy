@@ -1,7 +1,10 @@
-name: Rust Release
+name: Release
 
 on:
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,6 +18,33 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Extract version
+        id: version
+        shell: bash
+        run: |
+          ver=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "voxelproxy") | .version')
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure tag does not exist
+        shell: bash
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/v${{ steps.version.outputs.version }}" >/dev/null; then
+            echo "::error::Tag v${{ steps.version.outputs.version }} already exists"
+            exit 1
+          fi
+
+      - name: Extract release notes
+        shell: bash
+        run: |
+          awk -v ver="${{ steps.version.outputs.version }}" '
+            /^## / { found = ($2 == ver); next }
+            found
+          ' CHANGELOG.md | sed -e '/./,$!d' > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "::error::No CHANGELOG.md section for ${{ steps.version.outputs.version }}"
+            exit 1
+          fi
+
       - uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-packager
@@ -26,18 +56,12 @@ jobs:
           UPDATE_URL: ${{ secrets.UPDATE_URL }}
         run: cargo packager --release --formats wix
 
-      - name: Extract version
-        id: version
-        shell: bash
-        run: |
-          ver=$(grep '^version =' Cargo.toml | head -1 | sed -E 's/version = "(.*)"/\1/')
-          echo "version=$ver" >> $GITHUB_OUTPUT
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.version.outputs.version }}
           name: Release ${{ steps.version.outputs.version }}
+          body_path: release-notes.md
           files: target/release/*_ru-RU.msi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

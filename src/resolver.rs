@@ -8,12 +8,12 @@ use hickory_resolver::{
 };
 
 fn parse_host_port(input: &str, default_port: u16) -> (String, u16) {
-    if let Some((host, port_str)) = input.rsplit_once(':') {
-        if let Ok(port) = port_str.parse::<u16>() {
-            if !host.contains(']') && !host.contains(':') {
-                return (host.to_string(), port);
-            }
-        }
+    if let Some((host, port_str)) = input.rsplit_once(':')
+        && let Ok(port) = port_str.parse::<u16>()
+        && !host.contains(']')
+        && !host.contains(':')
+    {
+        return (host.to_string(), port);
     }
     (input.to_string(), default_port)
 }

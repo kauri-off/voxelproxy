@@ -1,10 +1,10 @@
+use gpui_kit::base::SelectableText;
 use gpui_kit::component::{
     ActiveTheme, Icon, Sizable,
     button::{Button, ButtonVariants},
     h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::base::SelectableText;
 use gpui_kit::*;
 
 use super::{AppView, IconName};
@@ -109,13 +109,10 @@ impl AppView {
                                 LogLevel::Warn => theme.warning,
                                 LogLevel::Error => theme.danger,
                             };
-                            div()
-                                .py_0p5()
-                                .text_color(color)
-                                .child(
-                                    SelectableText::new(("log-line", ix), entry.message.clone())
-                                        .document_order(ix as u64),
-                                )
+                            div().py_0p5().text_color(color).child(
+                                SelectableText::new(("log-line", ix), entry.message.clone())
+                                    .document_order(ix as u64),
+                            )
                         })),
                 )
             })
