@@ -517,7 +517,7 @@ pub async fn run_automatic_mode(
             },
             None => Step::Client(rx.recv().await),
         };
-        let mut client = match step {
+        let client = match step {
             Step::SecondaryGone => {
                 events.client_status(WhichClient::Secondary, false);
                 pending = None;

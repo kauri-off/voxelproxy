@@ -74,9 +74,9 @@ impl Version {
 /// Reads the packet id without inflating the whole frame.
 pub fn packet_id(packet: &RawPacket, threshold: Option<i32>) -> io::Result<i32> {
     let mut data = packet.data.as_slice();
-    if threshold.is_some_and(|t| t >= 0) && VarInt::read_sync(&mut data)?.0 != 0 {
+    if threshold.is_some_and(|t| t >= 0) && read_varint(&mut data)? != 0 {
         let mut inflated = flate2::bufread::ZlibDecoder::new(data);
-        return Ok(read_varint(&mut inflated)?);
+        return read_varint(&mut inflated);
     }
     read_varint(&mut data)
 }
