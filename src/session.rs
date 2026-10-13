@@ -3,15 +3,9 @@ use std::net::{IpAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use mc_protocol::{
-    packet::{RawPacket, UncompressedPacket},
-    varint::VarInt,
-};
+use mc_protocol::{packet::UncompressedPacket, varint::VarInt};
 use tokio::{
-    net::{
-        TcpListener, TcpStream,
-        tcp::{OwnedReadHalf, OwnedWriteHalf},
-    },
+    net::{TcpListener, TcpStream},
     sync::mpsc,
     task::JoinSet,
 };
@@ -22,7 +16,7 @@ use crate::{
     logger::Logger,
     packets::universal::{Intent, handshaking::c2s::Handshake},
     protocols::{Version, VersionProtocol},
-    proxy::{AutoClientInfo, BIND_PORT, DEFAULT_PORT, HANDSHAKE_CHANNEL_CAPACITY},
+    proxy::{BIND_PORT, DEFAULT_PORT, HANDSHAKE_CHANNEL_CAPACITY, LoginClient, connect},
     resolver::resolve_host_port,
 };
 
@@ -59,7 +53,7 @@ fn is_loopback_host(host: &str) -> bool {
 }
 
 /// Resolves when `stream` is closed by the peer, errors, or (unexpectedly)
-/// sends more bytes. Assumes the client's `LoginStart` has already been drained,
+/// sends more bytes. Assumes the client's `LoginStart` has already been read,
 /// so a healthy client keeps the socket unreadable until it disconnects; used to
 /// notice a client that vanished while we wait for its partner to connect. `peek`
 /// consumes nothing, so this is cancellation-safe inside `select!`.
@@ -126,15 +120,19 @@ pub async fn run_manual_mode(server_addr: String, events: EventSink) -> anyhow::
         mut secondary_stream,
         secondary_protocol,
     ) = loop {
-        let (mut primary_stream, primary_protocol) = match rx.recv().await {
+        let LoginClient {
+            stream: mut primary_stream,
+            protocol_version: primary_protocol,
+            login_start: primary_login_start,
+            ..
+        } = match rx.recv().await {
             Some(p) => p,
             None => anyhow::bail!("Диспетчер подключений завершился"),
         };
-        let primary_login_start = RawPacket::read_async(&mut primary_stream).await?;
         events.client_status(WhichClient::Primary, true);
 
         enum Sec {
-            Got((TcpStream, i32)),
+            Got(LoginClient),
             PrimaryGone,
             Closed,
         }
@@ -146,13 +144,13 @@ pub async fn run_manual_mode(server_addr: String, events: EventSink) -> anyhow::
             _ = wait_for_disconnect(&mut primary_stream) => Sec::PrimaryGone,
         };
         match sec {
-            Sec::Got((secondary_stream, secondary_protocol)) => {
+            Sec::Got(secondary) => {
                 break (
                     primary_stream,
                     primary_protocol,
                     primary_login_start,
-                    secondary_stream,
-                    secondary_protocol,
+                    secondary.stream,
+                    secondary.protocol_version,
                 );
             }
             Sec::PrimaryGone => {
@@ -163,7 +161,6 @@ pub async fn run_manual_mode(server_addr: String, events: EventSink) -> anyhow::
             Sec::Closed => anyhow::bail!("Диспетчер подключений завершился"),
         }
     };
-    let _ = RawPacket::read_async(&mut secondary_stream).await?;
     events.client_status(WhichClient::Secondary, true);
 
     if primary_protocol != secondary_protocol {
@@ -171,6 +168,7 @@ pub async fn run_manual_mode(server_addr: String, events: EventSink) -> anyhow::
             &mut primary_stream,
             &mut secondary_stream,
             "Версии клиентов различаются".to_string(),
+            None,
         )
         .await;
         anyhow::bail!("Версии клиентов различаются");
@@ -183,19 +181,21 @@ pub async fn run_manual_mode(server_addr: String, events: EventSink) -> anyhow::
                 &mut primary_stream,
                 &mut secondary_stream,
                 "Данная версия не поддерживается".to_string(),
+                None,
             )
             .await;
             anyhow::bail!("Данная версия не поддерживается");
         }
     };
 
-    let mut remote_stream = match TcpStream::connect(remote_addr).await {
+    let mut remote_stream = match connect(remote_addr).await {
         Ok(t) => t,
         Err(_) => {
             crate::proxy::send_login_error(
                 &mut primary_stream,
                 &mut secondary_stream,
                 "Ошибка при подключении к удалённому серверу".to_string(),
+                None,
             )
             .await;
             anyhow::bail!("Ошибка при подключении к удалённому серверу");
@@ -237,24 +237,23 @@ pub async fn run_manual_mode(server_addr: String, events: EventSink) -> anyhow::
 }
 
 async fn run_auto_session(
-    mut primary: AutoClientInfo,
-    mut secondary: AutoClientInfo,
+    mut primary: LoginClient,
+    mut secondary: LoginClient,
     events: EventSink,
 ) -> anyhow::Result<()> {
     let _status_guard = ClientStatusOfflineGuard {
         events: events.clone(),
     };
     let log = Logger::new(&events);
-    // The secondary's LoginStart was already drained at pairing time in
-    // `run_automatic_mode` (so its socket could be watched for disconnect while
-    // it waited); only the primary's remains to be read here.
-    let primary_login_start = RawPacket::read_async(&mut primary.stream).await?;
+    // Only the primary's LoginStart is forwarded; the secondary's is discarded.
+    let primary_login_start = primary.login_start;
 
     if primary.protocol_version != secondary.protocol_version {
         crate::proxy::send_login_error(
             &mut primary.stream,
             &mut secondary.stream,
             "Версии клиентов различаются".to_string(),
+            None,
         )
         .await;
         return Ok(());
@@ -267,6 +266,7 @@ async fn run_auto_session(
                 &mut primary.stream,
                 &mut secondary.stream,
                 "Данная версия не поддерживается".to_string(),
+                None,
             )
             .await;
             return Ok(());
@@ -287,19 +287,21 @@ async fn run_auto_session(
                 &mut primary.stream,
                 &mut secondary.stream,
                 format!("Не удалось разрешить адрес: {}", secondary.server_host),
+                None,
             )
             .await;
             return Ok(());
         }
     };
 
-    let mut remote_stream = match TcpStream::connect(remote_addr).await {
+    let mut remote_stream = match connect(remote_addr).await {
         Ok(s) => s,
         Err(_) => {
             crate::proxy::send_login_error(
                 &mut primary.stream,
                 &mut secondary.stream,
                 "Ошибка при подключении к удалённому серверу".to_string(),
+                None,
             )
             .await;
             return Ok(());
@@ -339,7 +341,7 @@ async fn run_auto_session(
     .await
 }
 
-pub async fn run_panic_mode(client: AutoClientInfo) -> anyhow::Result<()> {
+pub async fn run_panic_mode(mut client: LoginClient) -> anyhow::Result<()> {
     let remote_addr = match resolve_host_port(
         &client.server_host,
         client.server_port,
@@ -354,7 +356,7 @@ pub async fn run_panic_mode(client: AutoClientInfo) -> anyhow::Result<()> {
         }
     };
 
-    let mut remote_stream = TcpStream::connect(remote_addr).await?;
+    let mut remote_stream = connect(remote_addr).await?;
 
     let handshake = Handshake {
         protocol_version: VarInt(client.protocol_version),
@@ -366,21 +368,9 @@ pub async fn run_panic_mode(client: AutoClientInfo) -> anyhow::Result<()> {
         .write_async(&mut remote_stream)
         .await?;
 
-    async fn proxy(mut read: OwnedReadHalf, mut write: OwnedWriteHalf) -> anyhow::Result<()> {
-        loop {
-            let packet = RawPacket::read_async(&mut read).await?;
-            packet.write_async(&mut write).await?;
-        }
-    }
+    client.login_start.write_async(&mut remote_stream).await?;
 
-    let (client_read, client_write) = client.stream.into_split();
-    let (remote_read, remote_write) = remote_stream.into_split();
-
-    tokio::select! {
-        res = proxy(client_read, remote_write) => res,
-        res = proxy(remote_read, client_write) => res,
-    }?;
-
+    tokio::io::copy_bidirectional(&mut client.stream, &mut remote_stream).await?;
     Ok(())
 }
 
@@ -428,13 +418,15 @@ pub async fn run_automatic_mode(
         Ok(())
     });
 
-    let mut pending: Option<AutoClientInfo> = None;
+    let mut pending: Option<LoginClient> = None;
 
     loop {
+        while session_set.try_join_next().is_some() {}
+
         // Receive the next client; while a secondary is pending, also watch its
         // socket so we notice if it disconnects before the primary connects.
         enum Step {
-            Client(Option<AutoClientInfo>),
+            Client(Option<LoginClient>),
             SecondaryGone,
         }
         let step = match pending.as_mut() {
@@ -456,14 +448,12 @@ pub async fn run_automatic_mode(
         };
 
         if panic_mode.load(Ordering::Relaxed) {
-            tokio::spawn(run_panic_mode(client));
+            session_set.spawn(run_panic_mode(client));
             continue;
         }
         if pending.is_none() && is_loopback_host(&client.server_host) {
             log.warn("Клиент подключился к 127.0.0.1 раньше второго клиента — отклонён");
-            tokio::spawn(async move {
-                // drain the client's LoginStart, then send the disconnect reason
-                let _ = RawPacket::read_async(&mut client.stream).await;
+            session_set.spawn(async move {
                 crate::proxy::send_login_disconnect(
                     &mut client.stream,
                     "Неправильный порядок подключения.\n\n\
@@ -473,6 +463,7 @@ pub async fn run_automatic_mode(
                         .to_string(),
                 )
                 .await;
+                Ok(())
             });
             continue;
         }
@@ -482,10 +473,6 @@ pub async fn run_automatic_mode(
                 session_set.spawn(run_auto_session(client, secondary, events.clone()));
             }
             None => {
-                // Drain the secondary's LoginStart now (it is discarded anyway, see
-                // run_auto_session) so wait_for_disconnect watches a quiet socket
-                // instead of one with the buffered LoginStart still readable.
-                let _ = RawPacket::read_async(&mut client.stream).await;
                 events.client_status(WhichClient::Secondary, true);
                 pending = Some(client);
             }
@@ -512,13 +499,15 @@ pub async fn run_automatic_mode(
         Ok(())
     });
 
-    let mut pending: Option<AutoClientInfo> = None;
+    let mut pending: Option<LoginClient> = None;
 
     loop {
+        while session_set.try_join_next().is_some() {}
+
         // Receive the next client; while a secondary is pending, also watch its
         // socket so we notice if it disconnects before the primary connects.
         enum Step {
-            Client(Option<AutoClientInfo>),
+            Client(Option<LoginClient>),
             SecondaryGone,
         }
         let step = match pending.as_mut() {
@@ -528,7 +517,7 @@ pub async fn run_automatic_mode(
             },
             None => Step::Client(rx.recv().await),
         };
-        let mut client = match step {
+        let client = match step {
             Step::SecondaryGone => {
                 events.client_status(WhichClient::Secondary, false);
                 pending = None;
@@ -539,7 +528,7 @@ pub async fn run_automatic_mode(
         };
 
         if panic_mode.load(Ordering::Relaxed) {
-            tokio::spawn(run_panic_mode(client));
+            session_set.spawn(run_panic_mode(client));
             continue;
         }
         match pending.take() {
@@ -548,10 +537,6 @@ pub async fn run_automatic_mode(
                 session_set.spawn(run_auto_session(client, secondary, events.clone()));
             }
             None => {
-                // Drain the secondary's LoginStart now (it is discarded anyway, see
-                // run_auto_session) so wait_for_disconnect watches a quiet socket
-                // instead of one with the buffered LoginStart still readable.
-                let _ = RawPacket::read_async(&mut client.stream).await;
                 events.client_status(WhichClient::Secondary, true);
                 pending = Some(client);
             }

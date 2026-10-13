@@ -4,8 +4,10 @@ pub mod v1_21_11;
 pub mod v1_21_4;
 pub mod v1_21_8;
 
+use std::io;
+
 use enum_dispatch::enum_dispatch;
-use mc_protocol::packet::RawPacket;
+use mc_protocol::{packet::RawPacket, ser::Deserialize, varint::VarInt};
 
 use crate::controller::ClientId;
 
@@ -66,5 +68,42 @@ impl Version {
             v1_21_8::VersionData::VERSION,
             v1_21_11::VersionData::VERSION,
         ]
+    }
+}
+
+/// Reads the packet id without inflating the whole frame.
+pub fn packet_id(packet: &RawPacket, threshold: Option<i32>) -> io::Result<i32> {
+    let mut data = packet.data.as_slice();
+    if threshold.is_some_and(|t| t >= 0) && read_varint(&mut data)? != 0 {
+        let mut inflated = flate2::bufread::ZlibDecoder::new(data);
+        return read_varint(&mut inflated);
+    }
+    read_varint(&mut data)
+}
+
+fn read_varint<R: io::Read>(reader: &mut R) -> io::Result<i32> {
+    VarInt::read_sync(reader)
+        .map(|v| v.0)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+pub fn decode<T: Deserialize>(packet: &RawPacket, threshold: Option<i32>) -> anyhow::Result<T> {
+    Ok(packet.uncompress(threshold)?.deserialize_payload()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use mc_protocol::packet::UncompressedPacket;
+
+    use super::*;
+
+    #[test]
+    fn packet_id_matches_full_decode() {
+        let packet = UncompressedPacket::new(0x2c, vec![7; 4096]);
+        for threshold in [None, Some(-1), Some(0), Some(256), Some(1_000_000)] {
+            let raw = packet.to_raw_packet_compressed(threshold).unwrap();
+            assert_eq!(packet_id(&raw, threshold).unwrap(), 0x2c, "{threshold:?}");
+            assert_eq!(raw.uncompress(threshold).unwrap().packet_id, 0x2c);
+        }
     }
 }

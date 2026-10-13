@@ -1,12 +1,14 @@
-use std::net::SocketAddr;
+use std::{future::Future, net::SocketAddr, time::Duration};
 
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use mc_protocol::packet::{RawPacket, UncompressedPacket};
 use serde_json::json;
 use tokio::{
-    io::AsyncWriteExt,
+    io::{AsyncRead, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::mpsc::{self, Sender},
+    task::JoinSet,
+    time::timeout,
 };
 
 use crate::{
@@ -14,11 +16,17 @@ use crate::{
 };
 
 use crate::{
-    controller::{ClientId, Controller, run_client, run_server},
+    controller::{ClientId, Controller, PeerLink, run_client, run_server},
     packets::universal::{
         Intent,
         handshaking::c2s::Handshake,
-        login::s2c::{EncryptionRequest, LoginDisconnect, LoginSuccess, SetCompression},
+        login::{
+            c2s::{CookieResponse, LoginPluginResponse},
+            s2c::{
+                CookieRequest, EncryptionRequest, LoginDisconnect, LoginPluginRequest,
+                LoginSuccess, SetCompression,
+            },
+        },
     },
     protocols::{Version, VersionProtocol},
 };
@@ -27,110 +35,135 @@ pub const DEFAULT_PORT: u16 = 25565;
 pub const BIND_PORT: u16 = 25565;
 pub const HANDSHAKE_CHANNEL_CAPACITY: usize = 32;
 const IO_CHANNEL_CAPACITY: usize = 100;
+/// Limit for a client to deliver its Handshake and LoginStart.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Limit for a whole status ping exchange, including the upstream round trip.
+const STATUS_TIMEOUT: Duration = Duration::from_secs(15);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Limit for each upstream packet during the login phase.
+const LOGIN_TIMEOUT: Duration = Duration::from_secs(30);
+const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 
-/// Information extracted from a client's Minecraft Handshake packet.
-/// Used in automatic mode to determine the real remote server without manual input.
-pub struct AutoClientInfo {
+/// A client that sent a login-intent Handshake followed by its LoginStart.
+pub struct LoginClient {
     pub stream: TcpStream,
     pub protocol_version: i32,
     pub server_host: String,
     pub server_port: u16,
+    pub login_start: RawPacket,
 }
 
-#[inline]
-pub async fn read_uncompressed(stream: &mut TcpStream) -> anyhow::Result<UncompressedPacket> {
-    Ok(RawPacket::read_async(stream).await?.as_uncompressed()?)
+/// Disables Nagle: the proxy relays many small packets and must not delay them.
+pub fn tune(stream: &TcpStream) {
+    let _ = stream.set_nodelay(true);
+}
+
+pub async fn connect(addr: SocketAddr) -> anyhow::Result<TcpStream> {
+    let stream = timeout(CONNECT_TIMEOUT, TcpStream::connect(addr))
+        .await
+        .context("connect timed out")??;
+    tune(&stream);
+    Ok(stream)
+}
+
+pub async fn read_with_timeout<R: AsyncRead + Unpin>(
+    stream: &mut R,
+    limit: Duration,
+) -> anyhow::Result<RawPacket> {
+    Ok(timeout(limit, RawPacket::read_async(stream))
+        .await
+        .context("read timed out")??)
+}
+
+/// Accepts connections forever; transient accept errors (fd exhaustion, aborted
+/// handshakes) are retried instead of silently ending the listener.
+async fn accept_loop<F, Fut>(listener: TcpListener, mut handle: F)
+where
+    F: FnMut(TcpStream) -> Fut,
+    Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
+{
+    loop {
+        match listener.accept().await {
+            Ok((stream, _addr)) => {
+                tune(&stream);
+                tokio::spawn(handle(stream));
+            }
+            Err(_) => tokio::time::sleep(ACCEPT_RETRY_DELAY).await,
+        }
+    }
 }
 
 /// Accepts connections from `listener`, reads the Minecraft Handshake packet,
-/// proxies status pings directly, and sends `(stream, protocol_version)` for
-/// login intents to `tx`.
+/// proxies status pings to `remote_addr`, and sends login-intent clients to `tx`.
 pub async fn listen_and_dispatch(
     listener: TcpListener,
-    tx: Sender<(TcpStream, i32)>,
+    tx: Sender<LoginClient>,
     remote_dns: String,
     remote_addr: SocketAddr,
 ) {
-    while let Ok((stream, _addr)) = listener.accept().await {
-        tokio::spawn(handle_connection(
-            stream,
-            tx.clone(),
-            remote_dns.clone(),
-            remote_addr,
-        ));
-    }
+    accept_loop(listener, |stream| {
+        handle_connection(stream, tx.clone(), Some((remote_dns.clone(), remote_addr)))
+    })
+    .await
 }
 
-/// Auto-mode variant of `listen_and_dispatch`.
-/// Reads the Minecraft Handshake from each connection, handles status pings directly
-/// (resolving the server from the Handshake), and sends login-intent clients as
-/// `AutoClientInfo` so the caller can pair and proxy them dynamically.
-pub async fn listen_and_dispatch_auto(listener: TcpListener, tx: Sender<AutoClientInfo>) {
-    while let Ok((stream, _addr)) = listener.accept().await {
-        tokio::spawn(handle_connection_auto(stream, tx.clone()));
-    }
-}
-
-async fn handle_connection_auto(
-    mut stream: TcpStream,
-    tx: Sender<AutoClientInfo>,
-) -> anyhow::Result<()> {
-    let handshake: Handshake = read_uncompressed(&mut stream)
-        .await?
-        .deserialize_payload()?;
-
-    match Intent::try_from(handshake.intent.0) {
-        Ok(Intent::Status) => {
-            // Resolve the server from the handshake and proxy the ping directly
-            if let Some(remote_addr) = resolve_host_port(
-                &handshake.server_address,
-                handshake.server_port,
-                "minecraft",
-                "tcp",
-            )
-            .await
-            {
-                process_status(
-                    stream,
-                    remote_addr,
-                    handshake.server_address.clone(),
-                    handshake,
-                )
-                .await?;
-            }
-        }
-        Ok(Intent::Login) => {
-            tx.send(AutoClientInfo {
-                protocol_version: handshake.protocol_version.0,
-                server_host: handshake.server_address,
-                server_port: handshake.server_port,
-                stream,
-            })
-            .await?;
-        }
-        Err(_) => {}
-    }
-    Ok(())
+/// Auto-mode variant of `listen_and_dispatch`: status pings are proxied to the
+/// server named in each Handshake.
+pub async fn listen_and_dispatch_auto(listener: TcpListener, tx: Sender<LoginClient>) {
+    accept_loop(listener, |stream| {
+        handle_connection(stream, tx.clone(), None)
+    })
+    .await
 }
 
 async fn handle_connection(
     mut stream: TcpStream,
-    tx: Sender<(TcpStream, i32)>,
-    remote_dns: String,
-    remote_addr: SocketAddr,
+    tx: Sender<LoginClient>,
+    status_target: Option<(String, SocketAddr)>,
 ) -> anyhow::Result<()> {
-    let handshake: Handshake = read_uncompressed(&mut stream)
+    let handshake: Handshake = read_with_timeout(&mut stream, HANDSHAKE_TIMEOUT)
         .await?
+        .as_uncompressed()?
         .deserialize_payload()?;
 
     match Intent::try_from(handshake.intent.0) {
-        Ok(Intent::Status) => process_status(stream, remote_addr, remote_dns, handshake).await?,
+        Ok(Intent::Status) => {
+            let target = match status_target {
+                Some(target) => Some(target),
+                None => resolve_host_port(
+                    &handshake.server_address,
+                    handshake.server_port,
+                    "minecraft",
+                    "tcp",
+                )
+                .await
+                .map(|addr| (handshake.server_address.clone(), addr)),
+            };
+            if let Some((remote_dns, remote_addr)) = target {
+                timeout(
+                    STATUS_TIMEOUT,
+                    process_status(stream, remote_addr, remote_dns, handshake),
+                )
+                .await
+                .context("status timed out")??;
+            }
+        }
         Ok(Intent::Login) => {
-            tx.send((stream, handshake.protocol_version.0)).await?;
+            // Read here rather than in the session loop, so a client that stalls
+            // after its Handshake cannot block pairing of everyone else.
+            let login_start = read_with_timeout(&mut stream, HANDSHAKE_TIMEOUT).await?;
+            tx.send(LoginClient {
+                protocol_version: handshake.protocol_version.0,
+                server_host: handshake.server_address,
+                server_port: handshake.server_port,
+                login_start,
+                stream,
+            })
+            .await
+            .map_err(|_| anyhow!("dispatcher closed"))?;
         }
         Err(_) => {}
     }
-
     Ok(())
 }
 
@@ -140,7 +173,7 @@ async fn process_status(
     remote_dns: String,
     mut handshake: Handshake,
 ) -> anyhow::Result<()> {
-    if remote_addr == "127.0.0.1:25565".parse().unwrap() {
+    if remote_addr == SocketAddr::from(([127, 0, 0, 1], 25565)) {
         // Status request
         RawPacket::read_async(&mut stream).await?;
 
@@ -173,7 +206,7 @@ async fn process_status(
         return Ok(());
     }
     handshake.server_address = remote_dns;
-    let mut remote_stream = TcpStream::connect(remote_addr).await?;
+    let mut remote_stream = connect(remote_addr).await?;
 
     UncompressedPacket::from_packet(&handshake)?
         .write_async(&mut remote_stream)
@@ -219,18 +252,13 @@ pub async fn run_proxy_session(
     let mut threshold = None;
 
     loop {
-        let packet = RawPacket::read_async(&mut remote)
-            .await?
-            .uncompress(threshold)?;
+        let raw = read_with_timeout(&mut remote, LOGIN_TIMEOUT).await?;
+        let packet = raw.uncompress(threshold)?;
 
         match packet.packet_id {
             LoginDisconnect::PACKET_ID => {
-                send_login_error(
-                    &mut primary,
-                    &mut secondary,
-                    packet.deserialize_payload::<LoginDisconnect>()?.reason,
-                )
-                .await;
+                let _ = raw.write_async(&mut primary).await;
+                let _ = raw.write_async(&mut secondary).await;
                 return Err(anyhow!("Disconnected by server"));
             }
             EncryptionRequest::PACKET_ID => {
@@ -238,25 +266,54 @@ pub async fn run_proxy_session(
                     &mut primary,
                     &mut secondary,
                     "Лицензионный сервер не поддерживается\nИспользуйте ViaProxy".to_string(),
+                    threshold,
                 )
                 .await;
                 return Err(anyhow!("Licensed server"));
             }
             LoginSuccess::PACKET_ID => {
-                let packet = packet.to_raw_packet_compressed(threshold)?;
-                packet.write_async(&mut primary).await?;
-                packet.write_async(&mut secondary).await?;
+                raw.write_async(&mut primary).await?;
+                raw.write_async(&mut secondary).await?;
                 break;
             }
             SetCompression::PACKET_ID => {
                 let compression: SetCompression = packet.deserialize_payload()?;
                 threshold = Some(compression.threshold.0);
 
-                let packet = packet.to_raw_packet()?;
-                packet.write_async(&mut primary).await?;
-                packet.write_async(&mut secondary).await?;
+                raw.write_async(&mut primary).await?;
+                raw.write_async(&mut secondary).await?;
             }
-            _ => unreachable!(),
+            // Answered the way a vanilla client without mods/cookies would.
+            LoginPluginRequest::PACKET_ID => {
+                let request: LoginPluginRequest = packet.deserialize_payload()?;
+                UncompressedPacket::from_packet(&LoginPluginResponse {
+                    message_id: request.message_id,
+                    successful: false,
+                })?
+                .to_raw_packet_compressed(threshold)?
+                .write_async(&mut remote)
+                .await?;
+            }
+            CookieRequest::PACKET_ID => {
+                let request: CookieRequest = packet.deserialize_payload()?;
+                UncompressedPacket::from_packet(&CookieResponse {
+                    key: request.key,
+                    payload: None,
+                })?
+                .to_raw_packet_compressed(threshold)?
+                .write_async(&mut remote)
+                .await?;
+            }
+            id => {
+                send_login_error(
+                    &mut primary,
+                    &mut secondary,
+                    format!("Неожиданный пакет от сервера при входе: {id:#04x}"),
+                    threshold,
+                )
+                .await;
+                return Err(anyhow!("Unexpected login packet {id:#04x}"));
+            }
         }
     }
 
@@ -265,70 +322,224 @@ pub async fn run_proxy_session(
     let (remote_read, remote_write) = remote.into_split();
 
     let (event_tx, event_rx) = mpsc::channel(IO_CHANNEL_CAPACITY);
-    let (primary_tx, primary_rx) = mpsc::channel(IO_CHANNEL_CAPACITY);
-    let (secondary_tx, secondary_rx) = mpsc::channel(IO_CHANNEL_CAPACITY);
+    let (primary_link, primary_rx) = PeerLink::new();
+    let (secondary_link, secondary_rx) = PeerLink::new();
     let (remote_tx, remote_rx) = mpsc::channel(IO_CHANNEL_CAPACITY);
 
     version.update_threshold(threshold);
     let controller = Controller::new(
         ClientId::Primary,
-        primary_tx,
-        secondary_tx,
+        primary_link,
+        secondary_link,
         remote_tx,
         event_rx,
         version,
         events,
     );
 
-    let primary_task = tokio::spawn(run_client(
+    // Dropping the set aborts the I/O tasks, closing their sockets. That happens both
+    // when the controller stops and when this whole session future is cancelled; it is
+    // required for a half-open client whose read task is wedged in `read_async`.
+    let mut io_tasks = JoinSet::new();
+    io_tasks.spawn(run_client(
         primary_read,
         primary_write,
         ClientId::Primary,
         event_tx.clone(),
         primary_rx,
     ));
-    let secondary_task = tokio::spawn(run_client(
+    io_tasks.spawn(run_client(
         secondary_read,
         secondary_write,
         ClientId::Secondary,
         event_tx.clone(),
         secondary_rx,
     ));
-    let server_task = tokio::spawn(run_server(remote_read, remote_write, event_tx, remote_rx));
+    io_tasks.spawn(run_server(remote_read, remote_write, event_tx, remote_rx));
 
     controller.run().await;
-
-    // The controller has stopped, so the session is over. Abort the I/O tasks to drop their
-    // socket halves and close the connections. This is required for a half-open client whose
-    // read task is wedged in `read_async` (no FIN arrived): dropping the controller's channel
-    // ends alone won't unblock a task parked on the socket rather than on a channel.
-    primary_task.abort();
-    secondary_task.abort();
-    server_task.abort();
     Ok(())
 }
 
 /// Sends a `LoginDisconnect` packet to a single client.
 pub async fn send_login_disconnect<W: AsyncWriteExt + Unpin>(stream: &mut W, message: String) {
-    let disconnect = UncompressedPacket::from_packet(&LoginDisconnect {
+    let Ok(disconnect) = UncompressedPacket::from_packet(&LoginDisconnect {
         reason: json!({ "text": message }).to_string(),
-    })
-    .unwrap();
+    }) else {
+        return;
+    };
 
     let _ = disconnect.write_async(stream).await;
 }
 
-/// Sends a `LoginDisconnect` packet to both clients.
+/// Sends a `LoginDisconnect` packet to both clients, framed for the current `threshold`.
 pub async fn send_login_error<W: AsyncWriteExt + Unpin>(
     primary: &mut W,
     secondary: &mut W,
     message: String,
+    threshold: Option<i32>,
 ) {
-    let disconnect = UncompressedPacket::from_packet(&LoginDisconnect {
+    let Ok(disconnect) = UncompressedPacket::from_packet(&LoginDisconnect {
         reason: json!({"text": message}).to_string(),
     })
-    .unwrap();
+    .and_then(|p| p.to_raw_packet_compressed(threshold)) else {
+        return;
+    };
 
-    disconnect.write_async(primary).await.unwrap();
-    disconnect.write_async(secondary).await.unwrap();
+    let _ = disconnect.write_async(primary).await;
+    let _ = disconnect.write_async(secondary).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::StreamExt;
+    use mc_protocol::varint::VarInt;
+
+    use super::*;
+    use crate::events::{AppEvent, WhichClient};
+
+    async fn socket_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (connected, accepted) = tokio::join!(TcpStream::connect(addr), listener.accept());
+        (accepted.unwrap().0, connected.unwrap())
+    }
+
+    fn frame(id: i32, payload: Vec<u8>, threshold: Option<i32>) -> RawPacket {
+        UncompressedPacket::new(id, payload)
+            .to_raw_packet_compressed(threshold)
+            .unwrap()
+    }
+
+    async fn sessions() -> (
+        TcpStream,
+        TcpStream,
+        TcpStream,
+        impl Future<Output = anyhow::Result<()>>,
+        crate::events::EventSink,
+        futures::channel::mpsc::UnboundedReceiver<AppEvent>,
+    ) {
+        let (primary, primary_peer) = socket_pair().await;
+        let (secondary, secondary_peer) = socket_pair().await;
+        let (remote, remote_peer) = socket_pair().await;
+        let (events, events_rx) = EventSink::channel();
+        let session = run_proxy_session(
+            primary,
+            secondary,
+            remote,
+            Version::from_protocol(774).unwrap(),
+            events.clone(),
+        );
+        (
+            primary_peer,
+            secondary_peer,
+            remote_peer,
+            session,
+            events,
+            events_rx,
+        )
+    }
+
+    #[tokio::test]
+    async fn login_is_forwarded_verbatim_and_plugin_requests_answered() {
+        let (mut primary, mut secondary, mut remote, session, _events, _rx) = sessions().await;
+        let session = tokio::spawn(session);
+        let threshold = Some(256);
+
+        let set_compression = frame(SetCompression::PACKET_ID, vec![0x80, 0x02], None);
+        set_compression.write_async(&mut remote).await.unwrap();
+
+        let mut request = Vec::new();
+        VarInt(5).write_sync(&mut request).unwrap();
+        mc_protocol::ser::Serialize::serialize("velocity:player_info", &mut request).unwrap();
+        frame(LoginPluginRequest::PACKET_ID, request, threshold)
+            .write_async(&mut remote)
+            .await
+            .unwrap();
+        let response = RawPacket::read_async(&mut remote)
+            .await
+            .unwrap()
+            .uncompress(threshold)
+            .unwrap();
+        assert_eq!(response.packet_id, LoginPluginResponse::PACKET_ID);
+        assert_eq!(response.payload, vec![5, 0]);
+
+        let success = frame(LoginSuccess::PACKET_ID, vec![1; 300], threshold);
+        success.write_async(&mut remote).await.unwrap();
+        let chunks: Vec<_> = (0..50)
+            .map(|i| frame(0x27, vec![i as u8; 100_000], threshold))
+            .collect();
+        for chunk in &chunks {
+            chunk.write_async(&mut remote).await.unwrap();
+        }
+
+        for client in [&mut primary, &mut secondary] {
+            let mut reader = tokio::io::BufReader::new(client);
+            for expected in [&set_compression, &success].into_iter().chain(&chunks) {
+                let got = RawPacket::read_async(&mut reader).await.unwrap();
+                assert_eq!(got.data, expected.data);
+            }
+        }
+
+        drop(remote);
+        tokio::time::timeout(Duration::from_secs(5), session)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn stalled_inactive_client_is_dropped_without_blocking_active() {
+        let (mut primary, secondary, mut remote, session, _events, mut events_rx) =
+            sessions().await;
+        let session = tokio::spawn(session);
+
+        frame(LoginSuccess::PACKET_ID, vec![], None)
+            .write_async(&mut remote)
+            .await
+            .unwrap();
+        let writer = tokio::spawn(async move {
+            for i in 0..48 {
+                frame(0x27, vec![i as u8; 2_000_000], None)
+                    .write_async(&mut remote)
+                    .await
+                    .unwrap();
+            }
+            remote
+        });
+
+        let mut reader = tokio::io::BufReader::new(&mut primary);
+        RawPacket::read_async(&mut reader).await.unwrap();
+        for i in 0..48 {
+            let got =
+                tokio::time::timeout(Duration::from_secs(10), RawPacket::read_async(&mut reader))
+                    .await
+                    .expect("active client stalled")
+                    .unwrap();
+            assert_eq!(got.data.last(), Some(&(i as u8)));
+        }
+
+        let kicked = tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(event) = events_rx.next().await {
+                if let AppEvent::ClientStatus {
+                    which: WhichClient::Secondary,
+                    online: false,
+                } = event
+                {
+                    return;
+                }
+            }
+        })
+        .await;
+        assert!(kicked.is_ok(), "stalled secondary was never dropped");
+
+        drop(secondary);
+        drop(writer.await.unwrap());
+        tokio::time::timeout(Duration::from_secs(5), session)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
 }

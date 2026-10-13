@@ -3944,10 +3944,11 @@ dependencies = [
 
 [[package]]
 name = "mc_protocol"
-version = "2.3.0"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0c2e8d9541a94f8a610ab4c28228986e9759e2ffa470b0bee8c741c6829fa59"
+checksum = "242340ed87d95fd4fc2ad076ce4f44c6a40274602bd2165b6b090d7504045f33"
 dependencies = [
+ "bytes",
  "flate2",
  "mc_protocol_derive",
  "thiserror 2.0.21",
@@ -7526,6 +7527,7 @@ dependencies = [
  "dirs 7.0.0",
  "enum_dispatch",
  "etherparse 0.21.0",
+ "flate2",
  "futures",
  "futures-util",
  "gpui-kit",

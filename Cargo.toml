@@ -19,13 +19,14 @@ serde_json = "1.0.154"
 hickory-resolver = "0.26.3"
 reqwest = { version = "0.13.5", features = ["json", "stream"] }
 anyhow = "1.0.104"
-mc_protocol = "2.3.0"
+mc_protocol = "2.4.0"
 enum_dispatch = "0.3.13"
 open = "5.4.4"
 uuid = { version = "1.28.0", features = ["v4"] }
 semver = "1.0.28"
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 futures = "0.3.34"
+flate2 = "1.1.10"
 tonic = { version = "0.14.6", features = ["tls-ring", "tls-webpki-roots"] }
 tonic-prost = "0.14.6"
 prost = "0.14.4"

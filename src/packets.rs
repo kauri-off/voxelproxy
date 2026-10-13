@@ -90,6 +90,38 @@ pub mod universal {
             pub struct SetCompression {
                 pub threshold: VarInt,
             }
+
+            #[derive(Packet, Debug)]
+            #[packet(0x04)]
+            pub struct LoginPluginRequest {
+                pub message_id: VarInt,
+            }
+
+            /// 1.20.5+ only.
+            #[derive(Packet, Debug)]
+            #[packet(0x05)]
+            pub struct CookieRequest {
+                pub key: String,
+            }
+        }
+
+        pub mod c2s {
+            use super::*;
+
+            #[derive(Packet, Debug)]
+            #[packet(0x02)]
+            pub struct LoginPluginResponse {
+                pub message_id: VarInt,
+                pub successful: bool,
+            }
+
+            /// 1.20.5+ only.
+            #[derive(Packet, Debug)]
+            #[packet(0x04)]
+            pub struct CookieResponse {
+                pub key: String,
+                pub payload: Option<Vec<u8>>,
+            }
         }
     }
 }
