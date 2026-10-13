@@ -26,7 +26,7 @@ use gpui_kit::*;
 use crate::{
     backend::{self, Backend, UpdateInfo},
     config,
-    events::{AppEvent, EventSink, LogLevel, WhichClient},
+    events::{AppEvent, ClientId, EventSink, LogLevel},
 };
 
 use assets::AppAssets;
@@ -348,8 +348,8 @@ impl AppView {
             }
             AppEvent::ClientStatus { which, online } => {
                 match which {
-                    WhichClient::Primary => self.clients.primary = online,
-                    WhichClient::Secondary => self.clients.secondary = online,
+                    ClientId::Primary => self.clients.primary = online,
+                    ClientId::Secondary => self.clients.secondary = online,
                 }
                 if self.clients.both() && self.session_started_at.is_none() {
                     self.session_started_at = Some(Instant::now());
