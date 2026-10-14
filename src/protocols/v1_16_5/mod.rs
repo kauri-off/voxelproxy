@@ -76,7 +76,10 @@ impl VersionProtocol for VersionData {
         let mut packets = vec![];
 
         self.pings.retain(|t| {
-            if t.is_sent(new_active) {
+            if !t.answered(new_active) {
+                return true;
+            }
+            if !t.sent {
                 let tx = c2s::game::Ack {
                     container_id: t.container_id,
                     uid: t.uid,
@@ -88,10 +91,8 @@ impl VersionProtocol for VersionData {
                         .to_raw_packet_compressed(self.threshold)
                         .unwrap(),
                 );
-                false
-            } else {
-                true
             }
+            false
         });
 
         if packets.is_empty() {
@@ -182,19 +183,16 @@ impl VersionData {
             c2s::game::Ack::PACKET_ID => {
                 let packet: c2s::game::Ack = decode(packet, self.threshold)?;
 
-                if both_online {
-                    if let Some(i) = self.pings.iter_mut().position(|s| {
-                        s.uid == packet.uid
-                            && s.container_id == packet.container_id
-                            && s.sent(client_id)
-                    }) {
+                if let Some(i) = self.pings.iter().position(|s| {
+                    s.uid == packet.uid
+                        && s.container_id == packet.container_id
+                        && !s.answered(client_id)
+                }) {
+                    let duplicate = self.pings[i].answer(client_id, is_active);
+                    if !both_online || self.pings[i].answered_by_both() {
                         self.pings.remove(i);
                     }
-                } else {
-                    if let Some(head) = self.pings.first()
-                        && head.is_sent(client_id.opposite())
-                    {
-                        self.pings.remove(0);
+                    if duplicate {
                         return Ok(Some(ServerBoundEvent::SkipRelay));
                     }
                 }
@@ -243,8 +241,9 @@ impl VersionData {
 pub struct PingSync {
     pub container_id: i8,
     pub uid: i16,
-    primary_sent: bool,
-    secondary_sent: bool,
+    answered: [bool; 2],
+    /// Whether a reply already reached the server.
+    sent: bool,
 }
 
 impl PingSync {
@@ -252,24 +251,25 @@ impl PingSync {
         Self {
             container_id,
             uid,
-            primary_sent: false,
-            secondary_sent: false,
+            answered: [false; 2],
+            sent: false,
         }
     }
 
-    pub fn sent(&mut self, client: ClientId) -> bool {
-        match client {
-            ClientId::Primary => self.primary_sent = true,
-            ClientId::Secondary => self.secondary_sent = true,
-        }
-        self.primary_sent && self.secondary_sent
+    pub fn answered(&self, client: ClientId) -> bool {
+        self.answered[client.index()]
     }
 
-    pub fn is_sent(&self, client: ClientId) -> bool {
-        match client {
-            ClientId::Primary => self.primary_sent,
-            ClientId::Secondary => self.secondary_sent,
-        }
+    pub fn answered_by_both(&self) -> bool {
+        self.answered == [true; 2]
+    }
+
+    /// Records a reply and returns whether the server already got one.
+    pub fn answer(&mut self, client: ClientId, is_active: bool) -> bool {
+        self.answered[client.index()] = true;
+        let duplicate = is_active && self.sent;
+        self.sent |= is_active;
+        duplicate
     }
 }
 
