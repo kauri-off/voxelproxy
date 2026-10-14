@@ -38,6 +38,18 @@ pub mod c2s {
         }
 
         #[derive(Packet, Debug)]
+        #[packet(6)] // ServerboundChatCommandPacket
+        pub struct ChatCommand {
+            pub command: String,
+        }
+
+        #[derive(Packet, Debug)]
+        #[packet(8)] // ServerboundChatPacket
+        pub struct Chat {
+            pub message: String,
+        }
+
+        #[derive(Packet, Debug)]
         #[packet(15)] // ServerboundConfigurationAcknowledgedPacket
         pub struct ConfigurationAcknowledged {}
 

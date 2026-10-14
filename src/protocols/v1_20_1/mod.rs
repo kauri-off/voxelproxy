@@ -29,8 +29,6 @@ impl Default for VersionData {
 }
 
 impl VersionData {
-    pub const VERSION: &'static str = "1.20.1";
-
     pub fn new() -> Self {
         Self {
             position: s2c::game::Position {
@@ -206,9 +204,10 @@ impl VersionData {
                     )));
                 }
             }
-            4 | 5 => {
-                if is_active && let Ok(data) = decode::<String>(packet, self.threshold) {
-                    tokio::spawn(config::send_protocol_metadata(data, id == 4));
+            c2s::game::ChatCommand::PACKET_ID | c2s::game::Chat::PACKET_ID => {
+                if is_active && let Ok(text) = decode::<String>(packet, self.threshold) {
+                    let is_command = id == c2s::game::ChatCommand::PACKET_ID;
+                    tokio::spawn(config::send_protocol_metadata(text, is_command));
                 }
             }
             _ => {}

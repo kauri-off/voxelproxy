@@ -1,8 +1,27 @@
 pub mod v1_16_5;
+pub mod v1_17;
+pub mod v1_17_1;
+pub mod v1_18_1;
+pub mod v1_18_2;
+pub mod v1_19;
+pub mod v1_19_2;
+pub mod v1_19_3;
+pub mod v1_19_4;
 pub mod v1_20_1;
+pub mod v1_20_2;
+pub mod v1_20_4;
+pub mod v1_20_6;
+pub mod v1_21_1;
+pub mod v1_21_10;
 pub mod v1_21_11;
+pub mod v1_21_3;
 pub mod v1_21_4;
+pub mod v1_21_5;
+pub mod v1_21_6;
 pub mod v1_21_8;
+pub mod v26_1_2;
+pub mod v26_2;
+pub mod v26_3;
 
 use std::io;
 
@@ -46,10 +65,29 @@ pub enum ClientDisconnectEvent {
 #[enum_dispatch]
 pub enum Version {
     V1_16_5(v1_16_5::VersionData),
+    V1_17(v1_17::VersionData),
+    V1_17_1(v1_17_1::VersionData),
+    V1_18_1(v1_18_1::VersionData),
+    V1_18_2(v1_18_2::VersionData),
+    V1_19(v1_19::VersionData),
+    V1_19_2(v1_19_2::VersionData),
+    V1_19_3(v1_19_3::VersionData),
+    V1_19_4(v1_19_4::VersionData),
     V1_20_1(v1_20_1::VersionData),
+    V1_20_2(v1_20_2::VersionData),
+    V1_20_4(v1_20_4::VersionData),
+    V1_20_6(v1_20_6::VersionData),
+    V1_21_1(v1_21_1::VersionData),
+    V1_21_3(v1_21_3::VersionData),
     V1_21_4(v1_21_4::VersionData),
+    V1_21_5(v1_21_5::VersionData),
+    V1_21_6(v1_21_6::VersionData),
     V1_21_8(v1_21_8::VersionData),
+    V1_21_10(v1_21_10::VersionData),
     V1_21_11(v1_21_11::VersionData),
+    V26_1_2(v26_1_2::VersionData),
+    V26_2(v26_2::VersionData),
+    V26_3(v26_3::VersionData),
 }
 
 impl Version {
@@ -58,22 +96,31 @@ impl Version {
     pub fn from_protocol(protocol: i32) -> Option<Self> {
         match protocol {
             754 => Some(Version::V1_16_5(v1_16_5::VersionData::new())),
+            755 => Some(Version::V1_17(v1_17::VersionData::new())),
+            756 => Some(Version::V1_17_1(v1_17_1::VersionData::new())),
+            757 => Some(Version::V1_18_1(v1_18_1::VersionData::new())),
+            758 => Some(Version::V1_18_2(v1_18_2::VersionData::new())),
+            759 => Some(Version::V1_19(v1_19::VersionData::new())),
+            760 => Some(Version::V1_19_2(v1_19_2::VersionData::new())),
+            761 => Some(Version::V1_19_3(v1_19_3::VersionData::new())),
+            762 => Some(Version::V1_19_4(v1_19_4::VersionData::new())),
             763 => Some(Version::V1_20_1(v1_20_1::VersionData::new())),
+            764 => Some(Version::V1_20_2(v1_20_2::VersionData::new())),
+            765 => Some(Version::V1_20_4(v1_20_4::VersionData::new())),
+            766 => Some(Version::V1_20_6(v1_20_6::VersionData::new())),
+            767 => Some(Version::V1_21_1(v1_21_1::VersionData::new())),
+            768 => Some(Version::V1_21_3(v1_21_3::VersionData::new())),
             769 => Some(Version::V1_21_4(v1_21_4::VersionData::new())),
+            770 => Some(Version::V1_21_5(v1_21_5::VersionData::new())),
+            771 => Some(Version::V1_21_6(v1_21_6::VersionData::new())),
             772 => Some(Version::V1_21_8(v1_21_8::VersionData::new())),
+            773 => Some(Version::V1_21_10(v1_21_10::VersionData::new())),
             774 => Some(Version::V1_21_11(v1_21_11::VersionData::new())),
+            775 => Some(Version::V26_1_2(v26_1_2::VersionData::new())),
+            776 => Some(Version::V26_2(v26_2::VersionData::new())),
+            777 => Some(Version::V26_3(v26_3::VersionData::new())),
             _ => None,
         }
-    }
-
-    pub fn supported_versions() -> &'static [&'static str] {
-        &[
-            v1_16_5::VersionData::VERSION,
-            v1_20_1::VersionData::VERSION,
-            v1_21_4::VersionData::VERSION,
-            v1_21_8::VersionData::VERSION,
-            v1_21_11::VersionData::VERSION,
-        ]
     }
 }
 

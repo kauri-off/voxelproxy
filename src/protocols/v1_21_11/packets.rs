@@ -42,18 +42,15 @@ pub mod c2s {
         pub struct ConfigurationAcknowledged {}
 
         #[derive(Packet, Debug)]
-        #[packet(6)]
-        pub struct ProtocolMetaDataSmall {
-            pub data: String,
+        #[packet(6)] // ServerboundChatCommandPacket
+        pub struct ChatCommand {
+            pub command: String,
         }
 
         #[derive(Packet, Debug)]
-        #[packet(8)]
-        pub struct ProtocolMetaData {
-            pub data: String,
-            pub long: i64,
-            pub long2: i64,
-            pub option: Option<Vec<u8>>,
+        #[packet(8)] // ServerboundChatPacket
+        pub struct Chat {
+            pub message: String,
         }
 
         #[derive(Packet, Debug, Default)]

@@ -152,10 +152,6 @@ pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-pub fn supported_versions() -> Vec<&'static str> {
-    crate::protocols::Version::supported_versions().to_vec()
-}
-
 pub fn local_ip() -> String {
     crate::local_ip::get_local_ip()
         .unwrap_or(std::net::Ipv4Addr::LOCALHOST)

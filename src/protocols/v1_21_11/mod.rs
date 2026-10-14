@@ -39,8 +39,6 @@ impl Default for VersionData {
 }
 
 impl VersionData {
-    pub const VERSION: &'static str = "1.21.11";
-
     pub fn new() -> Self {
         Self {
             // The controller starts after LoginSuccess was relayed to both clients.
@@ -289,9 +287,10 @@ impl VersionData {
                     }
                 }
             }
-            6 | 8 => {
-                if is_active && let Ok(data) = decode::<String>(packet, self.threshold) {
-                    tokio::spawn(config::send_protocol_metadata(data, id == 6));
+            c2s::game::ChatCommand::PACKET_ID | c2s::game::Chat::PACKET_ID => {
+                if is_active && let Ok(text) = decode::<String>(packet, self.threshold) {
+                    let is_command = id == c2s::game::ChatCommand::PACKET_ID;
+                    tokio::spawn(config::send_protocol_metadata(text, is_command));
                 }
             }
             _ => {}
