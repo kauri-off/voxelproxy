@@ -21,6 +21,9 @@ pub struct VersionData {
     /// Our teleports each client has not acked yet.
     pub own_teleports: [u32; 2],
     pub pings: Vec<PingSync>,
+    pub teleports: Vec<TeleportSync>,
+    /// Counts tracked pings and teleports in server stream order.
+    pub seq: u64,
     pub threshold: Option<i32>,
     pub ids: PacketIdReader,
 }
@@ -45,6 +48,8 @@ impl VersionData {
             },
             own_teleports: [0; 2],
             pings: vec![],
+            teleports: vec![],
+            seq: 0,
             threshold: None,
             ids: PacketIdReader::default(),
         }
@@ -73,7 +78,7 @@ impl VersionProtocol for VersionData {
     }
 
     fn handle_client_disconnect(&mut self, new_active: ClientId) -> Option<ClientDisconnectEvent> {
-        let mut packets = vec![];
+        let mut replies = vec![];
 
         self.pings.retain(|t| {
             if !t.answered(new_active) {
@@ -85,15 +90,36 @@ impl VersionProtocol for VersionData {
                     uid: t.uid,
                     accepted: true,
                 };
-                packets.push(
+                replies.push((
+                    t.seq,
                     UncompressedPacket::from_packet(&tx)
                         .unwrap()
                         .to_raw_packet_compressed(self.threshold)
                         .unwrap(),
-                );
+                ));
             }
             false
         });
+        self.teleports.retain(|t| {
+            if !t.answered(new_active) {
+                return true;
+            }
+            if !t.sent {
+                let tx = c2s::game::AcceptTeleportation { id: VarInt(t.id) };
+                replies.push((
+                    t.seq,
+                    UncompressedPacket::from_packet(&tx)
+                        .unwrap()
+                        .to_raw_packet_compressed(self.threshold)
+                        .unwrap(),
+                ));
+            }
+            false
+        });
+
+        // Vanilla clients answer pings and teleports in the order the server sent them.
+        replies.sort_by_key(|(seq, _)| *seq);
+        let packets: Vec<_> = replies.into_iter().map(|(_, packet)| packet).collect();
 
         if packets.is_empty() {
             None
@@ -121,9 +147,20 @@ impl VersionData {
     ) -> anyhow::Result<Option<ClientBoundEvent>> {
         let id = self.ids.read(packet, self.threshold)?;
 
-        if id == s2c::game::ContainerAck::PACKET_ID && both_online {
-            let ping: s2c::game::ContainerAck = decode(packet, self.threshold)?;
-            self.pings.push(PingSync::new(ping.container_id, ping.uid));
+        match id {
+            s2c::game::ContainerAck::PACKET_ID if both_online => {
+                let ping: s2c::game::ContainerAck = decode(packet, self.threshold)?;
+                self.seq += 1;
+                self.pings
+                    .push(PingSync::new(ping.container_id, ping.uid, self.seq));
+            }
+            s2c::game::Position::PACKET_ID if both_online => {
+                let teleport: s2c::game::Position = decode(packet, self.threshold)?;
+                self.seq += 1;
+                self.teleports
+                    .push(TeleportSync::new(teleport.id.0, self.seq));
+            }
+            _ => {}
         }
 
         Ok(None)
@@ -146,6 +183,19 @@ impl VersionData {
                 if teleport.id.0 == TELEPORT_ID && *pending > 0 {
                     *pending -= 1;
                     return Ok(Some(ServerBoundEvent::SkipRelay));
+                }
+                if let Some(i) = self
+                    .teleports
+                    .iter()
+                    .position(|t| t.id == teleport.id.0 && !t.answered(client_id))
+                {
+                    let duplicate = self.teleports[i].answer(client_id, is_active);
+                    if !both_online || self.teleports[i].answered_by_both() {
+                        self.teleports.remove(i);
+                    }
+                    if duplicate {
+                        return Ok(Some(ServerBoundEvent::SkipRelay));
+                    }
                 }
             }
             c2s::game::Pos::PACKET_ID => {
@@ -241,16 +291,18 @@ impl VersionData {
 pub struct PingSync {
     pub container_id: i8,
     pub uid: i16,
+    pub seq: u64,
     answered: [bool; 2],
     /// Whether a reply already reached the server.
     sent: bool,
 }
 
 impl PingSync {
-    pub fn new(container_id: i8, uid: i16) -> Self {
+    pub fn new(container_id: i8, uid: i16, seq: u64) -> Self {
         Self {
             container_id,
             uid,
+            seq,
             answered: [false; 2],
             sent: false,
         }
@@ -265,6 +317,42 @@ impl PingSync {
     }
 
     /// Records a reply and returns whether the server already got one.
+    pub fn answer(&mut self, client: ClientId, is_active: bool) -> bool {
+        self.answered[client.index()] = true;
+        let duplicate = is_active && self.sent;
+        self.sent |= is_active;
+        duplicate
+    }
+}
+
+#[derive(Debug)]
+pub struct TeleportSync {
+    pub id: i32,
+    pub seq: u64,
+    answered: [bool; 2],
+    /// Whether an ack already reached the server.
+    sent: bool,
+}
+
+impl TeleportSync {
+    pub fn new(id: i32, seq: u64) -> Self {
+        Self {
+            id,
+            seq,
+            answered: [false; 2],
+            sent: false,
+        }
+    }
+
+    pub fn answered(&self, client: ClientId) -> bool {
+        self.answered[client.index()]
+    }
+
+    pub fn answered_by_both(&self) -> bool {
+        self.answered == [true; 2]
+    }
+
+    /// Records an ack and returns whether the server already got one.
     pub fn answer(&mut self, client: ClientId, is_active: bool) -> bool {
         self.answered[client.index()] = true;
         let duplicate = is_active && self.sent;
