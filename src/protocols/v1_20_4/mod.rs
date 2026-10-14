@@ -13,7 +13,8 @@ use crate::{
 };
 use packets::{c2s, s2c};
 
-const TELEPORT_ID: i32 = 1000;
+/// Vanilla servers never issue negative teleport ids.
+const TELEPORT_ID: i32 = -1;
 
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum State {
@@ -27,6 +28,8 @@ pub struct VersionData {
     pub state_in: State,
     pub state_out: [State; 2],
     pub position: s2c::game::Position,
+    /// Our teleports each client has not acked yet.
+    pub own_teleports: [u32; 2],
     pub pings: Vec<PingSync>,
     /// The server has not got the active client's ConfigurationAcknowledged yet.
     pub awaiting_config_ack: bool,
@@ -57,6 +60,7 @@ impl VersionData {
                 pitch: 0.0,
                 relative_flags: 0,
             },
+            own_teleports: [0; 2],
             pings: vec![],
             awaiting_config_ack: false,
             orphan_keep_alives: vec![],
@@ -72,21 +76,21 @@ impl VersionProtocol for VersionData {
         packet: &RawPacket,
         client_id: ClientId,
         is_active: bool,
-        both_active: bool,
+        both_online: bool,
     ) -> Option<ServerBoundEvent> {
         match self.state_out[client_id.index()] {
             State::Login => self.handle_c2s_login(packet, client_id),
             State::Configuration => self.handle_c2s_configuration(packet, client_id),
-            State::Game => self.handle_c2s_game(packet, client_id, is_active, both_active),
+            State::Game => self.handle_c2s_game(packet, client_id, is_active, both_online),
         }
         .unwrap_or_default()
     }
 
-    fn handle_s2c(&mut self, packet: &RawPacket, both_active: bool) -> Option<ClientBoundEvent> {
+    fn handle_s2c(&mut self, packet: &RawPacket, both_online: bool) -> Option<ClientBoundEvent> {
         match self.state_in {
             State::Login => Ok(None),
             State::Configuration => self.handle_s2c_configuration(packet),
-            State::Game => self.handle_s2c_game(packet, both_active),
+            State::Game => self.handle_s2c_game(packet, both_online),
         }
         .unwrap_or_default()
     }
@@ -160,7 +164,7 @@ impl VersionData {
     fn handle_s2c_game(
         &mut self,
         packet: &RawPacket,
-        both_active: bool,
+        both_online: bool,
     ) -> anyhow::Result<Option<ClientBoundEvent>> {
         let id = self.ids.read(packet, self.threshold)?;
 
@@ -171,7 +175,7 @@ impl VersionData {
                 self.orphan_keep_alives.clear();
                 return Ok(Some(ClientBoundEvent::PhaseSwitch));
             }
-            s2c::game::Ping::PACKET_ID if both_active => {
+            s2c::game::Ping::PACKET_ID if both_online => {
                 let ping: s2c::game::Ping = decode(packet, self.threshold)?;
                 self.pings.push(PingSync::new(ping.id));
             }
@@ -227,7 +231,7 @@ impl VersionData {
         packet: &RawPacket,
         client_id: ClientId,
         is_active: bool,
-        both_active: bool,
+        both_online: bool,
     ) -> anyhow::Result<Option<ServerBoundEvent>> {
         let id = self.ids.read(packet, self.threshold)?;
 
@@ -240,12 +244,12 @@ impl VersionData {
                 return Ok(Some(ServerBoundEvent::PhaseAcked));
             }
             c2s::game::AcceptTeleportation::PACKET_ID => {
-                if !both_active {
-                    let teleport: c2s::game::AcceptTeleportation = decode(packet, self.threshold)?;
+                let teleport: c2s::game::AcceptTeleportation = decode(packet, self.threshold)?;
+                let pending = &mut self.own_teleports[client_id.index()];
 
-                    if teleport.id.0 == TELEPORT_ID {
-                        return Ok(Some(ServerBoundEvent::SkipRelay));
-                    }
+                if teleport.id.0 == TELEPORT_ID && *pending > 0 {
+                    *pending -= 1;
+                    return Ok(Some(ServerBoundEvent::SkipRelay));
                 }
             }
             c2s::game::Pos::PACKET_ID => {
@@ -255,7 +259,7 @@ impl VersionData {
                     self.position.x = pos.x;
                     self.position.y = pos.y;
                     self.position.z = pos.z;
-                    return self.send_position_to_inactive();
+                    return self.send_position_to_inactive(client_id, both_online);
                 }
             }
             c2s::game::PosRot::PACKET_ID => {
@@ -268,7 +272,7 @@ impl VersionData {
                     self.position.yaw = pos_rot.yaw;
                     self.position.pitch = pos_rot.pitch;
 
-                    return self.send_position_to_inactive();
+                    return self.send_position_to_inactive(client_id, both_online);
                 }
             }
             c2s::game::Rot::PACKET_ID => {
@@ -277,13 +281,13 @@ impl VersionData {
 
                     self.position.yaw = rot.yaw;
                     self.position.pitch = rot.pitch;
-                    return self.send_position_to_inactive();
+                    return self.send_position_to_inactive(client_id, both_online);
                 }
             }
             c2s::game::Pong::PACKET_ID => {
                 let packet: c2s::game::Pong = decode(packet, self.threshold)?;
 
-                if both_active {
+                if both_online {
                     if let Some(i) = self
                         .pings
                         .iter_mut()
@@ -327,15 +331,19 @@ impl VersionData {
         Ok(None)
     }
 
-    fn send_position_to_inactive(&self) -> anyhow::Result<Option<ServerBoundEvent>> {
-        if self.state_in == State::Game {
-            Ok(Some(ServerBoundEvent::SendToInactive(
-                UncompressedPacket::from_packet(&self.position)?
-                    .to_raw_packet_compressed(self.threshold)?,
-            )))
-        } else {
-            Ok(None)
+    fn send_position_to_inactive(
+        &mut self,
+        active: ClientId,
+        both_online: bool,
+    ) -> anyhow::Result<Option<ServerBoundEvent>> {
+        if !both_online || self.state_in != State::Game {
+            return Ok(None);
         }
+        let packet = UncompressedPacket::from_packet(&self.position)?
+            .to_raw_packet_compressed(self.threshold)?;
+        let pending = &mut self.own_teleports[active.opposite().index()];
+        *pending = pending.saturating_add(1);
+        Ok(Some(ServerBoundEvent::SendToInactive(packet)))
     }
 }
 
@@ -392,19 +400,19 @@ mod tests {
         packet: &T,
         client: ClientId,
         active: ClientId,
-        both_active: bool,
+        both_online: bool,
     ) -> Option<ServerBoundEvent> {
         let packet = raw(data, packet);
-        data.handle_c2s(&packet, client, client == active, both_active)
+        data.handle_c2s(&packet, client, client == active, both_online)
     }
 
     fn s2c<T: PacketId + Serialize>(
         data: &mut VersionData,
         packet: &T,
-        both_active: bool,
+        both_online: bool,
     ) -> Option<ClientBoundEvent> {
         let packet = raw(data, packet);
-        data.handle_s2c(&packet, both_active)
+        data.handle_s2c(&packet, both_online)
     }
 
     fn mirrored(
@@ -441,6 +449,10 @@ mod tests {
             pitch,
             ..Default::default()
         }
+    }
+
+    fn teleport_ack(id: i32) -> c2s::game::AcceptTeleportation {
+        c2s::game::AcceptTeleportation { id: VarInt(id) }
     }
 
     /// Both clients went through login and configuration; the server is in Game.
@@ -596,6 +608,7 @@ mod tests {
     #[test]
     fn failover_keeps_new_active_client_state() {
         let mut data = in_game(None);
+        c2s(&mut data, &rot(1.0, 1.0), P, P, true);
         s2c(&mut data, &s2c::game::StartConfiguration {}, true);
         c2s(
             &mut data,
@@ -627,18 +640,46 @@ mod tests {
     }
 
     #[test]
-    fn own_teleport_ack_is_skipped_only_without_peer() {
+    fn only_pending_own_teleport_acks_are_skipped() {
         let mut data = in_game(None);
-        let ours = c2s::game::AcceptTeleportation {
-            id: VarInt(TELEPORT_ID),
-        };
-        let servers = c2s::game::AcceptTeleportation { id: VarInt(1) };
-        assert!(c2s(&mut data, &ours, P, P, true).is_none());
-        assert!(c2s(&mut data, &servers, S, S, false).is_none());
+        for yaw in [1.0, 2.0] {
+            c2s(&mut data, &rot(yaw, 0.0), P, P, true);
+        }
+        let ours = teleport_ack(TELEPORT_ID);
+        assert!(matches!(
+            c2s(&mut data, &ours, S, P, true),
+            Some(ServerBoundEvent::SkipRelay)
+        ));
+
+        // The second ack was still in flight when the primary dropped.
+        data.handle_client_disconnect(S);
         assert!(matches!(
             c2s(&mut data, &ours, S, S, false),
             Some(ServerBoundEvent::SkipRelay)
         ));
+        assert!(c2s(&mut data, &ours, S, S, false).is_none());
+        assert!(c2s(&mut data, &teleport_ack(1), S, S, false).is_none());
+    }
+
+    #[test]
+    fn acks_are_relayed_for_client_without_own_teleports() {
+        let mut data = in_game(None);
+        c2s(&mut data, &rot(1.0, 0.0), P, P, true);
+        // The inactive secondary left, the primary never got our teleports.
+        for both_online in [true, false] {
+            let ack = teleport_ack(TELEPORT_ID);
+            assert!(c2s(&mut data, &ack, P, P, both_online).is_none());
+        }
+        assert!(c2s(&mut data, &teleport_ack(5), P, P, false).is_none());
+    }
+
+    #[test]
+    fn unsent_own_teleports_are_not_counted() {
+        let mut data = in_game(None);
+        assert!(c2s(&mut data, &rot(1.0, 0.0), P, P, false).is_none());
+        s2c(&mut data, &s2c::game::StartConfiguration {}, true);
+        assert!(c2s(&mut data, &rot(2.0, 0.0), P, P, true).is_none());
+        assert_eq!(data.own_teleports, [0, 0]);
     }
 
     #[test]

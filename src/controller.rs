@@ -132,7 +132,7 @@ impl Controller {
                         &packet,
                         client_id,
                         client_id == self.active_client,
-                        self.both_active(),
+                        self.both_online(),
                     );
 
                     let mut skip = false;
@@ -140,7 +140,7 @@ impl Controller {
                     if let Some(event) = event {
                         match event {
                             ServerBoundEvent::SendToInactive(raw_packet) => {
-                                if self.both_active() {
+                                if self.both_online() {
                                     self.relay(
                                         self.active_client.opposite(),
                                         Arc::new(raw_packet),
@@ -202,7 +202,7 @@ impl Controller {
 
                 ControllerEvent::ServerData(packet) => {
                     let phase_switch = matches!(
-                        self.version.handle_s2c(&packet, self.both_active()),
+                        self.version.handle_s2c(&packet, self.both_online()),
                         Some(ClientBoundEvent::PhaseSwitch)
                     );
 
@@ -278,7 +278,7 @@ impl Controller {
         self.events.client_status(client_id, false);
     }
 
-    fn both_active(&self) -> bool {
+    fn both_online(&self) -> bool {
         self.peers.iter().all(Option::is_some)
     }
 }
