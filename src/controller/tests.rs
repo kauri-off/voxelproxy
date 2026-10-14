@@ -725,7 +725,6 @@ macro_rules! controller_tests {
             active_pong_reaches_server_once
             failover_sends_pongs_only_new_active_answered
             forwarded_pongs_are_dropped_after_failover
-            #[ignore = "known bug: the pong is dropped because the inactive client answered first"]
             active_pong_reaches_server_after_inactive_left
             #[ignore = "known bug: an ack the new active client sent while inactive is never relayed"]
             inactive_teleport_ack_reaches_server_on_failover
