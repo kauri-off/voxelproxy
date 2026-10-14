@@ -272,3 +272,143 @@ impl PingSync {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::controller::tests::{C2s, Phase, S2c, Spot, Wire, pack, unpack};
+
+    impl Wire for VersionData {
+        const CONFIGURATION: bool = false;
+
+        fn write_c2s(packet: C2s) -> UncompressedPacket {
+            match packet {
+                C2s::Teleport(id, _) => pack(&c2s::game::AcceptTeleportation { id: VarInt(id) }),
+                C2s::Pos(x, y, z) => pack(&c2s::game::Pos {
+                    x,
+                    y,
+                    z,
+                    on_ground: false,
+                }),
+                C2s::Rot(yaw, pitch) => pack(&c2s::game::Rot {
+                    yaw,
+                    pitch,
+                    on_ground: false,
+                }),
+                C2s::PosRot(at) => pack(&c2s::game::PosRot {
+                    x: at.x,
+                    y: at.y,
+                    z: at.z,
+                    yaw: at.yaw,
+                    pitch: at.pitch,
+                    on_ground: false,
+                }),
+                C2s::Pong(id) => pack(&c2s::game::Ack {
+                    container_id: 0,
+                    uid: id as i16,
+                    accepted: true,
+                }),
+                C2s::ContainerClose(id) => pack(&c2s::game::ContainerClose {
+                    container_id: id as u8,
+                }),
+                C2s::Raw(id) => UncompressedPacket::new(id, vec![]),
+                C2s::LoginAck | C2s::FinishConfiguration | C2s::ConfigurationAck => {
+                    panic!("{packet:?} does not exist in 1.16.5")
+                }
+            }
+        }
+
+        fn write_s2c(packet: S2c) -> UncompressedPacket {
+            match packet {
+                S2c::Position(id, at) => pack(&s2c::game::Position {
+                    x: at.x,
+                    y: at.y,
+                    z: at.z,
+                    yaw: at.yaw,
+                    pitch: at.pitch,
+                    relative_flags: 0,
+                    id: VarInt(id),
+                }),
+                // Only a rejected click makes the client answer, see `handleContainerAck`.
+                S2c::Ping(id) => pack(&s2c::game::ContainerAck {
+                    container_id: 0,
+                    uid: id as i16,
+                    accepted: false,
+                }),
+                S2c::ContainerClose(id) => pack(&s2c::game::ContainerClose {
+                    container_id: id as u8,
+                }),
+                S2c::Raw(id, len) => UncompressedPacket::new(id, vec![0; len]),
+                S2c::StartConfiguration | S2c::FinishConfiguration => {
+                    panic!("{packet:?} does not exist in 1.16.5")
+                }
+            }
+        }
+
+        fn read_c2s(_: Phase, packet: &UncompressedPacket) -> Option<C2s> {
+            use c2s::game;
+            Some(match packet.packet_id {
+                game::AcceptTeleportation::PACKET_ID => C2s::Teleport(
+                    unpack::<game::AcceptTeleportation>(packet).id.0,
+                    Spot::default(),
+                ),
+                game::Pos::PACKET_ID => {
+                    let p: game::Pos = unpack(packet);
+                    C2s::Pos(p.x, p.y, p.z)
+                }
+                game::Rot::PACKET_ID => {
+                    let p: game::Rot = unpack(packet);
+                    C2s::Rot(p.yaw, p.pitch)
+                }
+                game::PosRot::PACKET_ID => {
+                    let p: game::PosRot = unpack(packet);
+                    C2s::PosRot(Spot {
+                        x: p.x,
+                        y: p.y,
+                        z: p.z,
+                        yaw: p.yaw,
+                        pitch: p.pitch,
+                    })
+                }
+                game::Ack::PACKET_ID => {
+                    let p: game::Ack = unpack(packet);
+                    assert_eq!((p.container_id, p.accepted), (0, true));
+                    C2s::Pong(p.uid.into())
+                }
+                game::ContainerClose::PACKET_ID => {
+                    C2s::ContainerClose(unpack::<game::ContainerClose>(packet).container_id.into())
+                }
+                _ => return None,
+            })
+        }
+
+        fn read_s2c(_: Phase, packet: &UncompressedPacket) -> Option<S2c> {
+            use s2c::game;
+            Some(match packet.packet_id {
+                game::Position::PACKET_ID => {
+                    let p: game::Position = unpack(packet);
+                    assert_eq!(p.relative_flags, 0);
+                    S2c::Position(
+                        p.id.0,
+                        Spot {
+                            x: p.x,
+                            y: p.y,
+                            z: p.z,
+                            yaw: p.yaw,
+                            pitch: p.pitch,
+                        },
+                    )
+                }
+                game::ContainerAck::PACKET_ID => {
+                    S2c::Ping(unpack::<game::ContainerAck>(packet).uid.into())
+                }
+                game::ContainerClose::PACKET_ID => {
+                    S2c::ContainerClose(unpack::<game::ContainerClose>(packet).container_id.into())
+                }
+                _ => return None,
+            })
+        }
+    }
+
+    crate::controller::tests::controller_tests!();
+}
