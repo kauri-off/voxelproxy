@@ -365,6 +365,7 @@ mod tests {
     use mc_protocol::{packet::PacketId, ser::Serialize};
 
     use super::*;
+    use crate::controller::tests::{C2s, Phase, S2c, Spot, Wire, pack, unpack};
 
     const P: ClientId = ClientId::Primary;
     const S: ClientId = ClientId::Secondary;
@@ -755,4 +756,148 @@ mod tests {
         assert_eq!((got.yaw, got.pitch), (12.0, -3.0));
         assert_eq!(got.id.0, TELEPORT_ID);
     }
+
+    impl Wire for VersionData {
+        const CONFIGURATION: bool = true;
+        const ACK_MOVES: bool = true;
+
+        fn write_c2s(packet: C2s) -> UncompressedPacket {
+            match packet {
+                C2s::LoginAck => pack(&c2s::login::LoginAcknowledged {}),
+                C2s::FinishConfiguration => pack(&c2s::configuration::FinishConfiguration {}),
+                C2s::ConfigurationAck => pack(&c2s::game::ConfigurationAcknowledged {}),
+                C2s::Teleport(id, at) => pack(&c2s::game::AcceptTeleportation {
+                    id: VarInt(id),
+                    x: at.x,
+                    y: at.y,
+                    z: at.z,
+                    yaw: at.yaw,
+                    pitch: at.pitch,
+                }),
+                C2s::Pos(x, y, z) => pack(&c2s::game::Pos {
+                    x,
+                    y,
+                    z,
+                    ..Default::default()
+                }),
+                C2s::Rot(yaw, pitch) => pack(&rot(yaw, pitch)),
+                C2s::PosRot(at) => pack(&c2s::game::PosRot {
+                    x: at.x,
+                    y: at.y,
+                    z: at.z,
+                    yaw: at.yaw,
+                    pitch: at.pitch,
+                    ..Default::default()
+                }),
+                C2s::Pong(id) => pack(&c2s::game::Pong { id }),
+                C2s::ContainerClose(id) => pack(&c2s::game::ContainerClose {
+                    container_id: VarInt(id),
+                }),
+                C2s::Raw(id) => UncompressedPacket::new(id, vec![]),
+            }
+        }
+
+        fn write_s2c(packet: S2c) -> UncompressedPacket {
+            match packet {
+                S2c::Position(id, at) => pack(&s2c::game::Position {
+                    id: VarInt(id),
+                    x: at.x,
+                    y: at.y,
+                    z: at.z,
+                    delta_x: 0.0,
+                    delta_y: 0.0,
+                    delta_z: 0.0,
+                    yaw: at.yaw,
+                    pitch: at.pitch,
+                    relative_flags: 0,
+                }),
+                S2c::Ping(id) => pack(&s2c::game::Ping { id }),
+                S2c::ContainerClose(id) => pack(&s2c::game::ContainerClose {
+                    container_id: VarInt(id),
+                }),
+                S2c::StartConfiguration => pack(&s2c::game::StartConfiguration {}),
+                S2c::FinishConfiguration => pack(&s2c::configuration::FinishConfiguration {}),
+                S2c::Raw(id, len) => UncompressedPacket::new(id, vec![0; len]),
+            }
+        }
+
+        fn read_c2s(phase: Phase, packet: &UncompressedPacket) -> Option<C2s> {
+            use c2s::{configuration, game, login};
+            Some(match (phase, packet.packet_id) {
+                (Phase::Login, login::LoginAcknowledged::PACKET_ID) => C2s::LoginAck,
+                (Phase::Configuration, configuration::FinishConfiguration::PACKET_ID) => {
+                    C2s::FinishConfiguration
+                }
+                (Phase::Game, game::ConfigurationAcknowledged::PACKET_ID) => C2s::ConfigurationAck,
+                (Phase::Game, game::AcceptTeleportation::PACKET_ID) => {
+                    let p: game::AcceptTeleportation = unpack(packet);
+                    C2s::Teleport(
+                        p.id.0,
+                        Spot {
+                            x: p.x,
+                            y: p.y,
+                            z: p.z,
+                            yaw: p.yaw,
+                            pitch: p.pitch,
+                        },
+                    )
+                }
+                (Phase::Game, game::Pos::PACKET_ID) => {
+                    let p: game::Pos = unpack(packet);
+                    C2s::Pos(p.x, p.y, p.z)
+                }
+                (Phase::Game, game::Rot::PACKET_ID) => {
+                    let p: game::Rot = unpack(packet);
+                    C2s::Rot(p.yaw, p.pitch)
+                }
+                (Phase::Game, game::PosRot::PACKET_ID) => {
+                    let p: game::PosRot = unpack(packet);
+                    C2s::PosRot(Spot {
+                        x: p.x,
+                        y: p.y,
+                        z: p.z,
+                        yaw: p.yaw,
+                        pitch: p.pitch,
+                    })
+                }
+                (Phase::Game, game::Pong::PACKET_ID) => C2s::Pong(unpack::<game::Pong>(packet).id),
+                (Phase::Game, game::ContainerClose::PACKET_ID) => {
+                    C2s::ContainerClose(unpack::<game::ContainerClose>(packet).container_id.0)
+                }
+                _ => return None,
+            })
+        }
+
+        fn read_s2c(phase: Phase, packet: &UncompressedPacket) -> Option<S2c> {
+            use s2c::{configuration, game};
+            Some(match (phase, packet.packet_id) {
+                (Phase::Configuration, configuration::FinishConfiguration::PACKET_ID) => {
+                    S2c::FinishConfiguration
+                }
+                (Phase::Game, game::StartConfiguration::PACKET_ID) => S2c::StartConfiguration,
+                (Phase::Game, game::Position::PACKET_ID) => {
+                    let p: game::Position = unpack(packet);
+                    assert_eq!(p.relative_flags, 0);
+                    assert_eq!((p.delta_x, p.delta_y, p.delta_z), (0.0, 0.0, 0.0));
+                    S2c::Position(
+                        p.id.0,
+                        Spot {
+                            x: p.x,
+                            y: p.y,
+                            z: p.z,
+                            yaw: p.yaw,
+                            pitch: p.pitch,
+                        },
+                    )
+                }
+                (Phase::Game, game::Ping::PACKET_ID) => S2c::Ping(unpack::<game::Ping>(packet).id),
+                (Phase::Game, game::ContainerClose::PACKET_ID) => {
+                    S2c::ContainerClose(unpack::<game::ContainerClose>(packet).container_id.0)
+                }
+                _ => return None,
+            })
+        }
+    }
+
+    crate::controller::tests::controller_tests!(configuration);
 }

@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, sync::Arc};
+use std::{collections::VecDeque, ops::ControlFlow, sync::Arc};
 
 use mc_protocol::packet::RawPacket;
 use tokio::{
@@ -124,99 +124,99 @@ impl Controller {
     }
 
     pub async fn run(mut self) {
-        let log = Logger::new(&self.events);
         while let Some(event) = self.event_rx.recv().await {
-            match event {
-                ControllerEvent::ClientData(client_id, packet) => {
-                    let event = self.version.handle_c2s(
-                        &packet,
-                        client_id,
-                        client_id == self.active_client,
-                        self.both_online(),
-                    );
+            if self.handle(event).await.is_break() {
+                return;
+            }
+        }
+    }
 
-                    let mut skip = false;
+    async fn handle(&mut self, event: ControllerEvent) -> ControlFlow<()> {
+        match event {
+            ControllerEvent::ClientData(client_id, packet) => {
+                let event = self.version.handle_c2s(
+                    &packet,
+                    client_id,
+                    client_id == self.active_client,
+                    self.both_online(),
+                );
 
-                    if let Some(event) = event {
-                        match event {
-                            ServerBoundEvent::SendToInactive(raw_packet) => {
-                                if self.both_online() {
-                                    self.relay(
-                                        self.active_client.opposite(),
-                                        Arc::new(raw_packet),
-                                        false,
-                                    )
-                                    .await;
-                                }
+                if let Some(event) = event {
+                    match event {
+                        ServerBoundEvent::SendToInactive(raw_packet) => {
+                            if self.both_online() {
+                                self.relay(
+                                    self.active_client.opposite(),
+                                    Arc::new(raw_packet),
+                                    false,
+                                )
+                                .await;
                             }
-                            ServerBoundEvent::SkipRelay => skip = true,
-                            ServerBoundEvent::PhaseAcked => self.release(client_id).await,
                         }
-                    }
-
-                    if skip {
-                        continue;
-                    }
-
-                    if client_id == self.active_client
-                        && let Err(e) = self.remote_tx.send(packet).await
-                    {
-                        log.error(format!("Ошибка отправки пакета на сервер: {}", e));
-                        return;
+                        ServerBoundEvent::SkipRelay => return ControlFlow::Continue(()),
+                        ServerBoundEvent::PhaseAcked => self.release(client_id).await,
                     }
                 }
 
-                ControllerEvent::ClientDisconnected(client_id) => {
-                    self.mark_offline(client_id);
+                if client_id == self.active_client
+                    && let Err(e) = self.remote_tx.send(packet).await
+                {
+                    Logger::new(&self.events)
+                        .error(format!("Ошибка отправки пакета на сервер: {}", e));
+                    return ControlFlow::Break(());
+                }
+            }
 
-                    if self.peers.iter().all(Option::is_none) {
-                        return;
-                    }
+            ControllerEvent::ClientDisconnected(client_id) => {
+                self.mark_offline(client_id);
 
-                    if self.active_client == client_id {
-                        self.active_client = client_id.opposite();
-                        log.info(format!(
-                            "Активный клиент отключился, управление передано: {}",
-                            match self.active_client {
-                                ClientId::Primary => "основной",
-                                ClientId::Secondary => "дополнительный",
-                            }
-                        ));
+                if self.peers.iter().all(Option::is_none) {
+                    return ControlFlow::Break(());
+                }
 
-                        if let Some(event) =
-                            self.version.handle_client_disconnect(self.active_client)
-                        {
-                            match event {
-                                crate::protocols::ClientDisconnectEvent::SendToServer(packets) => {
-                                    for packet in packets {
-                                        if self.remote_tx.send(packet).await.is_err() {
-                                            log.error("Соединение с сервером потеряно");
-                                            return;
-                                        }
+                if self.active_client == client_id {
+                    self.active_client = client_id.opposite();
+                    Logger::new(&self.events).info(format!(
+                        "Активный клиент отключился, управление передано: {}",
+                        match self.active_client {
+                            ClientId::Primary => "основной",
+                            ClientId::Secondary => "дополнительный",
+                        }
+                    ));
+
+                    if let Some(event) = self.version.handle_client_disconnect(self.active_client) {
+                        match event {
+                            crate::protocols::ClientDisconnectEvent::SendToServer(packets) => {
+                                for packet in packets {
+                                    if self.remote_tx.send(packet).await.is_err() {
+                                        Logger::new(&self.events)
+                                            .error("Соединение с сервером потеряно");
+                                        return ControlFlow::Break(());
                                     }
                                 }
                             }
                         }
                     }
                 }
-
-                ControllerEvent::ServerData(packet) => {
-                    let phase_switch = matches!(
-                        self.version.handle_s2c(&packet, self.both_online()),
-                        Some(ClientBoundEvent::PhaseSwitch)
-                    );
-
-                    let packet = Arc::new(packet);
-                    let inactive = self.active_client.opposite();
-                    self.relay(self.active_client, packet.clone(), phase_switch)
-                        .await;
-                    self.relay(inactive, packet, phase_switch).await;
-                }
-
-                // Ending here also tears down half-open clients that never sent a FIN.
-                ControllerEvent::ServerDisconnected => return,
             }
+
+            ControllerEvent::ServerData(packet) => {
+                let phase_switch = matches!(
+                    self.version.handle_s2c(&packet, self.both_online()),
+                    Some(ClientBoundEvent::PhaseSwitch)
+                );
+
+                let packet = Arc::new(packet);
+                let inactive = self.active_client.opposite();
+                self.relay(self.active_client, packet.clone(), phase_switch)
+                    .await;
+                self.relay(inactive, packet, phase_switch).await;
+            }
+
+            // Ending here also tears down half-open clients that never sent a FIN.
+            ControllerEvent::ServerDisconnected => return ControlFlow::Break(()),
         }
+        ControlFlow::Continue(())
     }
 
     /// Delivers a packet unless the client is still switching phase; the vanilla client
@@ -396,3 +396,6 @@ pub async fn run_server(
         write_loop(write_half, packet_rx)
     );
 }
+
+#[cfg(test)]
+pub(crate) mod tests;
