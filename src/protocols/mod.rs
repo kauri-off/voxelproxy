@@ -19,6 +19,7 @@ pub mod v1_21_4;
 pub mod v1_21_5;
 pub mod v1_21_6;
 pub mod v1_21_8;
+pub mod v26_1_2;
 
 use std::io;
 
@@ -82,6 +83,7 @@ pub enum Version {
     V1_21_8(v1_21_8::VersionData),
     V1_21_10(v1_21_10::VersionData),
     V1_21_11(v1_21_11::VersionData),
+    V26_1_2(v26_1_2::VersionData),
 }
 
 impl Version {
@@ -110,6 +112,7 @@ impl Version {
             772 => Some(Version::V1_21_8(v1_21_8::VersionData::new())),
             773 => Some(Version::V1_21_10(v1_21_10::VersionData::new())),
             774 => Some(Version::V1_21_11(v1_21_11::VersionData::new())),
+            775 => Some(Version::V26_1_2(v26_1_2::VersionData::new())),
             _ => None,
         }
     }
@@ -137,6 +140,7 @@ impl Version {
             v1_21_8::VersionData::VERSION,
             v1_21_10::VersionData::VERSION,
             v1_21_11::VersionData::VERSION,
+            v26_1_2::VersionData::VERSION,
         ]
     }
 }
