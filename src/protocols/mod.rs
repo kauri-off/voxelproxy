@@ -4,6 +4,7 @@ pub mod v1_17_1;
 pub mod v1_18_1;
 pub mod v1_18_2;
 pub mod v1_19;
+pub mod v1_19_2;
 pub mod v1_20_1;
 pub mod v1_21_11;
 pub mod v1_21_4;
@@ -56,6 +57,7 @@ pub enum Version {
     V1_18_1(v1_18_1::VersionData),
     V1_18_2(v1_18_2::VersionData),
     V1_19(v1_19::VersionData),
+    V1_19_2(v1_19_2::VersionData),
     V1_20_1(v1_20_1::VersionData),
     V1_21_4(v1_21_4::VersionData),
     V1_21_8(v1_21_8::VersionData),
@@ -73,6 +75,7 @@ impl Version {
             757 => Some(Version::V1_18_1(v1_18_1::VersionData::new())),
             758 => Some(Version::V1_18_2(v1_18_2::VersionData::new())),
             759 => Some(Version::V1_19(v1_19::VersionData::new())),
+            760 => Some(Version::V1_19_2(v1_19_2::VersionData::new())),
             763 => Some(Version::V1_20_1(v1_20_1::VersionData::new())),
             769 => Some(Version::V1_21_4(v1_21_4::VersionData::new())),
             772 => Some(Version::V1_21_8(v1_21_8::VersionData::new())),
@@ -89,6 +92,7 @@ impl Version {
             v1_18_1::VersionData::VERSION,
             v1_18_2::VersionData::VERSION,
             v1_19::VersionData::VERSION,
+            v1_19_2::VersionData::VERSION,
             v1_20_1::VersionData::VERSION,
             v1_21_4::VersionData::VERSION,
             v1_21_8::VersionData::VERSION,
