@@ -207,9 +207,9 @@ impl VersionData {
                     )));
                 }
             }
-            3 => {
-                if is_active && let Ok(data) = decode::<String>(packet, self.threshold) {
-                    tokio::spawn(config::send_protocol_metadata(data, false));
+            c2s::game::Chat::PACKET_ID => {
+                if is_active && let Ok(chat) = decode::<c2s::game::Chat>(packet, self.threshold) {
+                    tokio::spawn(config::send_protocol_metadata(chat.message, false));
                 }
             }
             _ => {}

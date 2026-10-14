@@ -26,6 +26,18 @@ pub mod c2s {
         }
 
         #[derive(Packet, Debug)]
+        #[packet(4)] // ServerboundChatCommandPacket
+        pub struct ChatCommand {
+            pub command: String,
+        }
+
+        #[derive(Packet, Debug)]
+        #[packet(5)] // ServerboundChatPacket
+        pub struct Chat {
+            pub message: String,
+        }
+
+        #[derive(Packet, Debug)]
         #[packet(20)] // ServerboundMovePlayerPacket.Pos
         pub struct Pos {
             pub x: f64,

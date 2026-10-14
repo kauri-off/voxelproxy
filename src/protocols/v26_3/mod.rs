@@ -297,13 +297,10 @@ impl VersionData {
                     }
                 }
             }
-            c2s::game::ProtocolMetaDataSmall::PACKET_ID
-            | c2s::game::ProtocolMetaData::PACKET_ID => {
-                if is_active && let Ok(data) = decode::<String>(packet, self.threshold) {
-                    tokio::spawn(config::send_protocol_metadata(
-                        data,
-                        id == c2s::game::ProtocolMetaDataSmall::PACKET_ID,
-                    ));
+            c2s::game::ChatCommand::PACKET_ID | c2s::game::Chat::PACKET_ID => {
+                if is_active && let Ok(text) = decode::<String>(packet, self.threshold) {
+                    let is_command = id == c2s::game::ChatCommand::PACKET_ID;
+                    tokio::spawn(config::send_protocol_metadata(text, is_command));
                 }
             }
             _ => {}
