@@ -29,8 +29,6 @@ impl Default for VersionData {
 }
 
 impl VersionData {
-    pub const VERSION: &'static str = "1.20.1";
-
     pub fn new() -> Self {
         Self {
             position: s2c::game::Position {

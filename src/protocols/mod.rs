@@ -122,35 +122,6 @@ impl Version {
             _ => None,
         }
     }
-
-    pub fn supported_versions() -> &'static [&'static str] {
-        &[
-            v1_16_5::VersionData::VERSION,
-            v1_17::VersionData::VERSION,
-            v1_17_1::VersionData::VERSION,
-            v1_18_1::VersionData::VERSION,
-            v1_18_2::VersionData::VERSION,
-            v1_19::VersionData::VERSION,
-            v1_19_2::VersionData::VERSION,
-            v1_19_3::VersionData::VERSION,
-            v1_19_4::VersionData::VERSION,
-            v1_20_1::VersionData::VERSION,
-            v1_20_2::VersionData::VERSION,
-            v1_20_4::VersionData::VERSION,
-            v1_20_6::VersionData::VERSION,
-            v1_21_1::VersionData::VERSION,
-            v1_21_3::VersionData::VERSION,
-            v1_21_4::VersionData::VERSION,
-            v1_21_5::VersionData::VERSION,
-            v1_21_6::VersionData::VERSION,
-            v1_21_8::VersionData::VERSION,
-            v1_21_10::VersionData::VERSION,
-            v1_21_11::VersionData::VERSION,
-            v26_1_2::VersionData::VERSION,
-            v26_2::VersionData::VERSION,
-            v26_3::VersionData::VERSION,
-        ]
-    }
 }
 
 /// Reads packet ids without inflating the whole frame, reusing one inflate state.

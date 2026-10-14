@@ -446,11 +446,7 @@ impl AppView {
                             .gap_1()
                             .flex_wrap()
                             .child(widgets::hint("Версии:", cx))
-                            .children(
-                                self.supported_versions
-                                    .iter()
-                                    .map(|v| Tag::secondary().small().child(*v)),
-                            ),
+                            .child(Tag::secondary().small().child("1.16.5–26.3")),
                     )
                     .child(
                         Button::new("start")

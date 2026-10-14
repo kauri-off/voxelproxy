@@ -39,8 +39,6 @@ impl Default for VersionData {
 }
 
 impl VersionData {
-    pub const VERSION: &'static str = "26.1.2";
-
     pub fn new() -> Self {
         Self {
             // The controller starts after LoginSuccess was relayed to both clients.

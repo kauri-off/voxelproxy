@@ -164,7 +164,6 @@ pub struct AppView {
     show_troubleshooting: bool,
 
     local_ip: SharedString,
-    supported_versions: Vec<&'static str>,
     update: UpdateState,
 
     clients: Clients,
@@ -236,7 +235,6 @@ impl AppView {
             show_advanced: false,
             show_troubleshooting: false,
             local_ip: backend::local_ip().into(),
-            supported_versions: backend::supported_versions(),
             update: UpdateState::Checking,
             clients: Clients::default(),
             session_started_at: None,
