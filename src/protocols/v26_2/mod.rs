@@ -13,7 +13,8 @@ use crate::{
 };
 use packets::{c2s, s2c};
 
-const TELEPORT_ID: i32 = 1000;
+/// Vanilla servers never issue negative teleport ids.
+const TELEPORT_ID: i32 = -1;
 
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum State {
@@ -27,6 +28,8 @@ pub struct VersionData {
     pub state_in: State,
     pub state_out: [State; 2],
     pub position: s2c::game::Position,
+    /// Our teleports each client has not acked yet.
+    pub own_teleports: [u32; 2],
     pub pings: Vec<PingSync>,
     pub threshold: Option<i32>,
     pub ids: PacketIdReader,
@@ -56,6 +59,7 @@ impl VersionData {
                 pitch: 0.0,
                 relative_flags: 0,
             },
+            own_teleports: [0; 2],
             pings: vec![],
             threshold: None,
             ids: PacketIdReader::default(),
@@ -69,21 +73,21 @@ impl VersionProtocol for VersionData {
         packet: &RawPacket,
         client_id: ClientId,
         is_active: bool,
-        both_active: bool,
+        both_online: bool,
     ) -> Option<ServerBoundEvent> {
         match self.state_out[client_id.index()] {
             State::Login => self.handle_c2s_login(packet, client_id),
             State::Configuration => self.handle_c2s_configuration(packet, client_id),
-            State::Game => self.handle_c2s_game(packet, client_id, is_active, both_active),
+            State::Game => self.handle_c2s_game(packet, client_id, is_active, both_online),
         }
         .unwrap_or_default()
     }
 
-    fn handle_s2c(&mut self, packet: &RawPacket, both_active: bool) -> Option<ClientBoundEvent> {
+    fn handle_s2c(&mut self, packet: &RawPacket, both_online: bool) -> Option<ClientBoundEvent> {
         match self.state_in {
             State::Login => Ok(None),
             State::Configuration => self.handle_s2c_configuration(packet),
-            State::Game => self.handle_s2c_game(packet, both_active),
+            State::Game => self.handle_s2c_game(packet, both_online),
         }
         .unwrap_or_default()
     }
@@ -148,7 +152,7 @@ impl VersionData {
     fn handle_s2c_game(
         &mut self,
         packet: &RawPacket,
-        both_active: bool,
+        both_online: bool,
     ) -> anyhow::Result<Option<ClientBoundEvent>> {
         let id = self.ids.read(packet, self.threshold)?;
 
@@ -157,7 +161,7 @@ impl VersionData {
                 self.state_in = State::Configuration;
                 return Ok(Some(ClientBoundEvent::PhaseSwitch));
             }
-            s2c::game::Ping::PACKET_ID if both_active => {
+            s2c::game::Ping::PACKET_ID if both_online => {
                 let ping: s2c::game::Ping = decode(packet, self.threshold)?;
                 self.pings.push(PingSync::new(ping.id));
             }
@@ -202,7 +206,7 @@ impl VersionData {
         packet: &RawPacket,
         client_id: ClientId,
         is_active: bool,
-        both_active: bool,
+        both_online: bool,
     ) -> anyhow::Result<Option<ServerBoundEvent>> {
         let id = self.ids.read(packet, self.threshold)?;
 
@@ -212,12 +216,12 @@ impl VersionData {
                 return Ok(Some(ServerBoundEvent::PhaseAcked));
             }
             c2s::game::AcceptTeleportation::PACKET_ID => {
-                if !both_active {
-                    let teleport: c2s::game::AcceptTeleportation = decode(packet, self.threshold)?;
+                let teleport: c2s::game::AcceptTeleportation = decode(packet, self.threshold)?;
+                let pending = &mut self.own_teleports[client_id.index()];
 
-                    if teleport.id.0 == TELEPORT_ID {
-                        return Ok(Some(ServerBoundEvent::SkipRelay));
-                    }
+                if teleport.id.0 == TELEPORT_ID && *pending > 0 {
+                    *pending -= 1;
+                    return Ok(Some(ServerBoundEvent::SkipRelay));
                 }
             }
             c2s::game::Pos::PACKET_ID => {
@@ -227,7 +231,7 @@ impl VersionData {
                     self.position.x = pos.x;
                     self.position.y = pos.y;
                     self.position.z = pos.z;
-                    return self.send_position_to_inactive();
+                    return self.send_position_to_inactive(client_id, both_online);
                 }
             }
             c2s::game::PosRot::PACKET_ID => {
@@ -240,7 +244,7 @@ impl VersionData {
                     self.position.yaw = pos_rot.yaw;
                     self.position.pitch = pos_rot.pitch;
 
-                    return self.send_position_to_inactive();
+                    return self.send_position_to_inactive(client_id, both_online);
                 }
             }
             c2s::game::Rot::PACKET_ID => {
@@ -249,13 +253,13 @@ impl VersionData {
 
                     self.position.yaw = rot.yaw;
                     self.position.pitch = rot.pitch;
-                    return self.send_position_to_inactive();
+                    return self.send_position_to_inactive(client_id, both_online);
                 }
             }
             c2s::game::Pong::PACKET_ID => {
                 let packet: c2s::game::Pong = decode(packet, self.threshold)?;
 
-                if both_active {
+                if both_online {
                     if let Some(i) = self
                         .pings
                         .iter_mut()
@@ -299,15 +303,19 @@ impl VersionData {
         Ok(None)
     }
 
-    fn send_position_to_inactive(&self) -> anyhow::Result<Option<ServerBoundEvent>> {
-        if self.state_in == State::Game {
-            Ok(Some(ServerBoundEvent::SendToInactive(
-                UncompressedPacket::from_packet(&self.position)?
-                    .to_raw_packet_compressed(self.threshold)?,
-            )))
-        } else {
-            Ok(None)
+    fn send_position_to_inactive(
+        &mut self,
+        active: ClientId,
+        both_online: bool,
+    ) -> anyhow::Result<Option<ServerBoundEvent>> {
+        if !both_online || self.state_in != State::Game {
+            return Ok(None);
         }
+        let packet = UncompressedPacket::from_packet(&self.position)?
+            .to_raw_packet_compressed(self.threshold)?;
+        let pending = &mut self.own_teleports[active.opposite().index()];
+        *pending = pending.saturating_add(1);
+        Ok(Some(ServerBoundEvent::SendToInactive(packet)))
     }
 }
 

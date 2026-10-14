@@ -38,9 +38,9 @@ pub trait VersionProtocol {
         packet: &RawPacket,
         client_id: ClientId,
         is_active: bool,
-        both_active: bool,
+        both_online: bool,
     ) -> Option<ServerBoundEvent>;
-    fn handle_s2c(&mut self, packet: &RawPacket, both_active: bool) -> Option<ClientBoundEvent>;
+    fn handle_s2c(&mut self, packet: &RawPacket, both_online: bool) -> Option<ClientBoundEvent>;
     fn update_threshold(&mut self, threshold: Option<i32>);
     fn handle_client_disconnect(&mut self, new_active: ClientId) -> Option<ClientDisconnectEvent>;
     fn parse_login_start(&self, packet: &RawPacket) -> Option<String>;
@@ -182,19 +182,19 @@ macro_rules! config_phase_tests {
             packet: &T,
             client: ClientId,
             active: ClientId,
-            both_active: bool,
+            both_online: bool,
         ) -> Option<ServerBoundEvent> {
             let packet = raw(data, packet);
-            data.handle_c2s(&packet, client, client == active, both_active)
+            data.handle_c2s(&packet, client, client == active, both_online)
         }
 
         fn s2c<T: PacketId + Serialize>(
             data: &mut VersionData,
             packet: &T,
-            both_active: bool,
+            both_online: bool,
         ) -> Option<ClientBoundEvent> {
             let packet = raw(data, packet);
-            data.handle_s2c(&packet, both_active)
+            data.handle_s2c(&packet, both_online)
         }
 
         fn mirrored(
@@ -231,6 +231,10 @@ macro_rules! config_phase_tests {
                 pitch,
                 ..Default::default()
             }
+        }
+
+        fn teleport_ack(id: i32) -> c2s::game::AcceptTeleportation {
+            c2s::game::AcceptTeleportation { id: VarInt(id) }
         }
 
         /// Both clients went through login and configuration; the server is in Game.
@@ -389,6 +393,7 @@ macro_rules! config_phase_tests {
         #[test]
         fn failover_keeps_new_active_client_state() {
             let mut data = in_game(None);
+            c2s(&mut data, &rot(1.0, 1.0), P, P, true);
             s2c(&mut data, &s2c::game::StartConfiguration {}, true);
             c2s(
                 &mut data,
@@ -420,18 +425,46 @@ macro_rules! config_phase_tests {
         }
 
         #[test]
-        fn own_teleport_ack_is_skipped_only_without_peer() {
+        fn only_pending_own_teleport_acks_are_skipped() {
             let mut data = in_game(None);
-            let ours = c2s::game::AcceptTeleportation {
-                id: VarInt(TELEPORT_ID),
-            };
-            let servers = c2s::game::AcceptTeleportation { id: VarInt(1) };
-            assert!(c2s(&mut data, &ours, P, P, true).is_none());
-            assert!(c2s(&mut data, &servers, S, S, false).is_none());
+            for yaw in [1.0, 2.0] {
+                c2s(&mut data, &rot(yaw, 0.0), P, P, true);
+            }
+            let ours = teleport_ack(TELEPORT_ID);
+            assert!(matches!(
+                c2s(&mut data, &ours, S, P, true),
+                Some(ServerBoundEvent::SkipRelay)
+            ));
+
+            // The second ack was still in flight when the primary dropped.
+            data.handle_client_disconnect(S);
             assert!(matches!(
                 c2s(&mut data, &ours, S, S, false),
                 Some(ServerBoundEvent::SkipRelay)
             ));
+            assert!(c2s(&mut data, &ours, S, S, false).is_none());
+            assert!(c2s(&mut data, &teleport_ack(1), S, S, false).is_none());
+        }
+
+        #[test]
+        fn acks_are_relayed_for_client_without_own_teleports() {
+            let mut data = in_game(None);
+            c2s(&mut data, &rot(1.0, 0.0), P, P, true);
+            // The inactive secondary left, the primary never got our teleports.
+            for both_online in [true, false] {
+                let ack = teleport_ack(TELEPORT_ID);
+                assert!(c2s(&mut data, &ack, P, P, both_online).is_none());
+            }
+            assert!(c2s(&mut data, &teleport_ack(5), P, P, false).is_none());
+        }
+
+        #[test]
+        fn unsent_own_teleports_are_not_counted() {
+            let mut data = in_game(None);
+            assert!(c2s(&mut data, &rot(1.0, 0.0), P, P, false).is_none());
+            s2c(&mut data, &s2c::game::StartConfiguration {}, true);
+            assert!(c2s(&mut data, &rot(2.0, 0.0), P, P, true).is_none());
+            assert_eq!(data.own_teleports, [0, 0]);
         }
 
         #[test]
