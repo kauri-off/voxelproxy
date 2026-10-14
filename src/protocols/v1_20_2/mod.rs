@@ -28,6 +28,10 @@ pub struct VersionData {
     pub state_out: [State; 2],
     pub position: s2c::game::Position,
     pub pings: Vec<PingSync>,
+    /// The server has not got the active client's ConfigurationAcknowledged yet.
+    pub awaiting_config_ack: bool,
+    /// Keep-alives the closing game listener sent after StartConfiguration.
+    pub orphan_keep_alives: Vec<i64>,
     pub threshold: Option<i32>,
     pub ids: PacketIdReader,
 }
@@ -56,6 +60,8 @@ impl VersionData {
                 relative_flags: 0,
             },
             pings: vec![],
+            awaiting_config_ack: false,
+            orphan_keep_alives: vec![],
             threshold: None,
             ids: PacketIdReader::default(),
         }
@@ -138,9 +144,18 @@ impl VersionData {
     ) -> anyhow::Result<Option<ClientBoundEvent>> {
         let id = self.ids.read(packet, self.threshold)?;
 
-        if id == s2c::configuration::FinishConfiguration::PACKET_ID {
-            self.state_in = State::Game;
-            return Ok(Some(ClientBoundEvent::PhaseSwitch));
+        match id {
+            s2c::configuration::FinishConfiguration::PACKET_ID => {
+                self.state_in = State::Game;
+                return Ok(Some(ClientBoundEvent::PhaseSwitch));
+            }
+            // The 1.20.2 game listener keeps sending keep-alives after StartConfiguration,
+            // already encoded for the configuration phase.
+            s2c::configuration::KeepAlive::PACKET_ID if self.awaiting_config_ack => {
+                let keep_alive: s2c::configuration::KeepAlive = decode(packet, self.threshold)?;
+                self.orphan_keep_alives.push(keep_alive.id);
+            }
+            _ => {}
         }
         Ok(None)
     }
@@ -154,6 +169,8 @@ impl VersionData {
         match id {
             s2c::game::StartConfiguration::PACKET_ID => {
                 self.state_in = State::Configuration;
+                self.awaiting_config_ack = true;
+                self.orphan_keep_alives.clear();
                 return Ok(Some(ClientBoundEvent::PhaseSwitch));
             }
             s2c::game::Ping::PACKET_ID if both_active => {
@@ -188,9 +205,20 @@ impl VersionData {
     ) -> anyhow::Result<Option<ServerBoundEvent>> {
         let id = self.ids.read(packet, self.threshold)?;
 
-        if id == c2s::configuration::FinishConfiguration::PACKET_ID {
-            *self.state_out_mut(client_id) = State::Game;
-            return Ok(Some(ServerBoundEvent::PhaseAcked));
+        match id {
+            c2s::configuration::FinishConfiguration::PACKET_ID => {
+                *self.state_out_mut(client_id) = State::Game;
+                return Ok(Some(ServerBoundEvent::PhaseAcked));
+            }
+            // A held keep-alive is answered after the ack, so the new configuration listener
+            // would get it and kick; a vanilla answer reaches the waiting game listener, which ignores it.
+            c2s::configuration::KeepAlive::PACKET_ID if !self.orphan_keep_alives.is_empty() => {
+                let keep_alive: c2s::configuration::KeepAlive = decode(packet, self.threshold)?;
+                if self.orphan_keep_alives.contains(&keep_alive.id) {
+                    return Ok(Some(ServerBoundEvent::SkipRelay));
+                }
+            }
+            _ => {}
         }
 
         Ok(None)
@@ -207,6 +235,9 @@ impl VersionData {
 
         match id {
             c2s::game::ConfigurationAcknowledged::PACKET_ID => {
+                if is_active {
+                    self.awaiting_config_ack = false;
+                }
                 *self.state_out_mut(client_id) = State::Configuration;
                 return Ok(Some(ServerBoundEvent::PhaseAcked));
             }
@@ -650,5 +681,62 @@ mod tests {
         c2s(&mut data, &c2s::game::Pong { id: 1 }, S, P, true);
         assert!(data.pings.is_empty());
         assert!(data.handle_client_disconnect(S).is_none());
+    }
+
+    #[test]
+    fn orphan_keep_alive_answer_is_not_relayed() {
+        let mut data = in_game(Some(256));
+        s2c(&mut data, &s2c::game::StartConfiguration {}, true);
+        s2c(&mut data, &s2c::configuration::KeepAlive { id: 42 }, true);
+        c2s(
+            &mut data,
+            &c2s::game::ConfigurationAcknowledged {},
+            P,
+            P,
+            true,
+        );
+        // Sent by the new configuration listener, so its answer must reach the server.
+        s2c(&mut data, &s2c::configuration::KeepAlive { id: 43 }, true);
+
+        assert!(matches!(
+            c2s(
+                &mut data,
+                &c2s::configuration::KeepAlive { id: 42 },
+                P,
+                P,
+                true
+            ),
+            Some(ServerBoundEvent::SkipRelay)
+        ));
+        assert!(
+            c2s(
+                &mut data,
+                &c2s::configuration::KeepAlive { id: 43 },
+                P,
+                P,
+                true
+            )
+            .is_none()
+        );
+
+        // The other client answers the same orphan after failover.
+        data.handle_client_disconnect(S);
+        c2s(
+            &mut data,
+            &c2s::game::ConfigurationAcknowledged {},
+            S,
+            S,
+            false,
+        );
+        assert!(matches!(
+            c2s(
+                &mut data,
+                &c2s::configuration::KeepAlive { id: 42 },
+                S,
+                S,
+                false
+            ),
+            Some(ServerBoundEvent::SkipRelay)
+        ));
     }
 }

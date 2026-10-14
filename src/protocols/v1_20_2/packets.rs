@@ -26,6 +26,12 @@ pub mod c2s {
         #[derive(Packet, Debug)]
         #[packet(2)] // ServerboundFinishConfigurationPacket
         pub struct FinishConfiguration {}
+
+        #[derive(Packet, Debug)]
+        #[packet(3)] // ServerboundKeepAlivePacket
+        pub struct KeepAlive {
+            pub id: i64,
+        }
     }
 
     pub mod game {
@@ -104,6 +110,12 @@ pub mod s2c {
         #[derive(Packet, Debug)]
         #[packet(2)] // ClientboundFinishConfigurationPacket
         pub struct FinishConfiguration {}
+
+        #[derive(Packet, Debug)]
+        #[packet(3)] // ClientboundKeepAlivePacket
+        pub struct KeepAlive {
+            pub id: i64,
+        }
     }
 
     pub mod game {
