@@ -212,7 +212,12 @@ impl VersionData {
             }
             3 => {
                 if is_active && let Ok(data) = decode::<String>(packet, self.threshold) {
-                    tokio::spawn(config::send_protocol_metadata(data, false));
+                    // Commands are sent as chat with a leading slash before 1.19.
+                    let (data, is_command) = match data.strip_prefix('/') {
+                        Some(command) => (command.to_string(), true),
+                        None => (data, false),
+                    };
+                    tokio::spawn(config::send_protocol_metadata(data, is_command));
                 }
             }
             _ => {}
