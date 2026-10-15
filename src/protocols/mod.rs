@@ -514,7 +514,7 @@ macro_rules! config_phase_tests {
         impl Wire for VersionData {
             const CONFIGURATION: bool = true;
 
-            fn write_c2s(packet: C2s) -> UncompressedPacket {
+            fn write_c2s(phase: Phase, packet: C2s) -> UncompressedPacket {
                 match packet {
                     C2s::LoginAck => pack(&c2s::login::LoginAcknowledged {}),
                     C2s::FinishConfiguration => pack(&c2s::configuration::FinishConfiguration {}),
@@ -536,6 +536,10 @@ macro_rules! config_phase_tests {
                         ..Default::default()
                     }),
                     C2s::Pong(id) => pack(&c2s::game::Pong { id }),
+                    C2s::KeepAlive(id) if phase == Phase::Configuration => {
+                        pack(&c2s::configuration::KeepAlive { id })
+                    }
+                    C2s::KeepAlive(id) => pack(&c2s::game::KeepAlive { id }),
                     C2s::ContainerClose(id) => pack(&c2s::game::ContainerClose {
                         container_id: VarInt(id),
                     }),
@@ -543,7 +547,7 @@ macro_rules! config_phase_tests {
                 }
             }
 
-            fn write_s2c(packet: S2c) -> UncompressedPacket {
+            fn write_s2c(phase: Phase, packet: S2c) -> UncompressedPacket {
                 match packet {
                     S2c::Position(id, at) => pack(&s2c::game::Position {
                         id: VarInt(id),
@@ -558,6 +562,10 @@ macro_rules! config_phase_tests {
                         relative_flags: 0,
                     }),
                     S2c::Ping(id) => pack(&s2c::game::Ping { id }),
+                    S2c::KeepAlive(id) if phase == Phase::Configuration => {
+                        pack(&s2c::configuration::KeepAlive { id })
+                    }
+                    S2c::KeepAlive(id) => pack(&s2c::game::KeepAlive { id }),
                     S2c::ContainerClose(id) => pack(&s2c::game::ContainerClose {
                         container_id: VarInt(id),
                     }),
@@ -602,6 +610,12 @@ macro_rules! config_phase_tests {
                     (Phase::Game, game::Pong::PACKET_ID) => {
                         C2s::Pong(unpack::<game::Pong>(packet).id)
                     }
+                    (Phase::Configuration, configuration::KeepAlive::PACKET_ID) => {
+                        C2s::KeepAlive(unpack::<configuration::KeepAlive>(packet).id)
+                    }
+                    (Phase::Game, game::KeepAlive::PACKET_ID) => {
+                        C2s::KeepAlive(unpack::<game::KeepAlive>(packet).id)
+                    }
                     (Phase::Game, game::ContainerClose::PACKET_ID) => {
                         C2s::ContainerClose(unpack::<game::ContainerClose>(packet).container_id.0)
                     }
@@ -633,6 +647,12 @@ macro_rules! config_phase_tests {
                     }
                     (Phase::Game, game::Ping::PACKET_ID) => {
                         S2c::Ping(unpack::<game::Ping>(packet).id)
+                    }
+                    (Phase::Configuration, configuration::KeepAlive::PACKET_ID) => {
+                        S2c::KeepAlive(unpack::<configuration::KeepAlive>(packet).id)
+                    }
+                    (Phase::Game, game::KeepAlive::PACKET_ID) => {
+                        S2c::KeepAlive(unpack::<game::KeepAlive>(packet).id)
                     }
                     (Phase::Game, game::ContainerClose::PACKET_ID) => {
                         S2c::ContainerClose(unpack::<game::ContainerClose>(packet).container_id.0)

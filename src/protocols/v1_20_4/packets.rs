@@ -98,6 +98,12 @@ pub mod c2s {
         pub struct Pong {
             pub id: i32,
         }
+
+        #[derive(Packet, Debug)]
+        #[packet(21)] // ServerboundKeepAlivePacket
+        pub struct KeepAlive {
+            pub id: i64,
+        }
     }
 }
 
@@ -148,5 +154,11 @@ pub mod s2c {
         #[derive(Packet, Debug)]
         #[packet(103)] // ClientboundStartConfigurationPacket
         pub struct StartConfiguration {}
+
+        #[derive(Packet, Debug)]
+        #[packet(36)] // ClientboundKeepAlivePacket
+        pub struct KeepAlive {
+            pub id: i64,
+        }
     }
 }
