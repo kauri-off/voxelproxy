@@ -51,6 +51,8 @@ pub enum ServerBoundEvent {
     SkipRelay,
     /// The client acked a protocol phase switch and can take packets of the new phase.
     PhaseAcked,
+    /// The new active client acked a phase switch the server already got from the old one.
+    PhaseCaughtUp,
 }
 
 pub enum ClientBoundEvent {

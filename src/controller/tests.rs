@@ -597,6 +597,124 @@ pub(crate) fn failover_during_reconfiguration_keeps_server_phase<W: Wire>() {
     assert_eq!(h.sent(), []);
 }
 
+pub(crate) fn new_active_catches_up_after_failover_mid_reconfiguration<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(S2c::Ping(1));
+    h.serve(S2c::StartConfiguration);
+    h.obey(P);
+    h.serve(S2c::Raw(1001, 0));
+    assert_eq!(h.received(P), [S2c::Raw(1001, 0)]);
+    assert_eq!(h.sent(), [C2s::Pong(1), C2s::ConfigurationAck]);
+
+    h.leave(P);
+    assert!(h.sent().is_empty());
+    h.send_all(S, [C2s::Rot(1.0, 1.0), C2s::Pong(1), C2s::ConfigurationAck]);
+    assert!(h.sent().is_empty());
+    assert_eq!(
+        h.received(S),
+        [S2c::Ping(1), S2c::StartConfiguration, S2c::Raw(1001, 0)]
+    );
+
+    h.send(S, C2s::Raw(1000));
+    assert_eq!(h.sent(), [C2s::Raw(1000)]);
+    h.serve(S2c::FinishConfiguration);
+    assert_eq!(h.obey(S), [S2c::FinishConfiguration]);
+    h.send(S, C2s::Rot(2.0, 2.0));
+    assert_eq!(h.sent(), [C2s::FinishConfiguration, C2s::Rot(2.0, 2.0)]);
+}
+
+pub(crate) fn failover_after_finish_configuration_drops_lagging_packets<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(S2c::StartConfiguration);
+    h.obey(P);
+    h.obey(S);
+    h.serve(S2c::FinishConfiguration);
+    h.serve(S2c::Ping(3));
+    assert_eq!(h.obey(P), [S2c::FinishConfiguration, S2c::Ping(3)]);
+    assert_eq!(
+        h.sent(),
+        [
+            C2s::ConfigurationAck,
+            C2s::FinishConfiguration,
+            C2s::Pong(3)
+        ]
+    );
+
+    h.leave(P);
+    h.send(S, C2s::Raw(1000));
+    assert_eq!(h.obey(S), [S2c::FinishConfiguration, S2c::Ping(3)]);
+    assert!(h.sent().is_empty());
+    h.send(S, C2s::Rot(1.0, 1.0));
+    assert_eq!(h.sent(), [C2s::Rot(1.0, 1.0)]);
+}
+
+pub(crate) fn failover_relays_phase_ack_new_active_sent_while_inactive<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(S2c::Ping(1));
+    h.serve(S2c::StartConfiguration);
+    assert_eq!(h.obey(S), [S2c::Ping(1), S2c::StartConfiguration]);
+    assert!(h.sent().is_empty());
+
+    h.leave(P);
+    assert_eq!(h.sent(), [C2s::Pong(1), C2s::ConfigurationAck]);
+    h.serve(S2c::Raw(1001, 0));
+    h.serve(S2c::FinishConfiguration);
+    assert_eq!(h.obey(S), [S2c::Raw(1001, 0), S2c::FinishConfiguration]);
+    assert_eq!(h.sent(), [C2s::FinishConfiguration]);
+}
+
+pub(crate) fn failover_relays_what_new_active_sent_after_its_ack<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(S2c::StartConfiguration);
+    h.obey(P);
+    h.obey(S);
+    h.serve(S2c::FinishConfiguration);
+    assert_eq!(h.obey(S), [S2c::FinishConfiguration]);
+    h.send(S, C2s::Rot(1.0, 1.0));
+    assert_eq!(h.sent(), [C2s::ConfigurationAck]);
+
+    h.leave(P);
+    assert_eq!(h.sent(), [C2s::FinishConfiguration, C2s::Rot(1.0, 1.0)]);
+    h.send(S, C2s::Rot(2.0, 2.0));
+    assert_eq!(h.sent(), [C2s::Rot(2.0, 2.0)]);
+}
+
+pub(crate) fn inactive_phase_ack_is_not_replayed_once_server_got_one<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(S2c::StartConfiguration);
+    h.obey(S);
+    h.send(S, C2s::Raw(1000));
+    h.obey(P);
+    assert_eq!(h.sent(), [C2s::ConfigurationAck]);
+
+    h.leave(P);
+    assert!(h.sent().is_empty());
+    h.send(S, C2s::Raw(1001));
+    assert_eq!(h.sent(), [C2s::Raw(1001)]);
+}
+
+pub(crate) fn failover_before_login_ack_relays_new_active_ack<W: Wire>() {
+    let mut h = Harness::<W>::new(Some(0));
+    h.send_all(S, [C2s::LoginAck, C2s::Raw(1000)]);
+    assert!(h.sent().is_empty());
+
+    h.leave(P);
+    assert_eq!(h.sent(), [C2s::LoginAck, C2s::Raw(1000)]);
+    h.serve(S2c::FinishConfiguration);
+    assert_eq!(h.obey(S), [S2c::FinishConfiguration]);
+    assert_eq!(h.sent(), [C2s::FinishConfiguration]);
+}
+
+pub(crate) fn failover_after_login_ack_drops_lagging_login<W: Wire>() {
+    let mut h = Harness::<W>::new(Some(0));
+    h.send_all(P, [C2s::LoginAck, C2s::Raw(1000)]);
+    assert_eq!(h.sent(), [C2s::LoginAck, C2s::Raw(1000)]);
+
+    h.leave(P);
+    h.send_all(S, [C2s::LoginAck, C2s::Raw(1000)]);
+    assert_eq!(h.sent(), [C2s::Raw(1000)]);
+}
+
 pub(crate) fn active_pong_reaches_server_once<W: Wire>() {
     let mut h = Harness::<W>::in_game();
     h.serve(S2c::Ping(7));
@@ -813,8 +931,14 @@ macro_rules! controller_tests {
             finish_configuration_holds_packets_until_ack
             held_packets_stop_at_next_phase_switch
             failover_keeps_packets_held_for_new_active
-            #[ignore = "bug: after failover mid-reconfiguration the new active client's game packets reach a server already in configuration"]
             failover_during_reconfiguration_keeps_server_phase
+            new_active_catches_up_after_failover_mid_reconfiguration
+            failover_after_finish_configuration_drops_lagging_packets
+            failover_relays_phase_ack_new_active_sent_while_inactive
+            failover_relays_what_new_active_sent_after_its_ack
+            inactive_phase_ack_is_not_replayed_once_server_got_one
+            failover_before_login_ack_relays_new_active_ack
+            failover_after_login_ack_drops_lagging_login
             own_ack_after_reconfiguration_is_dropped
         );
     };
