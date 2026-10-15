@@ -67,6 +67,12 @@ pub mod c2s {
         pub struct ContainerClose {
             pub container_id: u8,
         }
+
+        #[derive(Packet, Debug)]
+        #[packet(15)] // ServerboundKeepAlivePacket
+        pub struct KeepAlive {
+            pub id: i64,
+        }
     }
 }
 
@@ -99,6 +105,12 @@ pub mod s2c {
         #[packet(19)] // ClientboundContainerClosePacket
         pub struct ContainerClose {
             pub container_id: u8,
+        }
+
+        #[derive(Packet, Debug)]
+        #[packet(33)] // ClientboundKeepAlivePacket
+        pub struct KeepAlive {
+            pub id: i64,
         }
     }
 }

@@ -34,7 +34,8 @@ pub struct VersionData {
     pub unacked: [VecDeque<Teleport>; 2],
     pub pings: Vec<PingSync>,
     pub teleports: Vec<TeleportSync>,
-    /// Counts tracked pings and teleports in server stream order.
+    pub keep_alives: Vec<KeepAliveSync>,
+    /// Counts tracked pings, teleports and keep-alives in server stream order.
     pub seq: u64,
     /// Phase switches each client acked.
     pub phases: [u32; 2],
@@ -73,6 +74,7 @@ impl VersionData {
             unacked: Default::default(),
             pings: vec![],
             teleports: vec![],
+            keep_alives: vec![],
             seq: 0,
             phases: [0; 2],
             server_phases: 0,
@@ -96,7 +98,9 @@ impl VersionProtocol for VersionData {
         let behind = is_active && self.phases[i] < self.server_phases;
         let event = match state {
             State::Login => self.handle_c2s_login(packet, client_id),
-            State::Configuration => self.handle_c2s_configuration(packet, client_id),
+            State::Configuration => {
+                self.handle_c2s_configuration(packet, client_id, is_active, both_online)
+            }
             State::Game => self.handle_c2s_game(packet, client_id, is_active, both_online),
         }
         .unwrap_or_default();
@@ -114,6 +118,8 @@ impl VersionProtocol for VersionData {
         if is_active && self.phases[i] > self.server_phases {
             self.server_phases = self.phases[i];
             self.ahead.clear();
+            // The listener that sent these keep-alives is gone.
+            self.keep_alives.clear();
             if state == State::Game {
                 // The game listener that sent these pings is gone.
                 self.pings.clear();
@@ -130,7 +136,7 @@ impl VersionProtocol for VersionData {
     fn handle_s2c(&mut self, packet: &RawPacket, both_online: bool) -> Option<ClientBoundEvent> {
         match self.state_in {
             State::Login => Ok(None),
-            State::Configuration => self.handle_s2c_configuration(packet),
+            State::Configuration => self.handle_s2c_configuration(packet, both_online),
             State::Game => self.handle_s2c_game(packet, both_online),
         }
         .unwrap_or_default()
@@ -175,6 +181,27 @@ impl VersionProtocol for VersionData {
             false
         });
 
+        self.keep_alives.retain(|t| {
+            if !t.answered(new_active) {
+                return true;
+            }
+            if !t.sent {
+                let tx = match t.state {
+                    State::Configuration => {
+                        UncompressedPacket::from_packet(&c2s::configuration::KeepAlive { id: t.id })
+                    }
+                    _ => UncompressedPacket::from_packet(&c2s::game::KeepAlive { id: t.id }),
+                };
+                replies.push((
+                    t.seq,
+                    tx.unwrap()
+                        .to_raw_packet_compressed(self.threshold)
+                        .unwrap(),
+                ));
+            }
+            false
+        });
+
         // Vanilla clients answer pings and teleports in the order the server sent them.
         replies.sort_by_key(|(seq, _)| *seq);
         let mut packets: Vec<_> = replies.into_iter().map(|(_, packet)| packet).collect();
@@ -182,6 +209,7 @@ impl VersionProtocol for VersionData {
         let ahead = std::mem::take(&mut self.ahead);
         if self.phases[new_active.index()] > self.server_phases {
             self.server_phases = self.phases[new_active.index()];
+            self.keep_alives.clear();
             packets.extend(ahead);
         }
 
@@ -211,12 +239,25 @@ impl VersionData {
     fn handle_s2c_configuration(
         &mut self,
         packet: &RawPacket,
+        both_online: bool,
     ) -> anyhow::Result<Option<ClientBoundEvent>> {
         let id = self.ids.read(packet, self.threshold)?;
 
-        if id == s2c::configuration::FinishConfiguration::PACKET_ID {
-            self.state_in = State::Game;
-            return Ok(Some(ClientBoundEvent::PhaseSwitch));
+        match id {
+            s2c::configuration::FinishConfiguration::PACKET_ID => {
+                self.state_in = State::Game;
+                return Ok(Some(ClientBoundEvent::PhaseSwitch));
+            }
+            s2c::configuration::KeepAlive::PACKET_ID if both_online => {
+                let keep_alive: s2c::configuration::KeepAlive = decode(packet, self.threshold)?;
+                self.seq += 1;
+                self.keep_alives.push(KeepAliveSync::new(
+                    keep_alive.id,
+                    State::Configuration,
+                    self.seq,
+                ));
+            }
+            _ => {}
         }
         Ok(None)
     }
@@ -238,6 +279,12 @@ impl VersionData {
                 let ping: s2c::game::Ping = decode(packet, self.threshold)?;
                 self.seq += 1;
                 self.pings.push(PingSync::new(ping.id, self.seq));
+            }
+            s2c::game::KeepAlive::PACKET_ID if both_online => {
+                let keep_alive: s2c::game::KeepAlive = decode(packet, self.threshold)?;
+                self.seq += 1;
+                self.keep_alives
+                    .push(KeepAliveSync::new(keep_alive.id, State::Game, self.seq));
             }
             s2c::game::Position::PACKET_ID if both_online => {
                 let teleport: s2c::game::Position = decode(packet, self.threshold)?;
@@ -276,12 +323,27 @@ impl VersionData {
         &mut self,
         packet: &RawPacket,
         client_id: ClientId,
+        is_active: bool,
+        both_online: bool,
     ) -> anyhow::Result<Option<ServerBoundEvent>> {
         let id = self.ids.read(packet, self.threshold)?;
 
-        if id == c2s::configuration::FinishConfiguration::PACKET_ID {
-            *self.state_out_mut(client_id) = State::Game;
-            return Ok(Some(ServerBoundEvent::PhaseAcked));
+        match id {
+            c2s::configuration::FinishConfiguration::PACKET_ID => {
+                *self.state_out_mut(client_id) = State::Game;
+                return Ok(Some(ServerBoundEvent::PhaseAcked));
+            }
+            c2s::configuration::KeepAlive::PACKET_ID => {
+                let keep_alive: c2s::configuration::KeepAlive = decode(packet, self.threshold)?;
+                return Ok(self.answer_keep_alive(
+                    keep_alive.id,
+                    State::Configuration,
+                    client_id,
+                    is_active,
+                    both_online,
+                ));
+            }
+            _ => {}
         }
 
         Ok(None)
@@ -383,6 +445,16 @@ impl VersionData {
                     }
                 }
             }
+            c2s::game::KeepAlive::PACKET_ID => {
+                let keep_alive: c2s::game::KeepAlive = decode(packet, self.threshold)?;
+                return Ok(self.answer_keep_alive(
+                    keep_alive.id,
+                    State::Game,
+                    client_id,
+                    is_active,
+                    both_online,
+                ));
+            }
             c2s::game::ContainerClose::PACKET_ID => {
                 if is_active {
                     let container_close: c2s::game::ContainerClose =
@@ -422,6 +494,25 @@ impl VersionData {
             .to_raw_packet_compressed(self.threshold)?;
         self.unacked[active.opposite().index()].push_back(Teleport::Own);
         Ok(Some(ServerBoundEvent::SendToInactive(packet)))
+    }
+
+    fn answer_keep_alive(
+        &mut self,
+        id: i64,
+        state: State,
+        client_id: ClientId,
+        is_active: bool,
+        both_online: bool,
+    ) -> Option<ServerBoundEvent> {
+        let i = self
+            .keep_alives
+            .iter()
+            .position(|s| s.id == id && s.state == state && !s.answered(client_id))?;
+        let duplicate = self.keep_alives[i].answer(client_id, is_active);
+        if !both_online || self.keep_alives[i].answered_by_both() {
+            self.keep_alives.remove(i);
+        }
+        duplicate.then_some(ServerBoundEvent::SkipRelay)
     }
 }
 
@@ -513,6 +604,44 @@ impl TeleportSync {
         is_active: bool,
     ) -> bool {
         self.acks[client.index()] = Some(ack);
+        let duplicate = is_active && self.sent;
+        self.sent |= is_active;
+        duplicate
+    }
+}
+
+#[derive(Debug)]
+pub struct KeepAliveSync {
+    pub id: i64,
+    pub state: State,
+    pub seq: u64,
+    answered: [bool; 2],
+    /// Whether an answer already reached the server.
+    sent: bool,
+}
+
+impl KeepAliveSync {
+    pub fn new(id: i64, state: State, seq: u64) -> Self {
+        Self {
+            id,
+            state,
+            seq,
+            answered: [false; 2],
+            sent: false,
+        }
+    }
+
+    pub fn answered(&self, client: ClientId) -> bool {
+        self.answered[client.index()]
+    }
+
+    pub fn answered_by_both(&self) -> bool {
+        self.answered == [true; 2]
+    }
+
+    /// Records an answer and returns whether the server already got one.
+    pub fn answer(&mut self, client: ClientId, is_active: bool) -> bool {
+        self.answered[client.index()] = true;
         let duplicate = is_active && self.sent;
         self.sent |= is_active;
         duplicate
@@ -970,7 +1099,7 @@ mod tests {
         const CONFIGURATION: bool = true;
         const ACK_MOVES: bool = true;
 
-        fn write_c2s(packet: C2s) -> UncompressedPacket {
+        fn write_c2s(phase: Phase, packet: C2s) -> UncompressedPacket {
             match packet {
                 C2s::LoginAck => pack(&c2s::login::LoginAcknowledged {}),
                 C2s::FinishConfiguration => pack(&c2s::configuration::FinishConfiguration {}),
@@ -999,6 +1128,10 @@ mod tests {
                     ..Default::default()
                 }),
                 C2s::Pong(id) => pack(&c2s::game::Pong { id }),
+                C2s::KeepAlive(id) if phase == Phase::Configuration => {
+                    pack(&c2s::configuration::KeepAlive { id })
+                }
+                C2s::KeepAlive(id) => pack(&c2s::game::KeepAlive { id }),
                 C2s::ContainerClose(id) => pack(&c2s::game::ContainerClose {
                     container_id: VarInt(id),
                 }),
@@ -1006,7 +1139,7 @@ mod tests {
             }
         }
 
-        fn write_s2c(packet: S2c) -> UncompressedPacket {
+        fn write_s2c(phase: Phase, packet: S2c) -> UncompressedPacket {
             match packet {
                 S2c::Position(id, at) => pack(&s2c::game::Position {
                     id: VarInt(id),
@@ -1021,6 +1154,10 @@ mod tests {
                     relative_flags: 0,
                 }),
                 S2c::Ping(id) => pack(&s2c::game::Ping { id }),
+                S2c::KeepAlive(id) if phase == Phase::Configuration => {
+                    pack(&s2c::configuration::KeepAlive { id })
+                }
+                S2c::KeepAlive(id) => pack(&s2c::game::KeepAlive { id }),
                 S2c::ContainerClose(id) => pack(&s2c::game::ContainerClose {
                     container_id: VarInt(id),
                 }),
@@ -1070,6 +1207,12 @@ mod tests {
                     })
                 }
                 (Phase::Game, game::Pong::PACKET_ID) => C2s::Pong(unpack::<game::Pong>(packet).id),
+                (Phase::Configuration, configuration::KeepAlive::PACKET_ID) => {
+                    C2s::KeepAlive(unpack::<configuration::KeepAlive>(packet).id)
+                }
+                (Phase::Game, game::KeepAlive::PACKET_ID) => {
+                    C2s::KeepAlive(unpack::<game::KeepAlive>(packet).id)
+                }
                 (Phase::Game, game::ContainerClose::PACKET_ID) => {
                     C2s::ContainerClose(unpack::<game::ContainerClose>(packet).container_id.0)
                 }
@@ -1100,6 +1243,12 @@ mod tests {
                     )
                 }
                 (Phase::Game, game::Ping::PACKET_ID) => S2c::Ping(unpack::<game::Ping>(packet).id),
+                (Phase::Configuration, configuration::KeepAlive::PACKET_ID) => {
+                    S2c::KeepAlive(unpack::<configuration::KeepAlive>(packet).id)
+                }
+                (Phase::Game, game::KeepAlive::PACKET_ID) => {
+                    S2c::KeepAlive(unpack::<game::KeepAlive>(packet).id)
+                }
                 (Phase::Game, game::ContainerClose::PACKET_ID) => {
                     S2c::ContainerClose(unpack::<game::ContainerClose>(packet).container_id.0)
                 }

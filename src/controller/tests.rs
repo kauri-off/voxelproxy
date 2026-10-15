@@ -49,6 +49,7 @@ pub(crate) enum C2s {
     Rot(f32, f32),
     PosRot(Spot),
     Pong(i32),
+    KeepAlive(i64),
     ContainerClose(i32),
     Raw(i32),
 }
@@ -58,6 +59,7 @@ pub(crate) enum C2s {
 pub(crate) enum S2c {
     Position(i32, Spot),
     Ping(i32),
+    KeepAlive(i64),
     ContainerClose(i32),
     StartConfiguration,
     FinishConfiguration,
@@ -77,8 +79,8 @@ pub(crate) trait Wire: Default + Into<Version> {
     /// AcceptTeleportation carries the client's position, so the proxy mirrors it as a move.
     const ACK_MOVES: bool = false;
 
-    fn write_c2s(packet: C2s) -> UncompressedPacket;
-    fn write_s2c(packet: S2c) -> UncompressedPacket;
+    fn write_c2s(phase: Phase, packet: C2s) -> UncompressedPacket;
+    fn write_s2c(phase: Phase, packet: S2c) -> UncompressedPacket;
     fn read_c2s(phase: Phase, packet: &UncompressedPacket) -> Option<C2s>;
     fn read_s2c(phase: Phase, packet: &UncompressedPacket) -> Option<S2c>;
 
@@ -92,6 +94,7 @@ pub(crate) trait Wire: Default + Into<Version> {
             S2c::Position(id, at) if Self::ACK_MOVES => vec![Self::ack(id, at)],
             S2c::Position(id, at) => vec![Self::ack(id, at), C2s::PosRot(at)],
             S2c::Ping(id) => vec![C2s::Pong(id)],
+            S2c::KeepAlive(id) => vec![C2s::KeepAlive(id)],
             S2c::StartConfiguration => vec![C2s::ConfigurationAck],
             S2c::FinishConfiguration => vec![C2s::FinishConfiguration],
             S2c::ContainerClose(_) | S2c::Raw(..) => vec![],
@@ -124,7 +127,9 @@ pub(crate) struct Harness<W> {
     server: Receiver<RawPacket>,
     app: AppReceiver<AppEvent>,
     client_phase: [Phase; 2],
+    client_out: [Phase; 2],
     server_phase: Phase,
+    server_out: Phase,
     threshold: Option<i32>,
     stopped: bool,
     wire: PhantomData<W>,
@@ -144,6 +149,7 @@ impl<W: Wire> Harness<W> {
         } else {
             (Phase::Game, Phase::Game)
         };
+        let (client_out, server_out) = (server_phase, client_phase);
         Self {
             controller: Controller::new(
                 P, primary, secondary, remote_tx, event_rx, version, events,
@@ -152,7 +158,9 @@ impl<W: Wire> Harness<W> {
             server,
             app,
             client_phase: [client_phase; 2],
+            client_out: [client_out; 2],
             server_phase,
+            server_out,
             threshold,
             stopped: false,
             wire: PhantomData,
@@ -189,7 +197,14 @@ impl<W: Wire> Harness<W> {
     }
 
     pub fn send(&mut self, client: ClientId, packet: C2s) {
-        let raw = self.encode(W::write_c2s(packet));
+        let phase = &mut self.client_out[client.index()];
+        let raw = W::write_c2s(*phase, packet);
+        match packet {
+            C2s::LoginAck | C2s::ConfigurationAck => *phase = Phase::Configuration,
+            C2s::FinishConfiguration => *phase = Phase::Game,
+            _ => {}
+        }
+        let raw = self.encode(raw);
         self.step(ControllerEvent::ClientData(client, raw));
     }
 
@@ -200,7 +215,12 @@ impl<W: Wire> Harness<W> {
     }
 
     pub fn serve(&mut self, packet: S2c) {
-        let raw = self.encode(W::write_s2c(packet));
+        let raw = self.encode(W::write_s2c(self.server_out, packet));
+        match packet {
+            S2c::StartConfiguration => self.server_out = Phase::Configuration,
+            S2c::FinishConfiguration => self.server_out = Phase::Game,
+            _ => {}
+        }
         self.step(ControllerEvent::ServerData(raw));
     }
 
@@ -319,6 +339,7 @@ pub(crate) fn inactive_client_never_reaches_server<W: Wire>() {
             C2s::PosRot(spot(0.0, 1.0, 0.0, 1.0, 0.0)),
             C2s::ContainerClose(2),
             C2s::Pong(3),
+            C2s::KeepAlive(4),
             C2s::Teleport(5, Spot::default()),
             C2s::Raw(1000),
         ],
@@ -849,6 +870,116 @@ pub(crate) fn failover_replies_follow_server_order<W: Wire>() {
     assert_eq!(h.sent(), [C2s::Pong(1), W::ack(5, at), C2s::Pong(2)]);
 }
 
+pub(crate) fn active_keep_alive_reaches_server_once<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(S2c::KeepAlive(1));
+    assert_eq!(h.received(P), [S2c::KeepAlive(1)]);
+    assert_eq!(h.received(S), [S2c::KeepAlive(1)]);
+    h.send(S, C2s::KeepAlive(1));
+    assert!(h.sent().is_empty());
+    h.send(P, C2s::KeepAlive(1));
+    assert_eq!(h.sent(), [C2s::KeepAlive(1)]);
+}
+
+pub(crate) fn forwarded_keep_alive_is_dropped_after_failover<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(S2c::KeepAlive(1));
+    h.obey(P);
+    assert_eq!(h.sent(), [C2s::KeepAlive(1)]);
+
+    h.leave(P);
+    assert!(h.sent().is_empty());
+    assert_eq!(h.obey(S), [S2c::KeepAlive(1)]);
+    assert!(h.sent().is_empty());
+
+    h.serve(S2c::KeepAlive(2));
+    h.obey(S);
+    assert_eq!(h.sent(), [C2s::KeepAlive(2)]);
+}
+
+pub(crate) fn failover_sends_keep_alive_only_new_active_answered<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(S2c::KeepAlive(1));
+    h.received(P);
+    h.obey(S);
+    assert!(h.sent().is_empty());
+
+    h.leave(P);
+    assert_eq!(h.sent(), [C2s::KeepAlive(1)]);
+}
+
+pub(crate) fn unanswered_keep_alive_is_relayed_after_failover<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(S2c::KeepAlive(1));
+    h.received(P);
+    h.received(S);
+
+    h.leave(P);
+    assert!(h.sent().is_empty());
+    h.send(S, C2s::KeepAlive(1));
+    assert_eq!(h.sent(), [C2s::KeepAlive(1)]);
+}
+
+pub(crate) fn failover_keep_alive_follows_server_order<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    let at = spot(1.0, 2.0, 3.0, 0.0, 0.0);
+    h.serve(S2c::Ping(1));
+    h.serve(S2c::KeepAlive(2));
+    h.serve(S2c::Position(5, at));
+    h.received(P);
+    h.obey(S);
+    assert!(h.sent().is_empty());
+
+    h.leave(P);
+    assert_eq!(h.sent(), [C2s::Pong(1), C2s::KeepAlive(2), W::ack(5, at)]);
+}
+
+pub(crate) fn configuration_keep_alive_is_synced<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(S2c::StartConfiguration);
+    h.obey(P);
+    h.obey(S);
+    assert_eq!(h.sent(), [C2s::ConfigurationAck]);
+
+    h.serve(S2c::KeepAlive(1));
+    h.obey(S);
+    h.obey(P);
+    assert_eq!(h.sent(), [C2s::KeepAlive(1)]);
+
+    h.serve(S2c::KeepAlive(2));
+    h.obey(S);
+    h.received(P);
+    assert!(h.sent().is_empty());
+    h.leave(P);
+    assert_eq!(h.sent(), [C2s::KeepAlive(2)]);
+}
+
+pub(crate) fn keep_alive_of_closed_listener_is_not_replayed<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(S2c::KeepAlive(1));
+    h.serve(S2c::StartConfiguration);
+    assert_eq!(h.received(P), [S2c::KeepAlive(1), S2c::StartConfiguration]);
+    // A frozen vanilla client defers its answer, see `sendWhen`.
+    h.send(P, C2s::ConfigurationAck);
+    assert_eq!(h.sent(), [C2s::ConfigurationAck]);
+    assert_eq!(h.obey(S), [S2c::KeepAlive(1), S2c::StartConfiguration]);
+
+    h.leave(P);
+    assert!(h.sent().is_empty());
+}
+
+pub(crate) fn failover_replays_keep_alive_before_phase_ack<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(S2c::KeepAlive(1));
+    h.serve(S2c::StartConfiguration);
+    h.received(P);
+    assert_eq!(h.obey(S), [S2c::KeepAlive(1), S2c::StartConfiguration]);
+    assert!(h.sent().is_empty());
+
+    h.leave(P);
+    assert_eq!(h.sent(), [C2s::KeepAlive(1), C2s::ConfigurationAck]);
+}
+
 /// Just over half the budget, so the second one overflows it.
 const BIG: usize = PEER_QUEUE_BYTES / 2 + 1;
 
@@ -940,6 +1071,9 @@ macro_rules! controller_tests {
             failover_before_login_ack_relays_new_active_ack
             failover_after_login_ack_drops_lagging_login
             own_ack_after_reconfiguration_is_dropped
+            configuration_keep_alive_is_synced
+            keep_alive_of_closed_listener_is_not_replayed
+            failover_replays_keep_alive_before_phase_ack
         );
     };
     () => {
@@ -966,6 +1100,11 @@ macro_rules! controller_tests {
             forwarded_teleport_acks_are_dropped_after_failover
             failover_sends_acks_only_new_active_answered
             failover_replies_follow_server_order
+            active_keep_alive_reaches_server_once
+            forwarded_keep_alive_is_dropped_after_failover
+            failover_sends_keep_alive_only_new_active_answered
+            unanswered_keep_alive_is_relayed_after_failover
+            failover_keep_alive_follows_server_order
             $($extra)*
         );
     };

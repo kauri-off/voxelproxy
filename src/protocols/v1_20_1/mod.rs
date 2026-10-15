@@ -24,7 +24,8 @@ pub struct VersionData {
     pub unacked: [VecDeque<Teleport>; 2],
     pub pings: Vec<PingSync>,
     pub teleports: Vec<TeleportSync>,
-    /// Counts tracked pings and teleports in server stream order.
+    pub keep_alives: Vec<KeepAliveSync>,
+    /// Counts tracked pings, teleports and keep-alives in server stream order.
     pub seq: u64,
     pub threshold: Option<i32>,
     pub ids: PacketIdReader,
@@ -51,6 +52,7 @@ impl VersionData {
             unacked: Default::default(),
             pings: vec![],
             teleports: vec![],
+            keep_alives: vec![],
             seq: 0,
             threshold: None,
             ids: PacketIdReader::default(),
@@ -115,6 +117,23 @@ impl VersionProtocol for VersionData {
             false
         });
 
+        self.keep_alives.retain(|t| {
+            if !t.answered(new_active) {
+                return true;
+            }
+            if !t.sent {
+                let tx = c2s::game::KeepAlive { id: t.id };
+                replies.push((
+                    t.seq,
+                    UncompressedPacket::from_packet(&tx)
+                        .unwrap()
+                        .to_raw_packet_compressed(self.threshold)
+                        .unwrap(),
+                ));
+            }
+            false
+        });
+
         // Vanilla clients answer pings and teleports in the order the server sent them.
         replies.sort_by_key(|(seq, _)| *seq);
         let packets: Vec<_> = replies.into_iter().map(|(_, packet)| packet).collect();
@@ -150,6 +169,12 @@ impl VersionData {
                 let ping: s2c::game::Ping = decode(packet, self.threshold)?;
                 self.seq += 1;
                 self.pings.push(PingSync::new(ping.id, self.seq));
+            }
+            s2c::game::KeepAlive::PACKET_ID if both_online => {
+                let keep_alive: s2c::game::KeepAlive = decode(packet, self.threshold)?;
+                self.seq += 1;
+                self.keep_alives
+                    .push(KeepAliveSync::new(keep_alive.id, self.seq));
             }
             s2c::game::Position::PACKET_ID if both_online => {
                 let teleport: s2c::game::Position = decode(packet, self.threshold)?;
@@ -245,6 +270,23 @@ impl VersionData {
                     let duplicate = self.pings[i].answer(client_id, is_active);
                     if !both_online || self.pings[i].answered_by_both() {
                         self.pings.remove(i);
+                    }
+                    if duplicate {
+                        return Ok(Some(ServerBoundEvent::SkipRelay));
+                    }
+                }
+            }
+            c2s::game::KeepAlive::PACKET_ID => {
+                let packet: c2s::game::KeepAlive = decode(packet, self.threshold)?;
+
+                if let Some(i) = self
+                    .keep_alives
+                    .iter()
+                    .position(|s| s.id == packet.id && !s.answered(client_id))
+                {
+                    let duplicate = self.keep_alives[i].answer(client_id, is_active);
+                    if !both_online || self.keep_alives[i].answered_by_both() {
+                        self.keep_alives.remove(i);
                     }
                     if duplicate {
                         return Ok(Some(ServerBoundEvent::SkipRelay));
@@ -379,6 +421,42 @@ impl TeleportSync {
     }
 }
 
+#[derive(Debug)]
+pub struct KeepAliveSync {
+    pub id: i64,
+    pub seq: u64,
+    answered: [bool; 2],
+    /// Whether an answer already reached the server.
+    sent: bool,
+}
+
+impl KeepAliveSync {
+    pub fn new(id: i64, seq: u64) -> Self {
+        Self {
+            id,
+            seq,
+            answered: [false; 2],
+            sent: false,
+        }
+    }
+
+    pub fn answered(&self, client: ClientId) -> bool {
+        self.answered[client.index()]
+    }
+
+    pub fn answered_by_both(&self) -> bool {
+        self.answered == [true; 2]
+    }
+
+    /// Records an answer and returns whether the server already got one.
+    pub fn answer(&mut self, client: ClientId, is_active: bool) -> bool {
+        self.answered[client.index()] = true;
+        let duplicate = is_active && self.sent;
+        self.sent |= is_active;
+        duplicate
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,7 +465,7 @@ mod tests {
     impl Wire for VersionData {
         const CONFIGURATION: bool = false;
 
-        fn write_c2s(packet: C2s) -> UncompressedPacket {
+        fn write_c2s(_: Phase, packet: C2s) -> UncompressedPacket {
             match packet {
                 C2s::Teleport(id, _) => pack(&c2s::game::AcceptTeleportation { id: VarInt(id) }),
                 C2s::Pos(x, y, z) => pack(&c2s::game::Pos {
@@ -410,6 +488,7 @@ mod tests {
                     on_ground: false,
                 }),
                 C2s::Pong(id) => pack(&c2s::game::Pong { id }),
+                C2s::KeepAlive(id) => pack(&c2s::game::KeepAlive { id }),
                 C2s::ContainerClose(id) => pack(&c2s::game::ContainerClose {
                     container_id: id as u8,
                 }),
@@ -420,7 +499,7 @@ mod tests {
             }
         }
 
-        fn write_s2c(packet: S2c) -> UncompressedPacket {
+        fn write_s2c(_: Phase, packet: S2c) -> UncompressedPacket {
             match packet {
                 S2c::Position(id, at) => pack(&s2c::game::Position {
                     x: at.x,
@@ -432,6 +511,7 @@ mod tests {
                     id: VarInt(id),
                 }),
                 S2c::Ping(id) => pack(&s2c::game::Ping { id }),
+                S2c::KeepAlive(id) => pack(&s2c::game::KeepAlive { id }),
                 S2c::ContainerClose(id) => pack(&s2c::game::ContainerClose {
                     container_id: id as u8,
                 }),
@@ -468,6 +548,7 @@ mod tests {
                     })
                 }
                 game::Pong::PACKET_ID => C2s::Pong(unpack::<game::Pong>(packet).id),
+                game::KeepAlive::PACKET_ID => C2s::KeepAlive(unpack::<game::KeepAlive>(packet).id),
                 game::ContainerClose::PACKET_ID => {
                     C2s::ContainerClose(unpack::<game::ContainerClose>(packet).container_id.into())
                 }
@@ -493,6 +574,7 @@ mod tests {
                     )
                 }
                 game::Ping::PACKET_ID => S2c::Ping(unpack::<game::Ping>(packet).id),
+                game::KeepAlive::PACKET_ID => S2c::KeepAlive(unpack::<game::KeepAlive>(packet).id),
                 game::ContainerClose::PACKET_ID => {
                     S2c::ContainerClose(unpack::<game::ContainerClose>(packet).container_id.into())
                 }
