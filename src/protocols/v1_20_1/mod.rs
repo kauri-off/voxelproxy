@@ -549,10 +549,12 @@ impl ChatSync {
         };
     }
 
-    /// `handleLogin` sends the brand right before it resets the client's tracker.
+    /// `handleLogin` sends the brand right before it resets the tracker; repeats are ignored.
     pub fn restart_client(&mut self, client: ClientId) {
-        self.offsets[client] = 0;
-        self.logins[client] += 1;
+        if self.logins[client] < self.server_logins {
+            self.offsets[client] = 0;
+            self.logins[client] = self.server_logins;
+        }
     }
 
     /// Whether the client's tracker belongs to the server's latest login.
@@ -981,5 +983,23 @@ mod tests {
             s2c(&mut data, &player_chat(signature), true);
         }
         assert!(c2s(&mut data, &chat(3, 0b111 << 17), P, P, true).is_none());
+    }
+
+    #[test]
+    fn extra_brand_keeps_chat_in_sync() {
+        let mut data = VersionData::new();
+        s2c(&mut data, &s2c::game::Login {}, true);
+        c2s(&mut data, &brand(), P, P, true);
+        c2s(&mut data, &brand(), S, P, true);
+        for signature in 1..=3 {
+            s2c(&mut data, &player_chat(signature), true);
+        }
+        assert!(c2s(&mut data, &chat(3, 0b111 << 17), P, P, true).is_none());
+        // A mod sends the brand again mid-session; the tracker did not restart.
+        c2s(&mut data, &brand(), P, P, true);
+        c2s(&mut data, &brand(), S, P, true);
+        data.handle_client_disconnect(S);
+        let event = c2s(&mut data, &chat(3, 0b111 << 17), S, S, false);
+        assert_eq!(rewritten(&data, event), last_seen(0, 0b111 << 17));
     }
 }
