@@ -3,12 +3,13 @@ pub mod packets;
 use std::collections::VecDeque;
 
 use mc_protocol::{
-    packet::{RawPacket, UncompressedPacket},
+    packet::{PacketId, RawPacket, UncompressedPacket},
+    ser::Serialize,
     varint::VarInt,
 };
 use uuid::Uuid;
 
-use super::{PacketIdReader, VersionProtocol, decode};
+use super::{Fixed, PacketIdReader, VersionProtocol, decode};
 use crate::{
     config,
     events::{ClientId, PerClient},
@@ -18,6 +19,8 @@ use packets::{c2s, s2c};
 
 /// Vanilla servers never issue negative teleport ids.
 const TELEPORT_ID: i32 = -1;
+/// Messages in the last seen window, see `LastSeenMessagesValidator`.
+const LAST_SEEN: usize = 20;
 /// How far an answer takes a task; the server finishes it on `DONE`.
 const ACCEPTED: u8 = 1;
 const DOWNLOADED: u8 = 2;
@@ -40,6 +43,7 @@ pub struct VersionData {
     pub pings: Vec<PingSync>,
     pub teleports: Vec<TeleportSync>,
     pub keep_alives: Vec<KeepAliveSync>,
+    pub chat: ChatSync,
     pub chunk_batches: Vec<ChunkBatchSync>,
     /// Configuration tasks the server waits to be answered, see `ServerConfigurationPacketListenerImpl`.
     pub tasks: Vec<TaskSync>,
@@ -85,6 +89,7 @@ impl VersionData {
             pings: vec![],
             teleports: vec![],
             keep_alives: vec![],
+            chat: ChatSync::default(),
             chunk_batches: vec![],
             tasks: vec![],
             seq: 0,
@@ -285,6 +290,7 @@ impl VersionData {
         match id {
             s2c::configuration::FinishConfiguration::PACKET_ID => {
                 self.state_in = State::Game;
+                self.chat.restart_server();
                 return Ok(Some(ClientBoundEvent::PhaseSwitch));
             }
             s2c::configuration::Ping::PACKET_ID if both_online => {
@@ -334,6 +340,12 @@ impl VersionData {
                 // The closing game listener ignores batch answers and the next one starts over.
                 self.chunk_batches.clear();
                 return Ok(Some(ClientBoundEvent::PhaseSwitch));
+            }
+            s2c::game::PlayerChat::PACKET_ID => {
+                let chat: s2c::game::PlayerChat = decode(packet, self.threshold)?;
+                if let Some(signature) = chat.signature {
+                    self.chat.track(signature);
+                }
             }
             s2c::game::Ping::PACKET_ID if both_online => {
                 let ping: s2c::game::Ping = decode(packet, self.threshold)?;
@@ -400,6 +412,7 @@ impl VersionData {
         match id {
             c2s::configuration::FinishConfiguration::PACKET_ID => {
                 *self.state_out_mut(client_id) = State::Game;
+                self.chat.restart_client(client_id);
                 return Ok(Some(ServerBoundEvent::PhaseAcked));
             }
             c2s::configuration::Pong::PACKET_ID => {
@@ -544,16 +557,74 @@ impl VersionData {
                     }
                 }
             }
-            c2s::game::ChatCommand::PACKET_ID | c2s::game::Chat::PACKET_ID => {
+            c2s::game::ChatCommand::PACKET_ID => {
                 if is_active && let Ok(text) = decode::<String>(packet, self.threshold) {
-                    let is_command = id == c2s::game::ChatCommand::PACKET_ID;
-                    config::report_chat(text, is_command);
+                    config::report_chat(text, true);
                 }
+            }
+            c2s::game::ChatCommandSigned::PACKET_ID => {
+                let mut command: c2s::game::ChatCommandSigned = decode(packet, self.threshold)?;
+                if self.sync_last_seen(&mut command.last_seen, client_id, is_active) {
+                    return Ok(Some(self.rewrite(&command)?));
+                }
+            }
+            c2s::game::Chat::PACKET_ID => {
+                if is_active && let Ok(text) = decode::<String>(packet, self.threshold) {
+                    config::report_chat(text, false);
+                }
+                let mut chat: c2s::game::Chat = decode(packet, self.threshold)?;
+                if self.sync_last_seen(&mut chat.last_seen, client_id, is_active) {
+                    return Ok(Some(self.rewrite(&chat)?));
+                }
+            }
+            c2s::game::ChatAck::PACKET_ID => {
+                let ack: c2s::game::ChatAck = decode(packet, self.threshold)?;
+                let relay = is_active && self.phases[client_id] == self.server_phases;
+                return Ok(match self.chat.offset(client_id, ack.offset.0, relay) {
+                    Some(offset) if offset == ack.offset.0 => None,
+                    // `sendChatAcknowledgement` never sends an empty ack.
+                    Some(0) => Some(ServerBoundEvent::SkipRelay),
+                    Some(offset) => Some(self.rewrite(&c2s::game::ChatAck {
+                        offset: VarInt(offset),
+                    })?),
+                    None => None,
+                });
             }
             _ => {}
         };
 
         Ok(None)
+    }
+
+    /// Moves a client's last seen update onto the server's window, returning whether it changed.
+    fn sync_last_seen(
+        &mut self,
+        last_seen: &mut c2s::game::LastSeen,
+        client_id: ClientId,
+        is_active: bool,
+    ) -> bool {
+        let relay = is_active && self.phases[client_id] == self.server_phases;
+        let acked = last_seen.acknowledged.bits();
+        let Some((offset, synced)) = self
+            .chat
+            .update(client_id, last_seen.offset.0, acked, relay)
+        else {
+            return false;
+        };
+        if offset == last_seen.offset.0 && synced == acked {
+            return false;
+        }
+        *last_seen = c2s::game::LastSeen {
+            offset: VarInt(offset),
+            acknowledged: Fixed::from_bits(synced),
+        };
+        true
+    }
+
+    fn rewrite<T: PacketId + Serialize>(&self, packet: &T) -> anyhow::Result<ServerBoundEvent> {
+        Ok(ServerBoundEvent::Rewrite(
+            UncompressedPacket::from_packet(packet)?.to_raw_packet_compressed(self.threshold)?,
+        ))
     }
 
     fn send_position_to_inactive(
@@ -766,6 +837,94 @@ impl TeleportSync {
     }
 }
 
+/// The server's `LastSeenMessagesValidator` and how far each client's chat acks went.
+#[derive(Debug)]
+pub struct ChatSync {
+    /// What the server tracks: its window, then pending messages, as `Some(pending)`.
+    tracked: VecDeque<Option<bool>>,
+    last_pending: Option<Fixed<256>>,
+    /// Messages the server's window moved past since its game listener started.
+    server_offset: u64,
+    /// Messages each client's window moved past since its game listener started.
+    offsets: PerClient<u64>,
+}
+
+impl Default for ChatSync {
+    fn default() -> Self {
+        Self {
+            tracked: (0..LAST_SEEN).map(|_| None).collect(),
+            last_pending: None,
+            server_offset: 0,
+            offsets: PerClient::splat(0),
+        }
+    }
+}
+
+impl ChatSync {
+    /// A new server game listener starts with a fresh validator.
+    pub fn restart_server(&mut self) {
+        let offsets = self.offsets;
+        *self = Self {
+            offsets,
+            ..Self::default()
+        };
+    }
+
+    /// A client's new game listener starts with a fresh `LastSeenMessagesTracker`.
+    pub fn restart_client(&mut self, client: ClientId) {
+        self.offsets[client] = 0;
+    }
+
+    /// `sendPlayerChatMessage` tracks every signed message, skipping a repeat of the last one.
+    pub fn track(&mut self, signature: Fixed<256>) {
+        if self.last_pending != Some(signature) {
+            self.tracked.push_back(Some(true));
+            self.last_pending = Some(signature);
+        }
+    }
+
+    /// Records a client's offset and returns the one the server expects, if it is relayed.
+    pub fn offset(&mut self, client: ClientId, offset: i32, relay: bool) -> Option<i32> {
+        self.offsets[client] += offset.max(0) as u64;
+        if !relay {
+            return None;
+        }
+        // A client behind the server moves nothing, and `applyOffset` allows no more than it sent.
+        let ahead = self.offsets[client].saturating_sub(self.server_offset) as usize;
+        let offset = ahead.min(self.tracked.len() - LAST_SEEN);
+        self.tracked.drain(..offset);
+        self.server_offset += offset as u64;
+        Some(offset as i32)
+    }
+
+    /// Records a client's update and returns the offset and acks the server expects, if relayed.
+    pub fn update(
+        &mut self,
+        client: ClientId,
+        offset: i32,
+        acked: u32,
+        relay: bool,
+    ) -> Option<(i32, u32)> {
+        let offset = self.offset(client, offset, relay)?;
+        // The server's slot `i` is the client's slot `i + behind`.
+        let behind = self.server_offset as i64 - self.offsets[client] as i64;
+        let mut synced = 0;
+        for (i, slot) in self.tracked.iter_mut().take(LAST_SEEN).enumerate() {
+            let at = i as i64 + behind;
+            let seen = (0..LAST_SEEN as i64).contains(&at) && acked >> at & 1 == 1;
+            // `applyUpdate` kicks for acking an empty slot or not acking an acked message.
+            match slot {
+                Some(pending) if seen || !*pending => {
+                    *pending = false;
+                    synced |= 1 << i;
+                }
+                _ => *slot = None,
+            }
+        }
+        Some((offset, synced))
+    }
+}
+
 #[derive(Debug)]
 pub struct KeepAliveSync {
     pub id: i64,
@@ -908,5 +1067,5 @@ impl TaskSync {
 
 #[cfg(test)]
 mod tests {
-    super::super::config_phase_tests!(known_packs);
+    super::super::config_phase_tests!(known_packs, plain);
 }

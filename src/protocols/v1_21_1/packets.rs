@@ -1,5 +1,7 @@
 use mc_protocol::{Packet, varint::VarInt};
 
+use crate::protocols::Fixed;
+
 pub mod c2s {
     use super::*;
 
@@ -62,6 +64,26 @@ pub mod c2s {
             pub id: VarInt,
         }
 
+        /// `LastSeenMessages.Update`
+        #[derive(Packet, Debug, Clone, Copy, PartialEq)]
+        pub struct LastSeen {
+            pub offset: VarInt,
+            pub acknowledged: Fixed<3>,
+        }
+
+        /// `ArgumentSignatures.Entry`
+        #[derive(Packet, Debug)]
+        pub struct ArgumentSignature {
+            pub name: String,
+            pub signature: Fixed<256>,
+        }
+
+        #[derive(Packet, Debug)]
+        #[packet(3)] // ServerboundChatAckPacket
+        pub struct ChatAck {
+            pub offset: VarInt,
+        }
+
         #[derive(Packet, Debug)]
         #[packet(4)] // ServerboundChatCommandPacket
         pub struct ChatCommand {
@@ -69,9 +91,23 @@ pub mod c2s {
         }
 
         #[derive(Packet, Debug)]
+        #[packet(5)] // ServerboundChatCommandSignedPacket
+        pub struct ChatCommandSigned {
+            pub command: String,
+            pub time_stamp: i64,
+            pub salt: i64,
+            pub argument_signatures: Vec<ArgumentSignature>,
+            pub last_seen: LastSeen,
+        }
+
+        #[derive(Packet, Debug)]
         #[packet(6)] // ServerboundChatPacket
         pub struct Chat {
             pub message: String,
+            pub time_stamp: i64,
+            pub salt: i64,
+            pub signature: Option<Fixed<256>>,
+            pub last_seen: LastSeen,
         }
 
         #[derive(Packet, Debug)]
@@ -168,7 +204,17 @@ pub mod s2c {
     }
 
     pub mod game {
+        use uuid::Uuid;
+
         use super::*;
+
+        #[derive(Packet, Debug)]
+        #[packet(57)] // ClientboundPlayerChatPacket
+        pub struct PlayerChat {
+            pub sender: Uuid,
+            pub index: VarInt,
+            pub signature: Option<Fixed<256>>,
+        }
 
         #[derive(Packet, Debug)]
         #[packet(18)] // ClientboundContainerClosePacket

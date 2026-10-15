@@ -27,7 +27,11 @@ use std::io;
 
 use enum_dispatch::enum_dispatch;
 use flate2::{Decompress, FlushDecompress};
-use mc_protocol::{packet::RawPacket, ser::Deserialize, varint::VarInt};
+use mc_protocol::{
+    packet::RawPacket,
+    ser::{Deserialize, SerializationError, Serialize},
+    varint::VarInt,
+};
 
 use crate::events::ClientId;
 
@@ -53,6 +57,8 @@ pub enum ServerBoundEvent {
     PhaseAcked,
     /// The new active client acked a phase switch the server already got from the old one.
     PhaseCaughtUp,
+    /// Relay this to the server instead of the client's packet.
+    Rewrite(RawPacket),
 }
 
 pub enum ClientBoundEvent {
@@ -157,6 +163,37 @@ fn read_varint<R: io::Read>(reader: &mut R) -> io::Result<i32> {
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
+/// Bytes whose length is known from context, like a `MessageSignature`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fixed<const N: usize>(pub [u8; N]);
+
+impl<const N: usize> Serialize for Fixed<N> {
+    fn serialize<W: io::Write + Unpin>(&self, writer: &mut W) -> Result<(), SerializationError> {
+        writer.write_all(&self.0)?;
+        Ok(())
+    }
+}
+
+impl<const N: usize> Deserialize for Fixed<N> {
+    fn deserialize<R: io::Read + Unpin>(reader: &mut R) -> Result<Self, SerializationError> {
+        let mut bytes = [0; N];
+        reader.read_exact(&mut bytes)?;
+        Ok(Self(bytes))
+    }
+}
+
+/// The acked bits of a last seen update, as `FriendlyByteBuf.writeFixedBitSet` writes 20 bits.
+impl Fixed<3> {
+    pub fn bits(&self) -> u32 {
+        u32::from_le_bytes([self.0[0], self.0[1], self.0[2], 0])
+    }
+
+    pub fn from_bits(bits: u32) -> Self {
+        let [a, b, c, _] = bits.to_le_bytes();
+        Self([a, b, c])
+    }
+}
+
 pub fn decode<T: Deserialize>(packet: &RawPacket, threshold: Option<i32>) -> anyhow::Result<T> {
     Ok(packet.uncompress(threshold)?.deserialize_payload()?)
 }
@@ -182,11 +219,59 @@ macro_rules! config_phase_tests {
     (@write_code_of_conduct known_packs, $packet:expr) => {
         unreachable!("no code of conduct before 1.21.9")
     };
-    ($tasks:ident) => {
+    (@checksum checksum) => {
+        true
+    };
+    (@checksum plain) => {
+        false
+    };
+    (@write_seen checksum, $seen:expr) => {
+        c2s::game::LastSeen {
+            offset: VarInt($seen.offset),
+            acknowledged: Fixed::from_bits($seen.acked),
+            checksum: $seen.checksum,
+        }
+    };
+    (@write_seen plain, $seen:expr) => {
+        c2s::game::LastSeen {
+            offset: VarInt($seen.offset),
+            acknowledged: Fixed::from_bits($seen.acked),
+        }
+    };
+    (@read_seen checksum, $last_seen:expr) => {
+        Seen {
+            offset: $last_seen.offset.0,
+            acked: $last_seen.acknowledged.bits(),
+            checksum: $last_seen.checksum,
+        }
+    };
+    (@read_seen plain, $last_seen:expr) => {
+        Seen {
+            offset: $last_seen.offset.0,
+            acked: $last_seen.acknowledged.bits(),
+            checksum: 0,
+        }
+    };
+    (@write_player_chat checksum, $signature:expr) => {
+        s2c::game::PlayerChat {
+            global_index: VarInt(0),
+            sender: Uuid::nil(),
+            index: VarInt(0),
+            signature: $signature,
+        }
+    };
+    (@write_player_chat plain, $signature:expr) => {
+        s2c::game::PlayerChat {
+            sender: Uuid::nil(),
+            index: VarInt(0),
+            signature: $signature,
+        }
+    };
+    ($tasks:ident, $chat:ident) => {
         use mc_protocol::{packet::PacketId, ser::Serialize};
 
         use super::*;
-        use crate::controller::tests::{C2s, Pack, Phase, S2c, Spot, Wire, pack, unpack};
+        use crate::controller::tests::{C2s, Pack, Phase, S2c, Seen, Spot, Wire, pack, unpack};
 
         const P: ClientId = ClientId::Primary;
         const S: ClientId = ClientId::Secondary;
@@ -686,6 +771,7 @@ macro_rules! config_phase_tests {
 
         impl Wire for VersionData {
             const CONFIGURATION: bool = true;
+            const CHECKSUM: bool = crate::protocols::config_phase_tests!(@checksum $chat);
 
             fn write_c2s(phase: Phase, packet: C2s) -> UncompressedPacket {
                 match packet {
@@ -731,6 +817,23 @@ macro_rules! config_phase_tests {
                         id: Uuid::from_u128(id.into()),
                         action: VarInt(answer as i32),
                     }),
+                    C2s::ChatAck(offset) => pack(&c2s::game::ChatAck {
+                        offset: VarInt(offset),
+                    }),
+                    C2s::Chat(seen) => pack(&c2s::game::Chat {
+                        message: "hi".into(),
+                        time_stamp: 0,
+                        salt: 0,
+                        signature: None,
+                        last_seen: crate::protocols::config_phase_tests!(@write_seen $chat, seen),
+                    }),
+                    C2s::SignedCommand(seen) => pack(&c2s::game::ChatCommandSigned {
+                        command: "msg a b".into(),
+                        time_stamp: 0,
+                        salt: 0,
+                        argument_signatures: vec![],
+                        last_seen: crate::protocols::config_phase_tests!(@write_seen $chat, seen),
+                    }),
                     C2s::Raw(id) => UncompressedPacket::new(id, vec![]),
                 }
             }
@@ -773,6 +876,10 @@ macro_rules! config_phase_tests {
                     S2c::ResourcePackPush(id) => pack(&s2c::configuration::ResourcePackPush {
                         id: Uuid::from_u128(id.into()),
                     }),
+                    S2c::PlayerChat(signature) => pack(&crate::protocols::config_phase_tests!(
+                        @write_player_chat $chat,
+                        signature.map(|s| Fixed([s; 256]))
+                    )),
                     S2c::Raw(id, len) => UncompressedPacket::new(id, vec![0; len]),
                 }
             }
@@ -839,6 +946,20 @@ macro_rules! config_phase_tests {
                         let p: configuration::ResourcePack = unpack(packet);
                         C2s::ResourcePack(p.id.as_u128() as u8, Pack::from_action(p.action.0))
                     }
+                    (Phase::Game, game::ChatAck::PACKET_ID) => {
+                        C2s::ChatAck(unpack::<game::ChatAck>(packet).offset.0)
+                    }
+                    (Phase::Game, game::Chat::PACKET_ID) => {
+                        let p: game::Chat = unpack(packet);
+                        C2s::Chat(crate::protocols::config_phase_tests!(@read_seen $chat, p.last_seen))
+                    }
+                    (Phase::Game, game::ChatCommandSigned::PACKET_ID) => {
+                        let p: game::ChatCommandSigned = unpack(packet);
+                        C2s::SignedCommand(crate::protocols::config_phase_tests!(
+                            @read_seen $chat,
+                            p.last_seen
+                        ))
+                    }
                     _ => return None,
                 })
             }
@@ -896,6 +1017,9 @@ macro_rules! config_phase_tests {
                             unpack::<configuration::ResourcePackPush>(packet).id.as_u128() as u8,
                         )
                     }
+                    (Phase::Game, game::PlayerChat::PACKET_ID) => S2c::PlayerChat(
+                        unpack::<game::PlayerChat>(packet).signature.map(|s| s.0[0]),
+                    ),
                     _ => return None,
                 })
             }

@@ -174,7 +174,7 @@ impl Controller {
 
     async fn handle(&mut self, event: ControllerEvent) -> ControlFlow<()> {
         match event {
-            ControllerEvent::ClientData(client_id, packet) => {
+            ControllerEvent::ClientData(client_id, mut packet) => {
                 self.stats.from_client[client_id].add(packet.data.len());
                 let event = self.version.handle_c2s(
                     &packet,
@@ -217,6 +217,7 @@ impl Controller {
                             self.release(client_id).await;
                             return ControlFlow::Continue(());
                         }
+                        ServerBoundEvent::Rewrite(raw_packet) => packet = raw_packet,
                     }
                 }
 

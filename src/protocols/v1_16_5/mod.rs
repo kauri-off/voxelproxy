@@ -509,7 +509,10 @@ mod tests {
                 | C2s::KnownPacks
                 | C2s::AcceptCodeOfConduct
                 | C2s::ResourcePack(..)
-                | C2s::ChunkBatchReceived(_) => {
+                | C2s::ChunkBatchReceived(_)
+                | C2s::ChatAck(_)
+                | C2s::Chat(_)
+                | C2s::SignedCommand(_) => {
                     panic!("{packet:?} does not exist in 1.16.5")
                 }
             }
@@ -542,7 +545,8 @@ mod tests {
                 | S2c::SelectKnownPacks
                 | S2c::CodeOfConduct
                 | S2c::ResourcePackPush(_)
-                | S2c::ChunkBatchFinished(_) => {
+                | S2c::ChunkBatchFinished(_)
+                | S2c::PlayerChat(_) => {
                     panic!("{packet:?} does not exist in 1.16.5")
                 }
             }
