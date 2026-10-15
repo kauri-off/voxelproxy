@@ -1,5 +1,7 @@
 pub mod packets;
 
+use std::collections::VecDeque;
+
 use mc_protocol::{
     packet::{RawPacket, UncompressedPacket},
     varint::VarInt,
@@ -18,8 +20,8 @@ const TELEPORT_ID: i32 = -1;
 
 pub struct VersionData {
     pub position: s2c::game::Position,
-    /// Our teleports each client has not acked yet.
-    pub own_teleports: [u32; 2],
+    /// Teleports each client got and has not acked yet, in the order it got them.
+    pub unacked: [VecDeque<Teleport>; 2],
     pub pings: Vec<PingSync>,
     pub teleports: Vec<TeleportSync>,
     /// Counts tracked pings and teleports in server stream order.
@@ -47,7 +49,7 @@ impl VersionData {
                 relative_flags: 0,
                 dismount_vehicle: false,
             },
-            own_teleports: [0; 2],
+            unacked: Default::default(),
             pings: vec![],
             teleports: vec![],
             seq: 0,
@@ -155,6 +157,12 @@ impl VersionData {
                 self.seq += 1;
                 self.teleports
                     .push(TeleportSync::new(teleport.id.0, self.seq));
+                for unacked in &mut self.unacked {
+                    unacked.push_back(Teleport::Server {
+                        id: teleport.id.0,
+                        seq: self.seq,
+                    });
+                }
             }
             _ => {}
         }
@@ -174,16 +182,17 @@ impl VersionData {
         match id {
             c2s::game::AcceptTeleportation::PACKET_ID => {
                 let teleport: c2s::game::AcceptTeleportation = decode(packet, self.threshold)?;
-                let pending = &mut self.own_teleports[client_id.index()];
-
-                if teleport.id.0 == TELEPORT_ID && *pending > 0 {
-                    *pending -= 1;
+                let unacked = &mut self.unacked[client_id.index()];
+                // Vanilla clients ack teleports in the order they got them.
+                let acked = unacked
+                    .iter()
+                    .position(|t| t.id() == teleport.id.0)
+                    .and_then(|i| unacked.remove(i));
+                if acked == Some(Teleport::Own) {
                     return Ok(Some(ServerBoundEvent::SkipRelay));
                 }
-                if let Some(i) = self
-                    .teleports
-                    .iter()
-                    .position(|t| t.id == teleport.id.0 && !t.answered(client_id))
+                if let Some(Teleport::Server { seq, .. }) = acked
+                    && let Some(i) = self.teleports.iter().position(|t| t.seq == seq)
                 {
                     let duplicate = self.teleports[i].answer(client_id, is_active);
                     if !both_online || self.teleports[i].answered_by_both() {
@@ -277,9 +286,24 @@ impl VersionData {
         }
         let packet = UncompressedPacket::from_packet(&self.position)?
             .to_raw_packet_compressed(self.threshold)?;
-        let pending = &mut self.own_teleports[active.opposite().index()];
-        *pending = pending.saturating_add(1);
+        self.unacked[active.opposite().index()].push_back(Teleport::Own);
         Ok(Some(ServerBoundEvent::SendToInactive(packet)))
+    }
+}
+
+/// A teleport a client got: one of ours or the server's.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Teleport {
+    Own,
+    Server { id: i32, seq: u64 },
+}
+
+impl Teleport {
+    fn id(&self) -> i32 {
+        match self {
+            Self::Own => TELEPORT_ID,
+            Self::Server { id, .. } => *id,
+        }
     }
 }
 
