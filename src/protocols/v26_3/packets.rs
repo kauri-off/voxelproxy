@@ -31,7 +31,7 @@ pub mod c2s {
     pub mod game {
         use super::*;
 
-        #[derive(Packet, Debug, Default)]
+        #[derive(Packet, Debug, Default, Clone)]
         #[packet(0)] // ServerboundAcceptTeleportationPacket
         pub struct AcceptTeleportation {
             pub id: VarInt,

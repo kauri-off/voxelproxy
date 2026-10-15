@@ -622,6 +622,57 @@ pub(crate) fn teleport_ack_is_not_repeated_on_failover<W: Wire>() {
     assert_eq!(h.sent(), [C2s::Rot(1.0, 1.0)]);
 }
 
+pub(crate) fn forwarded_teleport_acks_are_dropped_after_failover<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    let at = spot(1.0, 2.0, 3.0, 0.0, 0.0);
+    h.serve(S2c::Position(5, at));
+    h.obey(P);
+    assert_eq!(acks(&h.sent()), [5]);
+
+    h.leave(P);
+    assert!(h.sent().is_empty());
+    h.obey(S);
+    assert_eq!(acks(&h.sent()), Vec::<i32>::new());
+
+    let next = spot(4.0, 5.0, 6.0, 0.0, 0.0);
+    h.serve(S2c::Position(6, next));
+    h.obey(S);
+    assert_eq!(acks(&h.sent()), [6]);
+}
+
+pub(crate) fn failover_sends_acks_only_new_active_answered<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    let teleports = [5, 6, 7].map(|id| S2c::Position(id, spot(id as f64, 64.0, 0.0, 0.0, 0.0)));
+    for packet in teleports {
+        h.serve(packet);
+    }
+    h.received(P);
+    h.received(S);
+    h.send_all(P, W::respond(teleports[0]));
+    h.send_all(S, W::respond(teleports[0]));
+    h.send_all(S, W::respond(teleports[1]));
+    assert_eq!(acks(&h.sent()), [5]);
+
+    h.leave(P);
+    assert_eq!(h.sent(), [W::ack(6, spot(6.0, 64.0, 0.0, 0.0, 0.0))]);
+    h.send_all(S, W::respond(teleports[2]));
+    assert_eq!(h.sent(), W::respond(teleports[2]));
+}
+
+pub(crate) fn failover_replies_follow_server_order<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    let at = spot(1.0, 2.0, 3.0, 0.0, 0.0);
+    h.serve(S2c::Ping(1));
+    h.serve(S2c::Position(5, at));
+    h.serve(S2c::Ping(2));
+    h.received(P);
+    h.obey(S);
+    assert!(h.sent().is_empty());
+
+    h.leave(P);
+    assert_eq!(h.sent(), [C2s::Pong(1), W::ack(5, at), C2s::Pong(2)]);
+}
+
 /// Just over half the budget, so the second one overflows it.
 const BIG: usize = PEER_QUEUE_BYTES / 2 + 1;
 
@@ -726,9 +777,11 @@ macro_rules! controller_tests {
             failover_sends_pongs_only_new_active_answered
             forwarded_pongs_are_dropped_after_failover
             active_pong_reaches_server_after_inactive_left
-            #[ignore = "known bug: an ack the new active client sent while inactive is never relayed"]
             inactive_teleport_ack_reaches_server_on_failover
             teleport_ack_is_not_repeated_on_failover
+            forwarded_teleport_acks_are_dropped_after_failover
+            failover_sends_acks_only_new_active_answered
+            failover_replies_follow_server_order
             $($extra)*
         );
     };

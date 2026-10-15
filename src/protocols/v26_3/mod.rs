@@ -31,6 +31,9 @@ pub struct VersionData {
     /// Our teleports each client has not acked yet.
     pub own_teleports: [u32; 2],
     pub pings: Vec<PingSync>,
+    pub teleports: Vec<TeleportSync>,
+    /// Counts tracked pings and teleports in server stream order.
+    pub seq: u64,
     pub threshold: Option<i32>,
     pub ids: PacketIdReader,
 }
@@ -61,6 +64,8 @@ impl VersionData {
             },
             own_teleports: [0; 2],
             pings: vec![],
+            teleports: vec![],
+            seq: 0,
             threshold: None,
             ids: PacketIdReader::default(),
         }
@@ -97,7 +102,7 @@ impl VersionProtocol for VersionData {
     }
 
     fn handle_client_disconnect(&mut self, new_active: ClientId) -> Option<ClientDisconnectEvent> {
-        let mut packets = vec![];
+        let mut replies = vec![];
 
         self.pings.retain(|t| {
             if !t.answered(new_active) {
@@ -105,15 +110,35 @@ impl VersionProtocol for VersionData {
             }
             if !t.sent {
                 let tx = c2s::game::Pong { id: t.id };
-                packets.push(
+                replies.push((
+                    t.seq,
                     UncompressedPacket::from_packet(&tx)
                         .unwrap()
                         .to_raw_packet_compressed(self.threshold)
                         .unwrap(),
-                );
+                ));
             }
             false
         });
+        self.teleports.retain(|t| {
+            let Some(tx) = t.ack(new_active) else {
+                return true;
+            };
+            if !t.sent {
+                replies.push((
+                    t.seq,
+                    UncompressedPacket::from_packet(tx)
+                        .unwrap()
+                        .to_raw_packet_compressed(self.threshold)
+                        .unwrap(),
+                ));
+            }
+            false
+        });
+
+        // Vanilla clients answer pings and teleports in the order the server sent them.
+        replies.sort_by_key(|(seq, _)| *seq);
+        let packets: Vec<_> = replies.into_iter().map(|(_, packet)| packet).collect();
 
         if packets.is_empty() {
             None
@@ -160,11 +185,20 @@ impl VersionData {
         match id {
             s2c::game::StartConfiguration::PACKET_ID => {
                 self.state_in = State::Configuration;
+                // The next game listener starts teleport ids over.
+                self.teleports.clear();
                 return Ok(Some(ClientBoundEvent::PhaseSwitch));
             }
             s2c::game::Ping::PACKET_ID if both_online => {
                 let ping: s2c::game::Ping = decode(packet, self.threshold)?;
-                self.pings.push(PingSync::new(ping.id));
+                self.seq += 1;
+                self.pings.push(PingSync::new(ping.id, self.seq));
+            }
+            s2c::game::Position::PACKET_ID if both_online => {
+                let teleport: s2c::game::Position = decode(packet, self.threshold)?;
+                self.seq += 1;
+                self.teleports
+                    .push(TeleportSync::new(teleport.id.0, self.seq));
             }
             _ => {}
         }
@@ -223,6 +257,20 @@ impl VersionData {
                 if teleport.id.0 == TELEPORT_ID && *pending > 0 {
                     *pending -= 1;
                     return Ok(Some(ServerBoundEvent::SkipRelay));
+                }
+                if let Some(i) = self
+                    .teleports
+                    .iter()
+                    .position(|t| t.id == teleport.id.0 && t.ack(client_id).is_none())
+                {
+                    let duplicate =
+                        self.teleports[i].answer(client_id, teleport.clone(), is_active);
+                    if !both_online || self.teleports[i].answered_by_both() {
+                        self.teleports.remove(i);
+                    }
+                    if duplicate {
+                        return Ok(Some(ServerBoundEvent::SkipRelay));
+                    }
                 }
                 if is_active && both_online {
                     // The server takes this ack as a move, like the PosRot older clients sent after it.
@@ -329,15 +377,17 @@ impl VersionData {
 #[derive(Debug)]
 pub struct PingSync {
     pub id: i32,
+    pub seq: u64,
     answered: [bool; 2],
     /// Whether a reply already reached the server.
     sent: bool,
 }
 
 impl PingSync {
-    pub fn new(id: i32) -> Self {
+    pub fn new(id: i32, seq: u64) -> Self {
         Self {
             id,
+            seq,
             answered: [false; 2],
             sent: false,
         }
@@ -354,6 +404,48 @@ impl PingSync {
     /// Records a reply and returns whether the server already got one.
     pub fn answer(&mut self, client: ClientId, is_active: bool) -> bool {
         self.answered[client.index()] = true;
+        let duplicate = is_active && self.sent;
+        self.sent |= is_active;
+        duplicate
+    }
+}
+
+#[derive(Debug)]
+pub struct TeleportSync {
+    pub id: i32,
+    pub seq: u64,
+    /// Each client's ack, with the position the server applies.
+    acks: [Option<c2s::game::AcceptTeleportation>; 2],
+    /// Whether an ack already reached the server.
+    sent: bool,
+}
+
+impl TeleportSync {
+    pub fn new(id: i32, seq: u64) -> Self {
+        Self {
+            id,
+            seq,
+            acks: [None, None],
+            sent: false,
+        }
+    }
+
+    pub fn ack(&self, client: ClientId) -> Option<&c2s::game::AcceptTeleportation> {
+        self.acks[client.index()].as_ref()
+    }
+
+    pub fn answered_by_both(&self) -> bool {
+        self.acks.iter().all(Option::is_some)
+    }
+
+    /// Records an ack and returns whether the server already got one.
+    pub fn answer(
+        &mut self,
+        client: ClientId,
+        ack: c2s::game::AcceptTeleportation,
+        is_active: bool,
+    ) -> bool {
+        self.acks[client.index()] = Some(ack);
         let duplicate = is_active && self.sent;
         self.sent |= is_active;
         duplicate
@@ -736,6 +828,53 @@ mod tests {
         c2s(&mut data, &c2s::game::Pong { id: 1 }, P, P, true);
         c2s(&mut data, &c2s::game::Pong { id: 1 }, S, P, true);
         assert!(data.pings.is_empty());
+        assert!(data.handle_client_disconnect(S).is_none());
+    }
+
+    fn server_teleport(id: i32) -> s2c::game::Position {
+        s2c::game::Position {
+            id: VarInt(id),
+            x: 1.0,
+            ..VersionData::new().position
+        }
+    }
+
+    #[test]
+    fn replayed_teleport_ack_carries_new_active_position() {
+        let mut data = in_game(Some(256));
+        s2c(&mut data, &server_teleport(5), true);
+        c2s(&mut data, &rot(1.0, 2.0), P, P, true);
+        let ack = c2s::game::AcceptTeleportation {
+            id: VarInt(5),
+            x: 7.0,
+            y: 8.0,
+            z: 9.0,
+            yaw: 12.0,
+            pitch: -3.0,
+        };
+        assert!(c2s(&mut data, &ack, S, P, true).is_none());
+
+        let Some(ClientDisconnectEvent::SendToServer(packets)) = data.handle_client_disconnect(S)
+        else {
+            panic!("teleport ack was not relayed");
+        };
+        assert_eq!(packets.len(), 1);
+        let got: c2s::game::AcceptTeleportation =
+            crate::protocols::decode(&packets[0], data.threshold).unwrap();
+        assert_eq!(
+            (got.id.0, got.x, got.y, got.z, got.yaw, got.pitch),
+            (5, 7.0, 8.0, 9.0, 12.0, -3.0)
+        );
+        assert!(data.teleports.is_empty());
+    }
+
+    #[test]
+    fn teleports_are_forgotten_on_reconfiguration() {
+        let mut data = in_game(None);
+        s2c(&mut data, &server_teleport(1), true);
+        c2s(&mut data, &teleport_ack(1), S, P, true);
+        s2c(&mut data, &s2c::game::StartConfiguration {}, true);
+        assert!(data.teleports.is_empty());
         assert!(data.handle_client_disconnect(S).is_none());
     }
 
