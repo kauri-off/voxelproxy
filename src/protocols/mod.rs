@@ -408,7 +408,7 @@ macro_rules! config_phase_tests {
 
             // The primary drops before the secondary acked the reconfiguration.
             data.handle_client_disconnect(S);
-            assert_eq!(data.state_out[S.index()], State::Game);
+            assert_eq!(data.state_out[S], State::Game);
 
             let ack = c2s::game::AcceptTeleportation {
                 id: VarInt(TELEPORT_ID),
@@ -424,7 +424,7 @@ macro_rules! config_phase_tests {
                 S,
                 false,
             );
-            assert_eq!(data.state_out[S.index()], State::Configuration);
+            assert_eq!(data.state_out[S], State::Configuration);
         }
 
         #[test]

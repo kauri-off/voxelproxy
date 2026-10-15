@@ -9,7 +9,7 @@ use tokio::sync::mpsc::{self, Receiver, UnboundedReceiver};
 
 use super::{Controller, ControllerEvent, Outgoing, PEER_QUEUE_BYTES, PeerLink};
 use crate::{
-    events::{AppEvent, ClientId, EventSink},
+    events::{AppEvent, ClientId, EventSink, PerClient},
     protocols::{Version, VersionProtocol},
 };
 
@@ -123,11 +123,11 @@ pub(crate) fn acks(packets: &[C2s]) -> Vec<i32> {
 /// Drives a real `Controller` one event at a time and records what each peer got.
 pub(crate) struct Harness<W> {
     controller: Controller,
-    clients: [UnboundedReceiver<Outgoing>; 2],
+    clients: PerClient<UnboundedReceiver<Outgoing>>,
     server: Receiver<RawPacket>,
     app: AppReceiver<AppEvent>,
-    client_phase: [Phase; 2],
-    client_out: [Phase; 2],
+    client_phase: PerClient<Phase>,
+    client_out: PerClient<Phase>,
     server_phase: Phase,
     server_out: Phase,
     threshold: Option<i32>,
@@ -154,11 +154,11 @@ impl<W: Wire> Harness<W> {
             controller: Controller::new(
                 P, primary, secondary, remote_tx, event_rx, version, events,
             ),
-            clients: [primary_rx, secondary_rx],
+            clients: PerClient::new(primary_rx, secondary_rx),
             server,
             app,
-            client_phase: [client_phase; 2],
-            client_out: [client_out; 2],
+            client_phase: PerClient::splat(client_phase),
+            client_out: PerClient::splat(client_out),
             server_phase,
             server_out,
             threshold,
@@ -197,7 +197,7 @@ impl<W: Wire> Harness<W> {
     }
 
     pub fn send(&mut self, client: ClientId, packet: C2s) {
-        let phase = &mut self.client_out[client.index()];
+        let phase = &mut self.client_out[client];
         let raw = W::write_c2s(*phase, packet);
         match packet {
             C2s::LoginAck | C2s::ConfigurationAck => *phase = Phase::Configuration,
@@ -235,9 +235,9 @@ impl<W: Wire> Harness<W> {
     /// Takes everything queued for a client so far.
     pub fn received(&mut self, client: ClientId) -> Vec<S2c> {
         let mut got = vec![];
-        while let Ok((raw, _permit)) = self.clients[client.index()].try_recv() {
+        while let Ok((raw, _permit)) = self.clients[client].try_recv() {
             let packet = raw.uncompress(self.threshold).unwrap();
-            let phase = &mut self.client_phase[client.index()];
+            let phase = &mut self.client_phase[client];
             let packet = W::read_s2c(*phase, &packet)
                 .unwrap_or(S2c::Raw(packet.packet_id, packet.payload.len()));
             match packet {

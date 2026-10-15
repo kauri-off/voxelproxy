@@ -11,7 +11,7 @@ use tokio::{
 };
 
 use crate::{
-    events::{ClientId, EventSink},
+    events::{ClientId, EventSink, PerClient},
     logger::Logger,
     protocols::{ClientBoundEvent, ServerBoundEvent, Version, VersionProtocol},
 };
@@ -91,9 +91,9 @@ struct HeldPackets {
 
 pub struct Controller {
     active_client: ClientId,
-    held: [Option<HeldPackets>; 2],
-    /// Queues to the clients, indexed by `ClientId`; `None` once a client went offline.
-    peers: [Option<PeerLink>; 2],
+    held: PerClient<Option<HeldPackets>>,
+    /// Queues to the clients; `None` once a client went offline.
+    peers: PerClient<Option<PeerLink>>,
     /// Channel for sending packets to the upstream server.
     remote_tx: Sender<RawPacket>,
     /// Receives events (client data, disconnections, server data) from I/O tasks.
@@ -114,8 +114,8 @@ impl Controller {
     ) -> Self {
         Self {
             active_client,
-            held: [None, None],
-            peers: [Some(primary), Some(secondary)],
+            held: PerClient::new(None, None),
+            peers: PerClient::new(Some(primary), Some(secondary)),
             remote_tx,
             event_rx,
             version,
@@ -226,7 +226,7 @@ impl Controller {
     /// Delivers a packet unless the client is still switching phase; the vanilla client
     /// crashes on packets of a phase it has not switched its outbound protocol to yet.
     async fn relay(&mut self, client_id: ClientId, packet: Arc<RawPacket>, phase_switch: bool) {
-        if let Some(held) = &mut self.held[client_id.index()] {
+        if let Some(held) = &mut self.held[client_id] {
             held.bytes += packet.data.len();
             held.queue.push_back((packet, phase_switch));
             if held.bytes > PEER_QUEUE_BYTES {
@@ -235,21 +235,21 @@ impl Controller {
             return;
         }
         self.deliver(client_id, packet).await;
-        if phase_switch && self.peers[client_id.index()].is_some() {
-            self.held[client_id.index()] = Some(HeldPackets::default());
+        if phase_switch && self.peers[client_id].is_some() {
+            self.held[client_id] = Some(HeldPackets::default());
         }
     }
 
     /// Sends what was held for the client, up to and including the next phase switch.
     async fn release(&mut self, client_id: ClientId) {
-        let Some(mut held) = self.held[client_id.index()].take() else {
+        let Some(mut held) = self.held[client_id].take() else {
             return;
         };
         while let Some((packet, phase_switch)) = held.queue.pop_front() {
             held.bytes -= packet.data.len();
             self.deliver(client_id, packet).await;
             if phase_switch {
-                self.held[client_id.index()] = Some(held);
+                self.held[client_id] = Some(held);
                 return;
             }
         }
@@ -258,7 +258,7 @@ impl Controller {
     /// The active client gets backpressure; an inactive one that falls too far behind
     /// is dropped instead, so it can never stall the session.
     async fn deliver(&mut self, client_id: ClientId, packet: Arc<RawPacket>) {
-        let Some(link) = &self.peers[client_id.index()] else {
+        let Some(link) = &self.peers[client_id] else {
             return;
         };
         if client_id == self.active_client {
@@ -277,8 +277,8 @@ impl Controller {
 
     /// Dropping the queue ends its writer task, which closes the socket's write half.
     fn mark_offline(&mut self, client_id: ClientId) {
-        self.held[client_id.index()] = None;
-        self.peers[client_id.index()] = None;
+        self.held[client_id] = None;
+        self.peers[client_id] = None;
         self.events.client_status(client_id, false);
     }
 
