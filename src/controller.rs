@@ -155,6 +155,10 @@ impl Controller {
                         }
                         ServerBoundEvent::SkipRelay => return ControlFlow::Continue(()),
                         ServerBoundEvent::PhaseAcked => self.release(client_id).await,
+                        ServerBoundEvent::PhaseCaughtUp => {
+                            self.release(client_id).await;
+                            return ControlFlow::Continue(());
+                        }
                     }
                 }
 

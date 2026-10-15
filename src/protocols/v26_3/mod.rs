@@ -36,6 +36,12 @@ pub struct VersionData {
     pub teleports: Vec<TeleportSync>,
     /// Counts tracked pings and teleports in server stream order.
     pub seq: u64,
+    /// Phase switches each client acked.
+    pub phases: [u32; 2],
+    /// Phase switches the server got an ack for.
+    pub server_phases: u32,
+    /// What the inactive client sent from an ack the server has not got yet.
+    pub ahead: Vec<RawPacket>,
     pub threshold: Option<i32>,
     pub ids: PacketIdReader,
 }
@@ -68,6 +74,9 @@ impl VersionData {
             pings: vec![],
             teleports: vec![],
             seq: 0,
+            phases: [0; 2],
+            server_phases: 0,
+            ahead: vec![],
             threshold: None,
             ids: PacketIdReader::default(),
         }
@@ -82,12 +91,40 @@ impl VersionProtocol for VersionData {
         is_active: bool,
         both_online: bool,
     ) -> Option<ServerBoundEvent> {
-        match self.state_out[client_id.index()] {
+        let i = client_id.index();
+        let state = self.state_out[i];
+        let behind = is_active && self.phases[i] < self.server_phases;
+        let event = match state {
             State::Login => self.handle_c2s_login(packet, client_id),
             State::Configuration => self.handle_c2s_configuration(packet, client_id),
             State::Game => self.handle_c2s_game(packet, client_id, is_active, both_online),
         }
-        .unwrap_or_default()
+        .unwrap_or_default();
+        if self.state_out[i] != state {
+            self.phases[i] += 1;
+        }
+
+        if behind {
+            // The server already got this phase from the old active client.
+            return Some(match event {
+                Some(ServerBoundEvent::PhaseAcked) => ServerBoundEvent::PhaseCaughtUp,
+                _ => ServerBoundEvent::SkipRelay,
+            });
+        }
+        if is_active && self.phases[i] > self.server_phases {
+            self.server_phases = self.phases[i];
+            self.ahead.clear();
+            if state == State::Game {
+                // The game listener that sent these pings is gone.
+                self.pings.clear();
+            }
+        } else if !is_active
+            && self.phases[i] > self.server_phases
+            && !matches!(event, Some(ServerBoundEvent::SkipRelay))
+        {
+            self.ahead.push(packet.clone());
+        }
+        event
     }
 
     fn handle_s2c(&mut self, packet: &RawPacket, both_online: bool) -> Option<ClientBoundEvent> {
@@ -140,7 +177,13 @@ impl VersionProtocol for VersionData {
 
         // Vanilla clients answer pings and teleports in the order the server sent them.
         replies.sort_by_key(|(seq, _)| *seq);
-        let packets: Vec<_> = replies.into_iter().map(|(_, packet)| packet).collect();
+        let mut packets: Vec<_> = replies.into_iter().map(|(_, packet)| packet).collect();
+
+        let ahead = std::mem::take(&mut self.ahead);
+        if self.phases[new_active.index()] > self.server_phases {
+            self.server_phases = self.phases[new_active.index()];
+            packets.extend(ahead);
+        }
 
         if packets.is_empty() {
             None
