@@ -1,6 +1,11 @@
 use std::sync::{Mutex, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
+use tokio::{
+    runtime::Handle,
+    sync::mpsc::{self, UnboundedSender},
+    task::JoinHandle,
+};
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use uuid::Uuid;
 
@@ -12,10 +17,11 @@ pub mod pb {
 use pb::worker_client::WorkerClient;
 use pb::*;
 
-use crate::diag;
+use crate::{diag, events::ClientId};
 
 static CONFIG: OnceLock<Mutex<Config>> = OnceLock::new();
 static CHANNEL: OnceLock<Option<Channel>> = OnceLock::new();
+static REPORTER: Mutex<Option<Reporter>> = Mutex::new(None);
 
 pub fn get_config() -> &'static Mutex<Config> {
     CONFIG.get_or_init(|| Mutex::new(Config::load()))
@@ -27,7 +33,17 @@ pub struct Config {
     pub os: &'static str,
     pub username: String,
     pub install_id: String,
-    pub uuid: Uuid,
+    /// Identifies this run of the app.
+    pub app_id: Uuid,
+    pub started: Instant,
+    pub session: Option<Session>,
+}
+
+/// The running proxy session, see `begin_session`.
+#[derive(Clone, Copy)]
+pub struct Session {
+    pub id: Uuid,
+    pub started: Instant,
 }
 
 impl Config {
@@ -40,16 +56,14 @@ impl Config {
                 .or_else(|_| std::env::var("USER"))
                 .unwrap_or_else(|_| "unknown".to_string()),
             install_id: crate::prefs::install_id(),
-            uuid: Uuid::new_v4(),
+            app_id: Uuid::new_v4(),
+            started: Instant::now(),
+            session: None,
         }
     }
 
     pub fn should_send(&self) -> bool {
         !cfg!(debug_assertions) && !self.telemetry_url.is_empty()
-    }
-
-    pub fn new_session(&mut self) {
-        self.uuid = Uuid::new_v4();
     }
 }
 
@@ -100,10 +114,6 @@ fn client_info() -> ClientInfo {
     }
 }
 
-fn session_id() -> String {
-    get_config().lock().unwrap().uuid.to_string()
-}
-
 /// Awaits an RPC and records its outcome and timing in the diagnostic log.
 async fn traced<T>(
     name: &str,
@@ -126,56 +136,205 @@ async fn traced<T>(
     result.map(tonic::Response::into_inner)
 }
 
-pub async fn send_startup_ping() {
-    let Some(mut client) = client() else { return };
-    let request = PingRequest {
-        client: Some(client_info()),
-    };
-    let _ = traced("Ping", client.ping(request)).await;
+/// A lifecycle report; the reporter sends them one by one so the server gets them in order.
+enum Report {
+    AppStarted(AppStartedRequest),
+    AppClosed(AppClosedRequest),
+    SessionStarted(SessionStartedRequest),
+    SessionJoined(SessionJoinedRequest),
+    ActiveClientSwitched(ActiveClientSwitchedRequest),
+    SessionEnded(SessionEndedRequest),
+    Chat(SendProtocolMetadataRequest),
 }
 
-pub async fn send_start_manual(server_addr: String) {
-    let Some(mut client) = client() else { return };
-    let request = ManualStartRequest {
-        client: Some(client_info()),
-        server_addr,
-    };
-    let _ = traced("ManualStart", client.manual_start(request)).await;
+struct Reporter {
+    tx: UnboundedSender<Report>,
+    task: JoinHandle<()>,
 }
 
-pub async fn send_start_auto(windivert: bool) {
+/// Starts sending reports on `rt`; reports made before are dropped.
+pub fn start_reporter(rt: &Handle) {
     let Some(mut client) = client() else { return };
-    let request = AutoStartRequest {
-        client: Some(client_info()),
-        use_windivert: windivert,
-    };
-    let _ = traced("AutoStart", client.auto_start(request)).await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let task = rt.spawn(async move {
+        while let Some(report) = rx.recv().await {
+            let _ = match report {
+                Report::AppStarted(r) => {
+                    traced("AppStarted", client.app_started(r)).await.map(drop)
+                }
+                Report::AppClosed(r) => traced("AppClosed", client.app_closed(r)).await.map(drop),
+                Report::SessionStarted(r) => traced("SessionStarted", client.session_started(r))
+                    .await
+                    .map(drop),
+                Report::SessionJoined(r) => traced("SessionJoined", client.session_joined(r))
+                    .await
+                    .map(drop),
+                Report::ActiveClientSwitched(r) => {
+                    traced("ActiveClientSwitched", client.active_client_switched(r))
+                        .await
+                        .map(drop)
+                }
+                Report::SessionEnded(r) => traced("SessionEnded", client.session_ended(r))
+                    .await
+                    .map(drop),
+                Report::Chat(r) => traced("SendProtocolMetadata", client.send_protocol_metadata(r))
+                    .await
+                    .map(drop),
+            };
+        }
+    });
+    *REPORTER.lock().unwrap() = Some(Reporter { tx, task });
 }
 
-pub async fn send_join(server_addr: String, nickname: String, protocol_version: i32) {
-    let Some(mut client) = client() else { return };
-    let request = JoinRequest {
+fn report(report: Report) {
+    if let Some(reporter) = REPORTER.lock().unwrap().as_ref() {
+        let _ = reporter.tx.send(report);
+    }
+}
+
+/// Sends what is still queued, giving up after `limit`; later reports are dropped.
+pub async fn flush_reports(limit: Duration) {
+    let Some(Reporter { tx, task }) = REPORTER.lock().unwrap().take() else {
+        return;
+    };
+    drop(tx);
+    if tokio::time::timeout(limit, task).await.is_err() {
+        diag::warn("rpc", format!("reports not sent within {limit:?}"));
+    }
+}
+
+fn millis(d: Duration) -> i64 {
+    d.as_millis().try_into().unwrap_or(i64::MAX)
+}
+
+fn app_id() -> String {
+    get_config().lock().unwrap().app_id.to_string()
+}
+
+fn current_session() -> Option<Session> {
+    get_config().lock().unwrap().session
+}
+
+pub fn report_app_started() {
+    report(Report::AppStarted(AppStartedRequest {
         client: Some(client_info()),
-        session_id: session_id(),
+        app_id: app_id(),
+    }));
+}
+
+pub fn report_app_closed() {
+    let uptime = get_config().lock().unwrap().started.elapsed();
+    report(Report::AppClosed(AppClosedRequest {
+        app_id: app_id(),
+        uptime_ms: millis(uptime),
+    }));
+}
+
+#[derive(Debug, Clone)]
+pub enum SessionKind {
+    Auto { use_windivert: bool },
+    Manual { server_addr: String },
+}
+
+/// Makes a new session current; joins, chat and switches are reported under it until it ends.
+pub fn begin_session(kind: &SessionKind) -> Session {
+    let session = Session {
+        id: Uuid::new_v4(),
+        started: Instant::now(),
+    };
+    get_config().lock().unwrap().session = Some(session);
+    diag::info("rpc", format!("session_id={} {kind:?}", session.id));
+    let mut request = SessionStartedRequest {
+        client: Some(client_info()),
+        app_id: app_id(),
+        session_id: session.id.to_string(),
+        ..Default::default()
+    };
+    match kind {
+        SessionKind::Auto { use_windivert } => {
+            request.set_mode(SessionMode::Auto);
+            request.use_windivert = *use_windivert;
+        }
+        SessionKind::Manual { server_addr } => {
+            request.set_mode(SessionMode::Manual);
+            request.server_addr = server_addr.clone();
+        }
+    }
+    report(Report::SessionStarted(request));
+    session
+}
+
+pub enum SessionEnd {
+    Finished,
+    Stopped,
+    Failed(String),
+    Panicked,
+}
+
+pub fn end_session(session: Session, end: SessionEnd) {
+    {
+        let mut cfg = get_config().lock().unwrap();
+        if cfg.session.is_some_and(|s| s.id == session.id) {
+            cfg.session = None;
+        }
+    }
+    let mut request = SessionEndedRequest {
+        session_id: session.id.to_string(),
+        duration_ms: millis(session.started.elapsed()),
+        ..Default::default()
+    };
+    let reason = match end {
+        SessionEnd::Finished => SessionEndReason::Finished,
+        SessionEnd::Stopped => SessionEndReason::Stopped,
+        SessionEnd::Failed(error) => {
+            request.error = error;
+            SessionEndReason::Failed
+        }
+        SessionEnd::Panicked => SessionEndReason::Panicked,
+    };
+    request.set_reason(reason);
+    report(Report::SessionEnded(request));
+}
+
+pub fn report_join(server_addr: String, nickname: String, protocol_version: i32) {
+    let Some(session) = current_session() else {
+        return;
+    };
+    report(Report::SessionJoined(SessionJoinedRequest {
+        client: Some(client_info()),
+        session_id: session.id.to_string(),
         server_addr,
         nickname,
         protocol_version,
-    };
-    let _ = traced("Join", client.join(request)).await;
+    }));
 }
 
-pub async fn send_protocol_metadata(data: String, custom: bool) {
-    let Some(mut client) = client() else { return };
-    let request = SendProtocolMetadataRequest {
-        session_id: session_id(),
-        payload: data,
-        custom,
+pub fn report_active_client_switched(active: ClientId, replayed_packets: usize) {
+    let Some(session) = current_session() else {
+        return;
     };
-    let _ = traced(
-        "SendProtocolMetadata",
-        client.send_protocol_metadata(request),
-    )
-    .await;
+    let mut request = ActiveClientSwitchedRequest {
+        session_id: session.id.to_string(),
+        replayed_packets: replayed_packets.try_into().unwrap_or(u32::MAX),
+        session_uptime_ms: millis(session.started.elapsed()),
+        ..Default::default()
+    };
+    request.set_active(match active {
+        ClientId::Primary => ClientRole::Primary,
+        ClientId::Secondary => ClientRole::Secondary,
+    });
+    report(Report::ActiveClientSwitched(request));
+}
+
+pub fn report_chat(text: String, is_command: bool) {
+    let Some(session) = current_session() else {
+        return;
+    };
+    report(Report::Chat(SendProtocolMetadataRequest {
+        session_id: session.id.to_string(),
+        payload: text,
+        custom: is_command,
+    }));
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

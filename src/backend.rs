@@ -2,6 +2,7 @@ use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use futures::FutureExt;
 use futures::future::{AbortHandle, abortable};
@@ -41,6 +42,7 @@ impl Backend {
             .thread_name("voxelproxy-worker")
             .build()
             .expect("failed to start tokio runtime");
+        config::start_reporter(rt.handle());
         Arc::new(Self {
             rt,
             events,
@@ -62,9 +64,13 @@ impl Backend {
             "backend",
             format!("start manual mode: server_addr={server_addr:?}"),
         );
-        self.spawn(config::send_start_manual(server_addr.clone()));
+        let kind = config::SessionKind::Manual {
+            server_addr: server_addr.clone(),
+        };
         let events = self.events.clone();
-        self.start_session(async move { session::run_manual_mode(server_addr, events).await });
+        self.start_session(kind, async move {
+            session::run_manual_mode(server_addr, events).await
+        });
     }
 
     pub fn start_auto(&self, use_windivert: bool, port_min: u16, port_max: u16) {
@@ -75,16 +81,15 @@ impl Backend {
                 is_elevated()
             ),
         );
-        self.spawn(config::send_start_auto(use_windivert));
         self.set_check_mode(false);
         let events = self.events.clone();
         let check_mode = self.check_mode.clone();
-        self.start_session(async move {
+        self.start_session(config::SessionKind::Auto { use_windivert }, async move {
             session::run_auto_mode(use_windivert, port_min, port_max, events, check_mode).await
         });
     }
 
-    fn start_session<F>(&self, fut: F)
+    fn start_session<F>(&self, kind: config::SessionKind, fut: F)
     where
         F: Future<Output = anyhow::Result<()>> + Send + 'static,
     {
@@ -102,18 +107,28 @@ impl Backend {
             }
             events.emit(AppEvent::SessionStarted);
             let started = std::time::Instant::now();
-            match AssertUnwindSafe(fut).catch_unwind().await {
+            let session = config::begin_session(&kind);
+            let end = match AssertUnwindSafe(fut).catch_unwind().await {
                 Ok(Ok(Err(e))) => {
                     diag::error("backend", format!("session failed: {e:#} ({e:?})"));
-                    Logger::new(&events).error(e.to_string())
+                    Logger::new(&events).error(e.to_string());
+                    config::SessionEnd::Failed(format!("{e:#}"))
                 }
                 Err(_) => {
                     diag::error("backend", "session panicked");
-                    Logger::new(&events).error("Сессия аварийно завершилась")
+                    Logger::new(&events).error("Сессия аварийно завершилась");
+                    config::SessionEnd::Panicked
                 }
-                Ok(Err(_)) => diag::info("backend", "session aborted"),
-                Ok(Ok(Ok(()))) => diag::info("backend", "session finished"),
-            }
+                Ok(Err(_)) => {
+                    diag::info("backend", "session aborted");
+                    config::SessionEnd::Stopped
+                }
+                Ok(Ok(Ok(()))) => {
+                    diag::info("backend", "session finished");
+                    config::SessionEnd::Finished
+                }
+            };
+            config::end_session(session, end);
             diag::info("backend", format!("session lasted {:?}", started.elapsed()));
             events.emit(AppEvent::SessionEnded);
         });
@@ -129,6 +144,22 @@ impl Backend {
     pub fn set_check_mode(&self, value: bool) {
         diag::info("backend", format!("check_mode={value}"));
         self.check_mode.store(value, Ordering::Relaxed);
+    }
+
+    /// Ends the session and sends what telemetry is left; blocks for at most about two seconds.
+    pub fn shutdown(&self) {
+        diag::info("backend", "shutdown");
+        let task = self.session.lock().unwrap().take().map(|s| {
+            s.abort.abort();
+            s.task
+        });
+        self.rt.block_on(async {
+            if let Some(task) = task {
+                let _ = tokio::time::timeout(Duration::from_millis(500), task).await;
+            }
+            config::report_app_closed();
+            config::flush_reports(Duration::from_millis(1500)).await;
+        });
     }
 
     fn abort_existing(&self) {
@@ -307,6 +338,7 @@ pub fn acknowledge_manual_warning() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::SessionKind;
     use futures::StreamExt;
     use futures::channel::oneshot;
     use futures::executor::block_on;
@@ -314,13 +346,18 @@ mod tests {
 
     fn start_listener(backend: &Backend, port: u16) -> oneshot::Receiver<bool> {
         let (tx, rx) = oneshot::channel();
-        backend.start_session(async move {
-            let listener = TcpListener::bind(("127.0.0.1", port)).await;
-            let _ = tx.send(listener.is_ok());
-            let _listener = listener?;
-            std::future::pending::<()>().await;
-            Ok(())
-        });
+        backend.start_session(
+            SessionKind::Auto {
+                use_windivert: false,
+            },
+            async move {
+                let listener = TcpListener::bind(("127.0.0.1", port)).await;
+                let _ = tx.send(listener.is_ok());
+                let _listener = listener?;
+                std::future::pending::<()>().await;
+                Ok(())
+            },
+        );
         rx
     }
 
@@ -356,7 +393,12 @@ mod tests {
     fn panicking_session_still_ends() {
         let (events, mut rx) = EventSink::channel();
         let backend = Backend::new(events);
-        backend.start_session(async { panic!("boom") });
+        backend.start_session(
+            SessionKind::Auto {
+                use_windivert: false,
+            },
+            async { panic!("boom") },
+        );
 
         assert!(matches!(
             block_on(rx.next()),

@@ -40,7 +40,7 @@ pub fn run() {
     crate::diag::init();
     let (events, rx) = EventSink::channel();
     let backend = Backend::new(events);
-    backend.spawn(config::send_startup_ping());
+    config::report_app_started();
 
     gpui_kit::application()
         .with_assets(AppAssets)
@@ -52,6 +52,13 @@ pub fn run() {
                 if cx.windows().is_empty() {
                     cx.quit();
                 }
+            })
+            .detach();
+
+            let quitting = backend.clone();
+            cx.on_app_quit(move |_| {
+                quitting.shutdown();
+                async {}
             })
             .detach();
 

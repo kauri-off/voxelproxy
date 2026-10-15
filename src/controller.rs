@@ -261,6 +261,13 @@ impl Controller {
                     ));
 
                     let event = self.version.handle_client_disconnect(self.active_client);
+                    let replayed = match &event {
+                        Some(crate::protocols::ClientDisconnectEvent::SendToServer(packets)) => {
+                            packets.len()
+                        }
+                        None => 0,
+                    };
+                    crate::config::report_active_client_switched(self.active_client, replayed);
                     match &event {
                         Some(crate::protocols::ClientDisconnectEvent::SendToServer(packets)) => {
                             let bytes: usize = packets.iter().map(|p| p.data.len()).sum();

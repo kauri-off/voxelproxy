@@ -309,7 +309,7 @@ impl VersionData {
             }
             c2s::game::Chat::PACKET_ID => {
                 if is_active && let Ok(chat) = decode::<c2s::game::Chat>(packet, self.threshold) {
-                    tokio::spawn(config::send_protocol_metadata(chat.message, false));
+                    config::report_chat(chat.message, false);
                 }
             }
             _ => {}

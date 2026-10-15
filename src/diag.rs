@@ -214,9 +214,9 @@ fn environment() -> Vec<String> {
         .lock()
         .map(|c| {
             format!(
-                "install_id={} session_uuid={} os_user={} telemetry_enabled={} telemetry_url={:?}",
+                "install_id={} app_id={} os_user={} telemetry_enabled={} telemetry_url={:?}",
                 c.install_id,
-                c.uuid,
+                c.app_id,
                 c.username,
                 c.should_send(),
                 c.telemetry_url
