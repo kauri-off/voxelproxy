@@ -51,7 +51,34 @@ pub(crate) enum C2s {
     Pong(i32),
     KeepAlive(i64),
     ContainerClose(i32),
+    KnownPacks,
+    AcceptCodeOfConduct,
+    /// The pack id is only on the wire for versions with `PACK_IDS`.
+    ResourcePack(u8, Pack),
     Raw(i32),
+}
+
+/// Resource pack answers, numbered like `ServerboundResourcePackPacket.Action`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Pack {
+    Loaded = 0,
+    Declined = 1,
+    FailedDownload = 2,
+    Accepted = 3,
+    Downloaded = 4,
+}
+
+impl Pack {
+    pub fn from_action(action: i32) -> Self {
+        match action {
+            0 => Pack::Loaded,
+            1 => Pack::Declined,
+            2 => Pack::FailedDownload,
+            3 => Pack::Accepted,
+            4 => Pack::Downloaded,
+            _ => panic!("unexpected resource pack action {action}"),
+        }
+    }
 }
 
 /// Clientbound packets the tests care about, independent of the version.
@@ -63,6 +90,9 @@ pub(crate) enum S2c {
     ContainerClose(i32),
     StartConfiguration,
     FinishConfiguration,
+    SelectKnownPacks,
+    CodeOfConduct,
+    ResourcePackPush(u8),
     Raw(i32, usize),
 }
 
@@ -78,6 +108,8 @@ pub(crate) trait Wire: Default + Into<Version> {
     const CONFIGURATION: bool;
     /// AcceptTeleportation carries the client's position, so the proxy mirrors it as a move.
     const ACK_MOVES: bool = false;
+    /// Resource packs have UUIDs and a DOWNLOADED answer, since 1.20.3.
+    const PACK_IDS: bool = true;
 
     fn write_c2s(phase: Phase, packet: C2s) -> UncompressedPacket;
     fn write_s2c(phase: Phase, packet: S2c) -> UncompressedPacket;
@@ -97,6 +129,17 @@ pub(crate) trait Wire: Default + Into<Version> {
             S2c::KeepAlive(id) => vec![C2s::KeepAlive(id)],
             S2c::StartConfiguration => vec![C2s::ConfigurationAck],
             S2c::FinishConfiguration => vec![C2s::FinishConfiguration],
+            S2c::SelectKnownPacks => vec![C2s::KnownPacks],
+            S2c::CodeOfConduct => vec![C2s::AcceptCodeOfConduct],
+            S2c::ResourcePackPush(id) if Self::PACK_IDS => {
+                [Pack::Accepted, Pack::Downloaded, Pack::Loaded]
+                    .map(|answer| C2s::ResourcePack(id, answer))
+                    .to_vec()
+            }
+            S2c::ResourcePackPush(id) => vec![
+                C2s::ResourcePack(id, Pack::Accepted),
+                C2s::ResourcePack(id, Pack::Loaded),
+            ],
             S2c::ContainerClose(_) | S2c::Raw(..) => vec![],
         }
     }
@@ -170,6 +213,15 @@ impl<W: Wire> Harness<W> {
     /// Both clients finished login and configuration in lockstep, the primary is active.
     pub fn in_game() -> Self {
         Self::new(Some(0)).join()
+    }
+
+    /// Both clients acked login, the server runs its configuration tasks.
+    pub fn in_configuration() -> Self {
+        let mut h = Self::new(Some(0));
+        h.send(P, C2s::LoginAck);
+        h.send(S, C2s::LoginAck);
+        assert_eq!(h.sent(), [C2s::LoginAck]);
+        h
     }
 
     pub fn join(mut self) -> Self {
@@ -980,6 +1032,276 @@ pub(crate) fn failover_replays_keep_alive_before_phase_ack<W: Wire>() {
     assert_eq!(h.sent(), [C2s::KeepAlive(1), C2s::ConfigurationAck]);
 }
 
+const PACK: S2c = S2c::ResourcePackPush(0);
+
+pub(crate) fn resource_pack_answers_reach_server_once<W: Wire>() {
+    let mut h = Harness::<W>::in_configuration();
+    h.serve(PACK);
+    assert_eq!(h.obey(S), [PACK]);
+    assert!(h.sent().is_empty());
+    assert_eq!(h.obey(P), [PACK]);
+    assert_eq!(h.sent(), W::respond(PACK));
+
+    h.serve(S2c::FinishConfiguration);
+    h.obey(S);
+    h.obey(P);
+    assert_eq!(h.sent(), [C2s::FinishConfiguration]);
+}
+
+pub(crate) fn pack_answers_are_not_repeated_after_failover<W: Wire>() {
+    let mut h = Harness::<W>::in_configuration();
+    h.serve(PACK);
+    h.obey(P);
+    assert_eq!(h.sent(), W::respond(PACK));
+
+    h.leave(P);
+    assert!(h.sent().is_empty());
+    assert_eq!(h.obey(S), [PACK]);
+    assert!(h.sent().is_empty());
+    h.serve(S2c::FinishConfiguration);
+    h.obey(S);
+    assert_eq!(h.sent(), [C2s::FinishConfiguration]);
+}
+
+pub(crate) fn failover_replays_pack_answers_new_active_sent<W: Wire>() {
+    let mut h = Harness::<W>::in_configuration();
+    h.serve(PACK);
+    h.received(P);
+    h.obey(S);
+    assert!(h.sent().is_empty());
+
+    h.leave(P);
+    assert_eq!(h.sent(), W::respond(PACK));
+}
+
+pub(crate) fn failover_mid_pack_continues_from_server_answers<W: Wire>() {
+    let mut h = Harness::<W>::in_configuration();
+    let answers = W::respond(PACK);
+    let (last, rest) = answers.split_last().unwrap();
+    h.serve(PACK);
+    h.received(P);
+    h.received(S);
+    h.send(P, answers[0]);
+    h.send_all(S, rest.iter().copied());
+    assert_eq!(h.sent(), [answers[0]]);
+
+    h.leave(P);
+    assert_eq!(h.sent(), rest[1..]);
+    h.send(S, *last);
+    assert_eq!(h.sent(), [*last]);
+}
+
+pub(crate) fn failover_relays_decline_after_partial_answer<W: Wire>() {
+    let mut h = Harness::<W>::in_configuration();
+    h.serve(PACK);
+    h.received(P);
+    h.received(S);
+    h.send(P, C2s::ResourcePack(0, Pack::Accepted));
+    h.send(S, C2s::ResourcePack(0, Pack::Declined));
+    assert_eq!(h.sent(), [C2s::ResourcePack(0, Pack::Accepted)]);
+
+    h.leave(P);
+    assert_eq!(h.sent(), [C2s::ResourcePack(0, Pack::Declined)]);
+}
+
+pub(crate) fn decline_after_finished_pack_is_dropped<W: Wire>() {
+    let mut h = Harness::<W>::in_configuration();
+    h.serve(PACK);
+    h.obey(P);
+    h.sent();
+    h.received(S);
+    h.send(S, C2s::ResourcePack(0, Pack::Declined));
+
+    h.leave(P);
+    assert!(h.sent().is_empty());
+    h.serve(S2c::FinishConfiguration);
+    h.obey(S);
+    assert_eq!(h.sent(), [C2s::FinishConfiguration]);
+}
+
+pub(crate) fn pack_answers_after_inactive_left_reach_server<W: Wire>() {
+    let mut h = Harness::<W>::in_configuration();
+    h.serve(PACK);
+    h.received(S);
+    h.leave(S);
+    assert_eq!(h.obey(P), [PACK]);
+    assert_eq!(h.sent(), W::respond(PACK));
+}
+
+pub(crate) fn tasks_of_finished_listener_are_forgotten<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(S2c::StartConfiguration);
+    h.obey(P);
+    h.obey(S);
+    h.serve(PACK);
+    h.obey(P);
+    // The secondary's pack prompt is still open when configuration finishes.
+    assert_eq!(h.received(S), [PACK]);
+    h.serve(S2c::FinishConfiguration);
+    h.obey(P);
+    assert_eq!(h.received(S), [S2c::FinishConfiguration]);
+    h.send(S, C2s::FinishConfiguration);
+    assert_eq!(
+        h.sent(),
+        [
+            vec![C2s::ConfigurationAck],
+            W::respond(PACK),
+            vec![C2s::FinishConfiguration]
+        ]
+        .concat()
+    );
+
+    h.serve(S2c::StartConfiguration);
+    h.obey(P);
+    h.obey(S);
+    assert_eq!(h.sent(), [C2s::ConfigurationAck]);
+    h.serve(PACK);
+    h.received(P);
+    assert_eq!(h.obey(S), [PACK]);
+    h.leave(P);
+    assert_eq!(h.sent(), W::respond(PACK));
+}
+
+pub(crate) fn lagging_answer_to_earlier_listener_is_not_counted<W: Wire>() {
+    let mut h = Harness::<W>::in_configuration();
+    h.serve(PACK);
+    h.obey(P);
+    h.serve(S2c::FinishConfiguration);
+    h.obey(P);
+    h.serve(S2c::StartConfiguration);
+    h.obey(P);
+    h.serve(PACK);
+    h.obey(P);
+    assert_eq!(
+        h.sent(),
+        [
+            W::respond(PACK),
+            vec![C2s::FinishConfiguration, C2s::ConfigurationAck],
+            W::respond(PACK)
+        ]
+        .concat()
+    );
+
+    // The secondary still answers the first listener's pack.
+    h.leave(P);
+    h.obey(S);
+    assert!(h.sent().is_empty());
+}
+
+pub(crate) fn known_packs_answer_reaches_server_once<W: Wire>() {
+    let mut h = Harness::<W>::in_configuration();
+    h.serve(S2c::SelectKnownPacks);
+    h.obey(P);
+    assert_eq!(h.sent(), [C2s::KnownPacks]);
+
+    h.leave(P);
+    assert_eq!(h.obey(S), [S2c::SelectKnownPacks]);
+    assert!(h.sent().is_empty());
+}
+
+pub(crate) fn failover_replays_known_packs_answer<W: Wire>() {
+    let mut h = Harness::<W>::in_configuration();
+    h.serve(S2c::SelectKnownPacks);
+    h.received(P);
+    h.obey(S);
+    assert!(h.sent().is_empty());
+
+    h.leave(P);
+    assert_eq!(h.sent(), [C2s::KnownPacks]);
+    h.serve(S2c::FinishConfiguration);
+    h.obey(S);
+    assert_eq!(h.sent(), [C2s::FinishConfiguration]);
+}
+
+pub(crate) fn failover_task_answers_follow_server_order<W: Wire>() {
+    let mut h = Harness::<W>::in_configuration();
+    h.serve(S2c::SelectKnownPacks);
+    h.obey(P);
+    h.obey(S);
+    assert_eq!(h.sent(), [C2s::KnownPacks]);
+    h.serve(S2c::KeepAlive(1));
+    h.serve(PACK);
+    h.received(P);
+    h.obey(S);
+    assert!(h.sent().is_empty());
+
+    h.leave(P);
+    assert_eq!(
+        h.sent(),
+        [vec![C2s::KeepAlive(1)], W::respond(PACK)].concat()
+    );
+}
+
+pub(crate) fn code_of_conduct_is_accepted_once<W: Wire>() {
+    let mut h = Harness::<W>::in_configuration();
+    h.serve(S2c::SelectKnownPacks);
+    h.serve(S2c::CodeOfConduct);
+    h.obey(P);
+    assert_eq!(h.sent(), [C2s::KnownPacks, C2s::AcceptCodeOfConduct]);
+
+    h.leave(P);
+    h.obey(S);
+    assert!(h.sent().is_empty());
+}
+
+pub(crate) fn failover_replays_code_of_conduct_acceptance<W: Wire>() {
+    let mut h = Harness::<W>::in_configuration();
+    h.serve(S2c::SelectKnownPacks);
+    h.obey(P);
+    h.obey(S);
+    h.serve(S2c::CodeOfConduct);
+    h.received(P);
+    h.obey(S);
+    assert_eq!(h.sent(), [C2s::KnownPacks]);
+
+    h.leave(P);
+    assert_eq!(h.sent(), [C2s::AcceptCodeOfConduct]);
+}
+
+pub(crate) fn failover_replays_answers_per_pack<W: Wire>() {
+    let mut h = Harness::<W>::in_configuration();
+    let (first, second) = (S2c::ResourcePackPush(1), S2c::ResourcePackPush(2));
+    h.serve(first);
+    h.serve(second);
+    h.received(P);
+    h.obey(S);
+    h.send_all(P, W::respond(first));
+    h.send(P, C2s::ResourcePack(2, Pack::Accepted));
+    assert_eq!(
+        h.sent(),
+        [
+            W::respond(first),
+            vec![C2s::ResourcePack(2, Pack::Accepted)]
+        ]
+        .concat()
+    );
+
+    h.leave(P);
+    assert_eq!(
+        h.sent(),
+        [
+            C2s::ResourcePack(2, Pack::Downloaded),
+            C2s::ResourcePack(2, Pack::Loaded)
+        ]
+    );
+}
+
+pub(crate) fn pack_pushed_again_is_answered_again<W: Wire>() {
+    let mut h = Harness::<W>::in_configuration();
+    h.serve(PACK);
+    h.obey(P);
+    assert_eq!(h.sent(), W::respond(PACK));
+    assert_eq!(h.received(S), [PACK]);
+
+    // The secondary only answers the second push of the same pack.
+    h.serve(PACK);
+    h.received(P);
+    assert_eq!(h.received(S), [PACK]);
+    h.send_all(S, W::respond(PACK));
+    h.leave(P);
+    assert_eq!(h.sent(), W::respond(PACK));
+}
+
 /// Just over half the budget, so the second one overflows it.
 const BIG: usize = PEER_QUEUE_BYTES / 2 + 1;
 
@@ -1055,7 +1377,7 @@ macro_rules! controller_tests {
             )*
         }
     };
-    (configuration) => {
+    (configuration $($extra:ident)*) => {
         $crate::controller::tests::controller_tests!(@common
             nothing_is_mirrored_during_reconfiguration
             start_configuration_holds_packets_until_ack
@@ -1074,6 +1396,37 @@ macro_rules! controller_tests {
             configuration_keep_alive_is_synced
             keep_alive_of_closed_listener_is_not_replayed
             failover_replays_keep_alive_before_phase_ack
+            resource_pack_answers_reach_server_once
+            pack_answers_are_not_repeated_after_failover
+            failover_replays_pack_answers_new_active_sent
+            failover_mid_pack_continues_from_server_answers
+            failover_relays_decline_after_partial_answer
+            decline_after_finished_pack_is_dropped
+            pack_answers_after_inactive_left_reach_server
+            tasks_of_finished_listener_are_forgotten
+            lagging_answer_to_earlier_listener_is_not_counted
+            $($extra)*
+        );
+    };
+    (pack_ids $($rest:ident)*) => {
+        $crate::controller::tests::controller_tests!(configuration
+            failover_replays_answers_per_pack
+            pack_pushed_again_is_answered_again
+            $($rest)*
+        );
+    };
+    (known_packs $($rest:ident)*) => {
+        $crate::controller::tests::controller_tests!(pack_ids
+            known_packs_answer_reaches_server_once
+            failover_replays_known_packs_answer
+            failover_task_answers_follow_server_order
+            $($rest)*
+        );
+    };
+    (code_of_conduct) => {
+        $crate::controller::tests::controller_tests!(known_packs
+            code_of_conduct_is_accepted_once
+            failover_replays_code_of_conduct_acceptance
         );
     };
     () => {

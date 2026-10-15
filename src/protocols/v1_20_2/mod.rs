@@ -17,6 +17,9 @@ use packets::{c2s, s2c};
 
 /// Vanilla servers never issue negative teleport ids.
 const TELEPORT_ID: i32 = -1;
+/// How far an answer takes a task; the server finishes it on `DONE`.
+const ACCEPTED: u8 = 1;
+const DONE: u8 = 2;
 
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum State {
@@ -35,7 +38,9 @@ pub struct VersionData {
     pub pings: Vec<PingSync>,
     pub teleports: Vec<TeleportSync>,
     pub keep_alives: Vec<KeepAliveSync>,
-    /// Counts tracked pings, teleports and keep-alives in server stream order.
+    /// Configuration tasks the server waits to be answered, see `ServerConfigurationPacketListenerImpl`.
+    pub tasks: Vec<TaskSync>,
+    /// Counts tracked pings, teleports, keep-alives and tasks in server stream order.
     pub seq: u64,
     /// Phase switches each client acked.
     pub phases: PerClient<u32>,
@@ -76,6 +81,7 @@ impl VersionData {
             pings: vec![],
             teleports: vec![],
             keep_alives: vec![],
+            tasks: vec![],
             seq: 0,
             phases: PerClient::splat(0),
             server_phases: 0,
@@ -120,8 +126,9 @@ impl VersionProtocol for VersionData {
         if is_active && self.phases[client_id] > self.server_phases {
             self.server_phases = self.phases[client_id];
             self.ahead.clear();
-            // The listener that sent these keep-alives is gone.
+            // The listener that sent these keep-alives and tasks is gone.
             self.keep_alives.clear();
+            self.tasks.clear();
             if state == State::Game {
                 // The game listener that sent these pings is gone.
                 self.pings.clear();
@@ -205,6 +212,12 @@ impl VersionProtocol for VersionData {
             false
         });
 
+        for task in &mut self.tasks {
+            let seq = task.seq;
+            replies.extend(task.catch_up(new_active).into_iter().map(|p| (seq, p)));
+        }
+        self.tasks.retain(|t| !t.done(new_active));
+
         // Vanilla clients answer pings and teleports in the order the server sent them.
         replies.sort_by_key(|(seq, _)| *seq);
         let mut packets: Vec<_> = replies.into_iter().map(|(_, packet)| packet).collect();
@@ -213,6 +226,7 @@ impl VersionProtocol for VersionData {
         if self.phases[new_active] > self.server_phases {
             self.server_phases = self.phases[new_active];
             self.keep_alives.clear();
+            self.tasks.clear();
             self.awaiting_config_ack = false;
             packets.extend(ahead);
         }
@@ -266,6 +280,9 @@ impl VersionData {
                     State::Configuration,
                     self.seq,
                 ));
+            }
+            s2c::configuration::ResourcePack::PACKET_ID => {
+                self.track_task(Task::ResourcePack, both_online);
             }
             _ => {}
         }
@@ -355,6 +372,17 @@ impl VersionData {
                 return Ok(self.answer_keep_alive(
                     keep_alive.id,
                     State::Configuration,
+                    client_id,
+                    is_active,
+                    both_online,
+                ));
+            }
+            c2s::configuration::ResourcePack::PACKET_ID => {
+                let response: c2s::configuration::ResourcePack = decode(packet, self.threshold)?;
+                return Ok(self.answer_task(
+                    Task::ResourcePack,
+                    pack_stage(response.action.0),
+                    packet,
                     client_id,
                     is_active,
                     both_online,
@@ -524,6 +552,45 @@ impl VersionData {
         }
         duplicate.then_some(ServerBoundEvent::SkipRelay)
     }
+
+    fn track_task(&mut self, task: Task, both_online: bool) {
+        if both_online {
+            self.seq += 1;
+            self.tasks.push(TaskSync::new(task, self.seq));
+        }
+    }
+
+    fn answer_task(
+        &mut self,
+        task: Task,
+        stage: u8,
+        packet: &RawPacket,
+        client_id: ClientId,
+        is_active: bool,
+        both_online: bool,
+    ) -> Option<ServerBoundEvent> {
+        if self.phases[client_id] != self.server_phases {
+            // A lagging client answers an earlier listener's task.
+            return None;
+        }
+        let i = self
+            .tasks
+            .iter()
+            .position(|t| t.task == task && !t.done(client_id))?;
+        let duplicate = self.tasks[i].answer(client_id, stage, packet, is_active);
+        if self.tasks[i].done_by_both() || !both_online && self.tasks[i].done(client_id) {
+            self.tasks.remove(i);
+        }
+        duplicate.then_some(ServerBoundEvent::SkipRelay)
+    }
+}
+
+/// How far a resource pack answer gets; the 1.20.2 server finishes the task on any but ACCEPTED.
+fn pack_stage(action: i32) -> u8 {
+    match action {
+        3 => ACCEPTED,
+        _ => DONE,
+    }
 }
 
 /// A teleport a client got: one of ours or the server's.
@@ -652,12 +719,78 @@ impl KeepAliveSync {
     }
 }
 
+/// A configuration task request a client must answer.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Task {
+    ResourcePack,
+}
+
+#[derive(Debug)]
+pub struct TaskSync {
+    pub task: Task,
+    pub seq: u64,
+    /// Each client's answers in the order it sent them, with the stage each one reaches.
+    answers: PerClient<Vec<(u8, RawPacket)>>,
+    /// The furthest stage the server got.
+    sent: u8,
+}
+
+impl TaskSync {
+    pub fn new(task: Task, seq: u64) -> Self {
+        Self {
+            task,
+            seq,
+            answers: PerClient::default(),
+            sent: 0,
+        }
+    }
+
+    pub fn done(&self, client: ClientId) -> bool {
+        self.answers[client]
+            .last()
+            .is_some_and(|(stage, _)| *stage == DONE)
+    }
+
+    pub fn done_by_both(&self) -> bool {
+        self.done(ClientId::Primary) && self.done(ClientId::Secondary)
+    }
+
+    /// Records an answer and returns whether the server already got that far.
+    pub fn answer(
+        &mut self,
+        client: ClientId,
+        stage: u8,
+        packet: &RawPacket,
+        is_active: bool,
+    ) -> bool {
+        self.answers[client].push((stage, packet.clone()));
+        if !is_active {
+            return false;
+        }
+        let duplicate = stage <= self.sent;
+        self.sent = self.sent.max(stage);
+        duplicate
+    }
+
+    /// The client's answers that take the task further than the server got.
+    pub fn catch_up(&mut self, client: ClientId) -> Vec<RawPacket> {
+        let mut packets = vec![];
+        for (stage, packet) in &self.answers[client] {
+            if *stage > self.sent {
+                self.sent = *stage;
+                packets.push(packet.clone());
+            }
+        }
+        packets
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use mc_protocol::{packet::PacketId, ser::Serialize};
 
     use super::*;
-    use crate::controller::tests::{C2s, Phase, S2c, Spot, Wire, pack, unpack};
+    use crate::controller::tests::{C2s, Pack, Phase, S2c, Spot, Wire, pack, unpack};
 
     const P: ClientId = ClientId::Primary;
     const S: ClientId = ClientId::Secondary;
@@ -1099,8 +1232,110 @@ mod tests {
         ));
     }
 
+    const ACCEPTED_ACTION: i32 = 3;
+    const LOADED_ACTION: i32 = 0;
+    /// Only ACCEPTED, 1.20.2 has no DOWNLOADED.
+    const IN_FLIGHT: [i32; 1] = [3];
+
+    fn configuring() -> VersionData {
+        let mut data = VersionData::new();
+        for client in [P, S] {
+            login(&mut data, client);
+        }
+        data
+    }
+
+    fn push(data: &mut VersionData, _: u128, both_online: bool) {
+        s2c(data, &s2c::configuration::ResourcePack {}, both_online);
+    }
+
+    fn answer(_: u128, action: i32) -> c2s::configuration::ResourcePack {
+        c2s::configuration::ResourcePack {
+            action: VarInt(action),
+        }
+    }
+
+    fn replayed(event: Option<ClientDisconnectEvent>) -> Vec<RawPacket> {
+        match event {
+            Some(ClientDisconnectEvent::SendToServer(packets)) => packets,
+            None => vec![],
+        }
+    }
+
+    #[test]
+    fn pack_answers_resume_from_what_server_got() {
+        let mut data = configuring();
+        push(&mut data, 1, true);
+        assert!(c2s(&mut data, &answer(1, ACCEPTED_ACTION), P, P, true).is_none());
+        for action in IN_FLIGHT {
+            assert!(c2s(&mut data, &answer(1, action), S, P, true).is_none());
+        }
+
+        let packets = replayed(data.handle_client_disconnect(S));
+        let actions: Vec<i32> = packets
+            .iter()
+            .map(|p| {
+                crate::protocols::decode::<c2s::configuration::ResourcePack>(p, data.threshold)
+                    .unwrap()
+                    .action
+                    .0
+            })
+            .collect();
+        assert_eq!(actions, IN_FLIGHT[1..]);
+        assert!(c2s(&mut data, &answer(1, LOADED_ACTION), S, S, false).is_none());
+        assert!(data.tasks.is_empty());
+    }
+
+    #[test]
+    fn pack_answers_server_got_are_skipped_after_failover() {
+        let mut data = configuring();
+        push(&mut data, 1, true);
+        for action in IN_FLIGHT {
+            assert!(c2s(&mut data, &answer(1, action), P, P, true).is_none());
+        }
+        assert!(replayed(data.handle_client_disconnect(S)).is_empty());
+        for action in IN_FLIGHT {
+            assert!(matches!(
+                c2s(&mut data, &answer(1, action), S, S, false),
+                Some(ServerBoundEvent::SkipRelay)
+            ));
+        }
+        assert!(c2s(&mut data, &answer(1, LOADED_ACTION), S, S, false).is_none());
+        assert!(data.tasks.is_empty());
+    }
+
+    #[test]
+    fn pack_answered_by_both_is_forgotten() {
+        let mut data = configuring();
+        push(&mut data, 1, true);
+        for client in [P, S] {
+            c2s(&mut data, &answer(1, LOADED_ACTION), client, P, true);
+        }
+        assert!(data.tasks.is_empty());
+    }
+
+    #[test]
+    fn pack_pushed_while_alone_is_not_tracked() {
+        let mut data = configuring();
+        push(&mut data, 1, false);
+        assert!(data.tasks.is_empty());
+        assert!(c2s(&mut data, &answer(1, LOADED_ACTION), P, P, false).is_none());
+    }
+
+    #[test]
+    fn tasks_end_with_configuration_listener() {
+        let mut data = configuring();
+        push(&mut data, 1, true);
+        c2s(&mut data, &answer(1, LOADED_ACTION), P, P, true);
+        assert_eq!(data.tasks.len(), 1);
+        finish_config(&mut data, P);
+        assert!(data.tasks.is_empty());
+        assert!(replayed(data.handle_client_disconnect(S)).is_empty());
+    }
+
     impl Wire for VersionData {
         const CONFIGURATION: bool = true;
+        const PACK_IDS: bool = false;
 
         fn write_c2s(phase: Phase, packet: C2s) -> UncompressedPacket {
             match packet {
@@ -1131,7 +1366,13 @@ mod tests {
                 C2s::ContainerClose(id) => pack(&c2s::game::ContainerClose {
                     container_id: id as u8,
                 }),
+                C2s::ResourcePack(_, answer) => pack(&c2s::configuration::ResourcePack {
+                    action: VarInt(answer as i32),
+                }),
                 C2s::Raw(id) => UncompressedPacket::new(id, vec![]),
+                C2s::KnownPacks | C2s::AcceptCodeOfConduct => {
+                    panic!("{packet:?} does not exist in 1.20.2")
+                }
             }
         }
 
@@ -1156,7 +1397,11 @@ mod tests {
                 }),
                 S2c::StartConfiguration => pack(&s2c::game::StartConfiguration {}),
                 S2c::FinishConfiguration => pack(&s2c::configuration::FinishConfiguration {}),
+                S2c::ResourcePackPush(_) => pack(&s2c::configuration::ResourcePack {}),
                 S2c::Raw(id, len) => UncompressedPacket::new(id, vec![0; len]),
+                S2c::SelectKnownPacks | S2c::CodeOfConduct => {
+                    panic!("{packet:?} does not exist in 1.20.2")
+                }
             }
         }
 
@@ -1200,6 +1445,10 @@ mod tests {
                 (Phase::Game, game::ContainerClose::PACKET_ID) => {
                     C2s::ContainerClose(unpack::<game::ContainerClose>(packet).container_id.into())
                 }
+                (Phase::Configuration, configuration::ResourcePack::PACKET_ID) => {
+                    let p: configuration::ResourcePack = unpack(packet);
+                    C2s::ResourcePack(0, Pack::from_action(p.action.0))
+                }
                 _ => return None,
             })
         }
@@ -1234,6 +1483,9 @@ mod tests {
                 }
                 (Phase::Game, game::ContainerClose::PACKET_ID) => {
                     S2c::ContainerClose(unpack::<game::ContainerClose>(packet).container_id.into())
+                }
+                (Phase::Configuration, configuration::ResourcePack::PACKET_ID) => {
+                    S2c::ResourcePackPush(0)
                 }
                 _ => return None,
             })

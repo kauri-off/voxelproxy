@@ -21,6 +21,8 @@ pub mod c2s {
     }
 
     pub mod configuration {
+        use uuid::Uuid;
+
         use super::*;
 
         #[derive(Packet, Debug)]
@@ -31,6 +33,13 @@ pub mod c2s {
         #[packet(3)] // ServerboundKeepAlivePacket
         pub struct KeepAlive {
             pub id: i64,
+        }
+
+        #[derive(Packet, Debug)]
+        #[packet(5)] // ServerboundResourcePackPacket
+        pub struct ResourcePack {
+            pub id: Uuid,
+            pub action: VarInt,
         }
     }
 
@@ -111,6 +120,8 @@ pub mod s2c {
     use super::*;
 
     pub mod configuration {
+        use uuid::Uuid;
+
         use super::*;
 
         #[derive(Packet, Debug)]
@@ -121,6 +132,12 @@ pub mod s2c {
         #[packet(3)] // ClientboundKeepAlivePacket
         pub struct KeepAlive {
             pub id: i64,
+        }
+
+        #[derive(Packet, Debug)]
+        #[packet(7)] // ClientboundResourcePackPushPacket
+        pub struct ResourcePackPush {
+            pub id: Uuid,
         }
     }
 

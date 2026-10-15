@@ -6,6 +6,7 @@ use mc_protocol::{
     packet::{RawPacket, UncompressedPacket},
     varint::VarInt,
 };
+use uuid::Uuid;
 
 use super::{PacketIdReader, VersionProtocol, decode};
 use crate::{
@@ -17,6 +18,10 @@ use packets::{c2s, s2c};
 
 /// Vanilla servers never issue negative teleport ids.
 const TELEPORT_ID: i32 = -1;
+/// How far an answer takes a task; the server finishes it on `DONE`.
+const ACCEPTED: u8 = 1;
+const DOWNLOADED: u8 = 2;
+const DONE: u8 = 3;
 
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum State {
@@ -35,7 +40,9 @@ pub struct VersionData {
     pub pings: Vec<PingSync>,
     pub teleports: Vec<TeleportSync>,
     pub keep_alives: Vec<KeepAliveSync>,
-    /// Counts tracked pings, teleports and keep-alives in server stream order.
+    /// Configuration tasks the server waits to be answered, see `ServerConfigurationPacketListenerImpl`.
+    pub tasks: Vec<TaskSync>,
+    /// Counts tracked pings, teleports, keep-alives and tasks in server stream order.
     pub seq: u64,
     /// Phase switches each client acked.
     pub phases: PerClient<u32>,
@@ -75,6 +82,7 @@ impl VersionData {
             pings: vec![],
             teleports: vec![],
             keep_alives: vec![],
+            tasks: vec![],
             seq: 0,
             phases: PerClient::splat(0),
             server_phases: 0,
@@ -117,8 +125,9 @@ impl VersionProtocol for VersionData {
         if is_active && self.phases[client_id] > self.server_phases {
             self.server_phases = self.phases[client_id];
             self.ahead.clear();
-            // The listener that sent these keep-alives is gone.
+            // The listener that sent these keep-alives and tasks is gone.
             self.keep_alives.clear();
+            self.tasks.clear();
             if state == State::Game {
                 // The game listener that sent these pings is gone.
                 self.pings.clear();
@@ -202,6 +211,12 @@ impl VersionProtocol for VersionData {
             false
         });
 
+        for task in &mut self.tasks {
+            let seq = task.seq;
+            replies.extend(task.catch_up(new_active).into_iter().map(|p| (seq, p)));
+        }
+        self.tasks.retain(|t| !t.done(new_active));
+
         // Vanilla clients answer pings and teleports in the order the server sent them.
         replies.sort_by_key(|(seq, _)| *seq);
         let mut packets: Vec<_> = replies.into_iter().map(|(_, packet)| packet).collect();
@@ -210,6 +225,7 @@ impl VersionProtocol for VersionData {
         if self.phases[new_active] > self.server_phases {
             self.server_phases = self.phases[new_active];
             self.keep_alives.clear();
+            self.tasks.clear();
             packets.extend(ahead);
         }
 
@@ -256,6 +272,18 @@ impl VersionData {
                     State::Configuration,
                     self.seq,
                 ));
+            }
+            s2c::configuration::SelectKnownPacks::PACKET_ID => {
+                self.track_task(Task::KnownPacks, both_online);
+            }
+            s2c::configuration::CodeOfConduct::PACKET_ID => {
+                self.track_task(Task::CodeOfConduct, both_online);
+            }
+            s2c::configuration::ResourcePackPush::PACKET_ID => {
+                let push: s2c::configuration::ResourcePackPush = decode(packet, self.threshold)?;
+                // A vanilla client drops a pack pushed again under its id without answering for it.
+                self.tasks.retain(|t| t.task != Task::ResourcePack(push.id));
+                self.track_task(Task::ResourcePack(push.id), both_online);
             }
             _ => {}
         }
@@ -338,6 +366,37 @@ impl VersionData {
                 return Ok(self.answer_keep_alive(
                     keep_alive.id,
                     State::Configuration,
+                    client_id,
+                    is_active,
+                    both_online,
+                ));
+            }
+            c2s::configuration::SelectKnownPacks::PACKET_ID => {
+                return Ok(self.answer_task(
+                    Task::KnownPacks,
+                    DONE,
+                    packet,
+                    client_id,
+                    is_active,
+                    both_online,
+                ));
+            }
+            c2s::configuration::AcceptCodeOfConduct::PACKET_ID => {
+                return Ok(self.answer_task(
+                    Task::CodeOfConduct,
+                    DONE,
+                    packet,
+                    client_id,
+                    is_active,
+                    both_online,
+                ));
+            }
+            c2s::configuration::ResourcePack::PACKET_ID => {
+                let response: c2s::configuration::ResourcePack = decode(packet, self.threshold)?;
+                return Ok(self.answer_task(
+                    Task::ResourcePack(response.id),
+                    pack_stage(response.action.0),
+                    packet,
                     client_id,
                     is_active,
                     both_online,
@@ -504,6 +563,46 @@ impl VersionData {
         }
         duplicate.then_some(ServerBoundEvent::SkipRelay)
     }
+
+    fn track_task(&mut self, task: Task, both_online: bool) {
+        if both_online {
+            self.seq += 1;
+            self.tasks.push(TaskSync::new(task, self.seq));
+        }
+    }
+
+    fn answer_task(
+        &mut self,
+        task: Task,
+        stage: u8,
+        packet: &RawPacket,
+        client_id: ClientId,
+        is_active: bool,
+        both_online: bool,
+    ) -> Option<ServerBoundEvent> {
+        if self.phases[client_id] != self.server_phases {
+            // A lagging client answers an earlier listener's task.
+            return None;
+        }
+        let i = self
+            .tasks
+            .iter()
+            .position(|t| t.task == task && !t.done(client_id))?;
+        let duplicate = self.tasks[i].answer(client_id, stage, packet, is_active);
+        if self.tasks[i].done_by_both() || !both_online && self.tasks[i].done(client_id) {
+            self.tasks.remove(i);
+        }
+        duplicate.then_some(ServerBoundEvent::SkipRelay)
+    }
+}
+
+/// How far a resource pack answer gets, by `ServerboundResourcePackPacket.Action` ordinal.
+fn pack_stage(action: i32) -> u8 {
+    match action {
+        3 => ACCEPTED,
+        4 => DOWNLOADED,
+        _ => DONE,
+    }
 }
 
 /// A teleport a client got: one of ours or the server's.
@@ -632,7 +731,75 @@ impl KeepAliveSync {
     }
 }
 
+/// A configuration task request a client must answer.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Task {
+    KnownPacks,
+    CodeOfConduct,
+    ResourcePack(Uuid),
+}
+
+#[derive(Debug)]
+pub struct TaskSync {
+    pub task: Task,
+    pub seq: u64,
+    /// Each client's answers in the order it sent them, with the stage each one reaches.
+    answers: PerClient<Vec<(u8, RawPacket)>>,
+    /// The furthest stage the server got.
+    sent: u8,
+}
+
+impl TaskSync {
+    pub fn new(task: Task, seq: u64) -> Self {
+        Self {
+            task,
+            seq,
+            answers: PerClient::default(),
+            sent: 0,
+        }
+    }
+
+    pub fn done(&self, client: ClientId) -> bool {
+        self.answers[client]
+            .last()
+            .is_some_and(|(stage, _)| *stage == DONE)
+    }
+
+    pub fn done_by_both(&self) -> bool {
+        self.done(ClientId::Primary) && self.done(ClientId::Secondary)
+    }
+
+    /// Records an answer and returns whether the server already got that far.
+    pub fn answer(
+        &mut self,
+        client: ClientId,
+        stage: u8,
+        packet: &RawPacket,
+        is_active: bool,
+    ) -> bool {
+        self.answers[client].push((stage, packet.clone()));
+        if !is_active {
+            return false;
+        }
+        let duplicate = stage <= self.sent;
+        self.sent = self.sent.max(stage);
+        duplicate
+    }
+
+    /// The client's answers that take the task further than the server got.
+    pub fn catch_up(&mut self, client: ClientId) -> Vec<RawPacket> {
+        let mut packets = vec![];
+        for (stage, packet) in &self.answers[client] {
+            if *stage > self.sent {
+                self.sent = *stage;
+                packets.push(packet.clone());
+            }
+        }
+        packets
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    super::super::config_phase_tests!();
+    super::super::config_phase_tests!(code_of_conduct);
 }

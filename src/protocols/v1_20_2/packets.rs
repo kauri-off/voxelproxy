@@ -32,6 +32,12 @@ pub mod c2s {
         pub struct KeepAlive {
             pub id: i64,
         }
+
+        #[derive(Packet, Debug)]
+        #[packet(5)] // ServerboundResourcePackPacket
+        pub struct ResourcePack {
+            pub action: VarInt,
+        }
     }
 
     pub mod game {
@@ -122,6 +128,10 @@ pub mod s2c {
         pub struct KeepAlive {
             pub id: i64,
         }
+
+        #[derive(Packet, Debug)]
+        #[packet(6)] // ClientboundResourcePackPacket
+        pub struct ResourcePack {}
     }
 
     pub mod game {

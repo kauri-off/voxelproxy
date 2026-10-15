@@ -503,7 +503,12 @@ mod tests {
                     container_id: id as u8,
                 }),
                 C2s::Raw(id) => UncompressedPacket::new(id, vec![]),
-                C2s::LoginAck | C2s::FinishConfiguration | C2s::ConfigurationAck => {
+                C2s::LoginAck
+                | C2s::FinishConfiguration
+                | C2s::ConfigurationAck
+                | C2s::KnownPacks
+                | C2s::AcceptCodeOfConduct
+                | C2s::ResourcePack(..) => {
                     panic!("{packet:?} does not exist in 1.16.5")
                 }
             }
@@ -531,7 +536,11 @@ mod tests {
                     container_id: id as u8,
                 }),
                 S2c::Raw(id, len) => UncompressedPacket::new(id, vec![0; len]),
-                S2c::StartConfiguration | S2c::FinishConfiguration => {
+                S2c::StartConfiguration
+                | S2c::FinishConfiguration
+                | S2c::SelectKnownPacks
+                | S2c::CodeOfConduct
+                | S2c::ResourcePackPush(_) => {
                     panic!("{packet:?} does not exist in 1.16.5")
                 }
             }

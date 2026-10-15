@@ -164,11 +164,29 @@ pub fn decode<T: Deserialize>(packet: &RawPacket, threshold: Option<i32>) -> any
 /// Shared tests for the 1.21.x modules, which differ only in packet ids.
 #[cfg(test)]
 macro_rules! config_phase_tests {
-    () => {
+    (@c2s_code_of_conduct code_of_conduct) => {
+        Some(c2s::configuration::AcceptCodeOfConduct::PACKET_ID)
+    };
+    (@c2s_code_of_conduct known_packs) => {
+        None
+    };
+    (@s2c_code_of_conduct code_of_conduct) => {
+        Some(s2c::configuration::CodeOfConduct::PACKET_ID)
+    };
+    (@s2c_code_of_conduct known_packs) => {
+        None
+    };
+    (@write_code_of_conduct code_of_conduct, $packet:expr) => {
+        pack(&$packet)
+    };
+    (@write_code_of_conduct known_packs, $packet:expr) => {
+        unreachable!("no code of conduct before 1.21.9")
+    };
+    ($tasks:ident) => {
         use mc_protocol::{packet::PacketId, ser::Serialize};
 
         use super::*;
-        use crate::controller::tests::{C2s, Phase, S2c, Spot, Wire, pack, unpack};
+        use crate::controller::tests::{C2s, Pack, Phase, S2c, Spot, Wire, pack, unpack};
 
         const P: ClientId = ClientId::Primary;
         const S: ClientId = ClientId::Secondary;
@@ -511,6 +529,161 @@ macro_rules! config_phase_tests {
             assert!(data.handle_client_disconnect(S).is_none());
         }
 
+        const ACCEPTED_ACTION: i32 = 3;
+        const LOADED_ACTION: i32 = 0;
+        /// ACCEPTED and DOWNLOADED.
+        const IN_FLIGHT: [i32; 2] = [3, 4];
+
+        fn configuring() -> VersionData {
+            let mut data = VersionData::new();
+            for client in [P, S] {
+                login(&mut data, client);
+            }
+            data
+        }
+
+        fn push(data: &mut VersionData, id: u128, both_online: bool) {
+            let push = s2c::configuration::ResourcePackPush {
+                id: Uuid::from_u128(id),
+            };
+            s2c(data, &push, both_online);
+        }
+
+        fn answer(id: u128, action: i32) -> c2s::configuration::ResourcePack {
+            c2s::configuration::ResourcePack {
+                id: Uuid::from_u128(id),
+                action: VarInt(action),
+            }
+        }
+
+        fn replayed(event: Option<ClientDisconnectEvent>) -> Vec<RawPacket> {
+            match event {
+                Some(ClientDisconnectEvent::SendToServer(packets)) => packets,
+                None => vec![],
+            }
+        }
+
+        #[test]
+        fn pack_answers_resume_from_what_server_got() {
+            let mut data = configuring();
+            push(&mut data, 1, true);
+            assert!(c2s(&mut data, &answer(1, ACCEPTED_ACTION), P, P, true).is_none());
+            for action in IN_FLIGHT {
+                assert!(c2s(&mut data, &answer(1, action), S, P, true).is_none());
+            }
+
+            let packets = replayed(data.handle_client_disconnect(S));
+            let actions: Vec<i32> = packets
+                .iter()
+                .map(|p| {
+                    crate::protocols::decode::<c2s::configuration::ResourcePack>(p, data.threshold)
+                        .unwrap()
+                        .action
+                        .0
+                })
+                .collect();
+            assert_eq!(actions, IN_FLIGHT[1..]);
+            assert!(c2s(&mut data, &answer(1, LOADED_ACTION), S, S, false).is_none());
+            assert!(data.tasks.is_empty());
+        }
+
+        #[test]
+        fn pack_answers_server_got_are_skipped_after_failover() {
+            let mut data = configuring();
+            push(&mut data, 1, true);
+            for action in IN_FLIGHT {
+                assert!(c2s(&mut data, &answer(1, action), P, P, true).is_none());
+            }
+            assert!(replayed(data.handle_client_disconnect(S)).is_empty());
+            for action in IN_FLIGHT {
+                assert!(matches!(
+                    c2s(&mut data, &answer(1, action), S, S, false),
+                    Some(ServerBoundEvent::SkipRelay)
+                ));
+            }
+            assert!(c2s(&mut data, &answer(1, LOADED_ACTION), S, S, false).is_none());
+            assert!(data.tasks.is_empty());
+        }
+
+        #[test]
+        fn pack_answered_by_both_is_forgotten() {
+            let mut data = configuring();
+            push(&mut data, 1, true);
+            for client in [P, S] {
+                c2s(&mut data, &answer(1, LOADED_ACTION), client, P, true);
+            }
+            assert!(data.tasks.is_empty());
+        }
+
+        #[test]
+        fn pack_pushed_while_alone_is_not_tracked() {
+            let mut data = configuring();
+            push(&mut data, 1, false);
+            assert!(data.tasks.is_empty());
+            assert!(c2s(&mut data, &answer(1, LOADED_ACTION), P, P, false).is_none());
+        }
+
+        #[test]
+        fn tasks_end_with_configuration_listener() {
+            let mut data = configuring();
+            push(&mut data, 1, true);
+            c2s(&mut data, &answer(1, LOADED_ACTION), P, P, true);
+            assert_eq!(data.tasks.len(), 1);
+            finish_config(&mut data, P);
+            assert!(data.tasks.is_empty());
+            assert!(replayed(data.handle_client_disconnect(S)).is_empty());
+        }
+
+        #[test]
+        fn packs_are_tracked_by_id() {
+            let mut data = configuring();
+            push(&mut data, 1, true);
+            push(&mut data, 2, true);
+            c2s(&mut data, &answer(2, LOADED_ACTION), P, P, true);
+            c2s(&mut data, &answer(1, LOADED_ACTION), S, P, true);
+            assert_eq!(replayed(data.handle_client_disconnect(S)).len(), 1);
+            assert!(matches!(
+                c2s(&mut data, &answer(2, LOADED_ACTION), S, S, false),
+                Some(ServerBoundEvent::SkipRelay)
+            ));
+            assert!(data.tasks.is_empty());
+        }
+
+        #[test]
+        fn pack_pushed_again_starts_over() {
+            let mut data = configuring();
+            push(&mut data, 1, true);
+            c2s(&mut data, &answer(1, LOADED_ACTION), P, P, true);
+            push(&mut data, 1, false);
+            assert!(data.tasks.is_empty());
+            assert!(c2s(&mut data, &answer(1, LOADED_ACTION), P, P, false).is_none());
+        }
+
+        #[test]
+        fn known_packs_answer_is_relayed_once() {
+            let mut data = configuring();
+            s2c(&mut data, &s2c::configuration::SelectKnownPacks {}, true);
+            let select = c2s::configuration::SelectKnownPacks {};
+            assert!(c2s(&mut data, &select, P, P, true).is_none());
+            assert!(replayed(data.handle_client_disconnect(S)).is_empty());
+            assert!(matches!(
+                c2s(&mut data, &select, S, S, false),
+                Some(ServerBoundEvent::SkipRelay)
+            ));
+        }
+
+        #[test]
+        fn known_packs_answer_of_new_active_is_replayed() {
+            let mut data = configuring();
+            s2c(&mut data, &s2c::configuration::SelectKnownPacks {}, true);
+            c2s(&mut data, &c2s::configuration::SelectKnownPacks {}, S, P, true);
+            let packets = replayed(data.handle_client_disconnect(S));
+            assert_eq!(packets.len(), 1);
+            let id = packets[0].uncompress(data.threshold).unwrap().packet_id;
+            assert_eq!(id, c2s::configuration::SelectKnownPacks::PACKET_ID);
+            assert!(data.tasks.is_empty());
+        }
+
         impl Wire for VersionData {
             const CONFIGURATION: bool = true;
 
@@ -543,6 +716,15 @@ macro_rules! config_phase_tests {
                     C2s::ContainerClose(id) => pack(&c2s::game::ContainerClose {
                         container_id: VarInt(id),
                     }),
+                    C2s::KnownPacks => pack(&c2s::configuration::SelectKnownPacks {}),
+                    C2s::AcceptCodeOfConduct => crate::protocols::config_phase_tests!(
+                        @write_code_of_conduct $tasks,
+                        c2s::configuration::AcceptCodeOfConduct {}
+                    ),
+                    C2s::ResourcePack(id, answer) => pack(&c2s::configuration::ResourcePack {
+                        id: Uuid::from_u128(id.into()),
+                        action: VarInt(answer as i32),
+                    }),
                     C2s::Raw(id) => UncompressedPacket::new(id, vec![]),
                 }
             }
@@ -571,12 +753,25 @@ macro_rules! config_phase_tests {
                     }),
                     S2c::StartConfiguration => pack(&s2c::game::StartConfiguration {}),
                     S2c::FinishConfiguration => pack(&s2c::configuration::FinishConfiguration {}),
+                    S2c::SelectKnownPacks => pack(&s2c::configuration::SelectKnownPacks {}),
+                    S2c::CodeOfConduct => crate::protocols::config_phase_tests!(
+                        @write_code_of_conduct $tasks,
+                        s2c::configuration::CodeOfConduct {}
+                    ),
+                    S2c::ResourcePackPush(id) => pack(&s2c::configuration::ResourcePackPush {
+                        id: Uuid::from_u128(id.into()),
+                    }),
                     S2c::Raw(id, len) => UncompressedPacket::new(id, vec![0; len]),
                 }
             }
 
             fn read_c2s(phase: Phase, packet: &UncompressedPacket) -> Option<C2s> {
                 use c2s::{configuration, game, login};
+                let code_of_conduct: Option<i32> =
+                    crate::protocols::config_phase_tests!(@c2s_code_of_conduct $tasks);
+                if phase == Phase::Configuration && code_of_conduct == Some(packet.packet_id) {
+                    return Some(C2s::AcceptCodeOfConduct);
+                }
                 Some(match (phase, packet.packet_id) {
                     (Phase::Login, login::LoginAcknowledged::PACKET_ID) => C2s::LoginAck,
                     (Phase::Configuration, configuration::FinishConfiguration::PACKET_ID) => {
@@ -619,12 +814,24 @@ macro_rules! config_phase_tests {
                     (Phase::Game, game::ContainerClose::PACKET_ID) => {
                         C2s::ContainerClose(unpack::<game::ContainerClose>(packet).container_id.0)
                     }
+                    (Phase::Configuration, configuration::SelectKnownPacks::PACKET_ID) => {
+                        C2s::KnownPacks
+                    }
+                    (Phase::Configuration, configuration::ResourcePack::PACKET_ID) => {
+                        let p: configuration::ResourcePack = unpack(packet);
+                        C2s::ResourcePack(p.id.as_u128() as u8, Pack::from_action(p.action.0))
+                    }
                     _ => return None,
                 })
             }
 
             fn read_s2c(phase: Phase, packet: &UncompressedPacket) -> Option<S2c> {
                 use s2c::{configuration, game};
+                let code_of_conduct: Option<i32> =
+                    crate::protocols::config_phase_tests!(@s2c_code_of_conduct $tasks);
+                if phase == Phase::Configuration && code_of_conduct == Some(packet.packet_id) {
+                    return Some(S2c::CodeOfConduct);
+                }
                 Some(match (phase, packet.packet_id) {
                     (Phase::Configuration, configuration::FinishConfiguration::PACKET_ID) => {
                         S2c::FinishConfiguration
@@ -657,12 +864,20 @@ macro_rules! config_phase_tests {
                     (Phase::Game, game::ContainerClose::PACKET_ID) => {
                         S2c::ContainerClose(unpack::<game::ContainerClose>(packet).container_id.0)
                     }
+                    (Phase::Configuration, configuration::SelectKnownPacks::PACKET_ID) => {
+                        S2c::SelectKnownPacks
+                    }
+                    (Phase::Configuration, configuration::ResourcePackPush::PACKET_ID) => {
+                        S2c::ResourcePackPush(
+                            unpack::<configuration::ResourcePackPush>(packet).id.as_u128() as u8,
+                        )
+                    }
                     _ => return None,
                 })
             }
         }
 
-        crate::controller::tests::controller_tests!(configuration);
+        crate::controller::tests::controller_tests!($tasks);
     };
 }
 #[cfg(test)]
