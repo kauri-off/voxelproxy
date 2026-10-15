@@ -708,6 +708,9 @@ macro_rules! config_phase_tests {
                         pitch: at.pitch,
                         ..Default::default()
                     }),
+                    C2s::Pong(id) if phase == Phase::Configuration => {
+                        pack(&c2s::configuration::Pong { id })
+                    }
                     C2s::Pong(id) => pack(&c2s::game::Pong { id }),
                     C2s::ChunkBatchReceived(desired) => pack(&c2s::game::ChunkBatchReceived {
                         desired_chunks_per_tick: desired,
@@ -746,6 +749,9 @@ macro_rules! config_phase_tests {
                         pitch: at.pitch,
                         relative_flags: 0,
                     }),
+                    S2c::Ping(id) if phase == Phase::Configuration => {
+                        pack(&s2c::configuration::Ping { id })
+                    }
                     S2c::Ping(id) => pack(&s2c::game::Ping { id }),
                     S2c::ChunkBatchFinished(size) => pack(&s2c::game::ChunkBatchFinished {
                         batch_size: VarInt(size),
@@ -808,6 +814,9 @@ macro_rules! config_phase_tests {
                             pitch: p.pitch,
                         })
                     }
+                    (Phase::Configuration, configuration::Pong::PACKET_ID) => {
+                        C2s::Pong(unpack::<configuration::Pong>(packet).id)
+                    }
                     (Phase::Game, game::Pong::PACKET_ID) => {
                         C2s::Pong(unpack::<game::Pong>(packet).id)
                     }
@@ -860,6 +869,9 @@ macro_rules! config_phase_tests {
                                 pitch: p.pitch,
                             },
                         )
+                    }
+                    (Phase::Configuration, configuration::Ping::PACKET_ID) => {
+                        S2c::Ping(unpack::<configuration::Ping>(packet).id)
                     }
                     (Phase::Game, game::Ping::PACKET_ID) => {
                         S2c::Ping(unpack::<game::Ping>(packet).id)

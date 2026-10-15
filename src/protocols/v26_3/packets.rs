@@ -36,6 +36,12 @@ pub mod c2s {
         }
 
         #[derive(Packet, Debug)]
+        #[packet(5)] // ServerboundPongPacket
+        pub struct Pong {
+            pub id: i32,
+        }
+
+        #[derive(Packet, Debug)]
         #[packet(6)] // ServerboundResourcePackPacket
         pub struct ResourcePack {
             pub id: Uuid,
@@ -151,6 +157,12 @@ pub mod s2c {
         #[packet(4)] // ClientboundKeepAlivePacket
         pub struct KeepAlive {
             pub id: i64,
+        }
+
+        #[derive(Packet, Debug)]
+        #[packet(5)] // ClientboundPingPacket
+        pub struct Ping {
+            pub id: i32,
         }
 
         #[derive(Packet, Debug)]

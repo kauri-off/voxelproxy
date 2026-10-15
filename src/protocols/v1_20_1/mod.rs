@@ -134,7 +134,7 @@ impl VersionProtocol for VersionData {
             false
         });
 
-        // Vanilla clients answer pings and teleports in the order the server sent them.
+        // Vanilla clients answer these in server order; keep-alives only roughly, off the main thread.
         replies.sort_by_key(|(seq, _)| *seq);
         let packets: Vec<_> = replies.into_iter().map(|(_, packet)| packet).collect();
 
