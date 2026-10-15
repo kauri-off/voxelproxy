@@ -10,7 +10,7 @@ use mc_protocol::{
 use super::{PacketIdReader, VersionProtocol, decode};
 use crate::{
     config,
-    events::ClientId,
+    events::{ClientId, PerClient},
     protocols::{ClientBoundEvent, ClientDisconnectEvent, ServerBoundEvent},
 };
 use packets::{c2s, s2c};
@@ -28,17 +28,17 @@ pub enum State {
 pub struct VersionData {
     /// Shared by both clients: they read the same server stream.
     pub state_in: State,
-    pub state_out: [State; 2],
+    pub state_out: PerClient<State>,
     pub position: s2c::game::Position,
     /// Teleports each client got and has not acked yet, in the order it got them.
-    pub unacked: [VecDeque<Teleport>; 2],
+    pub unacked: PerClient<VecDeque<Teleport>>,
     pub pings: Vec<PingSync>,
     pub teleports: Vec<TeleportSync>,
     pub keep_alives: Vec<KeepAliveSync>,
     /// Counts tracked pings, teleports and keep-alives in server stream order.
     pub seq: u64,
     /// Phase switches each client acked.
-    pub phases: [u32; 2],
+    pub phases: PerClient<u32>,
     /// Phase switches the server got an ack for.
     pub server_phases: u32,
     /// What the inactive client sent from an ack the server has not got yet.
@@ -58,7 +58,7 @@ impl VersionData {
         Self {
             // The controller starts after LoginSuccess was relayed to both clients.
             state_in: State::Configuration,
-            state_out: [State::Login; 2],
+            state_out: PerClient::splat(State::Login),
             position: s2c::game::Position {
                 id: VarInt(TELEPORT_ID),
                 x: 0.0,
@@ -73,7 +73,7 @@ impl VersionData {
             teleports: vec![],
             keep_alives: vec![],
             seq: 0,
-            phases: [0; 2],
+            phases: PerClient::splat(0),
             server_phases: 0,
             ahead: vec![],
             threshold: None,
@@ -90,9 +90,8 @@ impl VersionProtocol for VersionData {
         is_active: bool,
         both_online: bool,
     ) -> Option<ServerBoundEvent> {
-        let i = client_id.index();
-        let state = self.state_out[i];
-        let behind = is_active && self.phases[i] < self.server_phases;
+        let state = self.state_out[client_id];
+        let behind = is_active && self.phases[client_id] < self.server_phases;
         let event = match state {
             State::Login => self.handle_c2s_login(packet, client_id),
             State::Configuration => {
@@ -101,8 +100,8 @@ impl VersionProtocol for VersionData {
             State::Game => self.handle_c2s_game(packet, client_id, is_active, both_online),
         }
         .unwrap_or_default();
-        if self.state_out[i] != state {
-            self.phases[i] += 1;
+        if self.state_out[client_id] != state {
+            self.phases[client_id] += 1;
         }
 
         if behind {
@@ -112,8 +111,8 @@ impl VersionProtocol for VersionData {
                 _ => ServerBoundEvent::SkipRelay,
             });
         }
-        if is_active && self.phases[i] > self.server_phases {
-            self.server_phases = self.phases[i];
+        if is_active && self.phases[client_id] > self.server_phases {
+            self.server_phases = self.phases[client_id];
             self.ahead.clear();
             // The listener that sent these keep-alives is gone.
             self.keep_alives.clear();
@@ -122,7 +121,7 @@ impl VersionProtocol for VersionData {
                 self.pings.clear();
             }
         } else if !is_active
-            && self.phases[i] > self.server_phases
+            && self.phases[client_id] > self.server_phases
             && !matches!(event, Some(ServerBoundEvent::SkipRelay))
         {
             self.ahead.push(packet.clone());
@@ -205,8 +204,8 @@ impl VersionProtocol for VersionData {
         let mut packets: Vec<_> = replies.into_iter().map(|(_, packet)| packet).collect();
 
         let ahead = std::mem::take(&mut self.ahead);
-        if self.phases[new_active.index()] > self.server_phases {
-            self.server_phases = self.phases[new_active.index()];
+        if self.phases[new_active] > self.server_phases {
+            self.server_phases = self.phases[new_active];
             self.keep_alives.clear();
             packets.extend(ahead);
         }
@@ -231,7 +230,7 @@ impl VersionProtocol for VersionData {
 
 impl VersionData {
     fn state_out_mut(&mut self, client_id: ClientId) -> &mut State {
-        &mut self.state_out[client_id.index()]
+        &mut self.state_out[client_id]
     }
 
     fn handle_s2c_configuration(
@@ -363,7 +362,7 @@ impl VersionData {
             }
             c2s::game::AcceptTeleportation::PACKET_ID => {
                 let teleport: c2s::game::AcceptTeleportation = decode(packet, self.threshold)?;
-                let unacked = &mut self.unacked[client_id.index()];
+                let unacked = &mut self.unacked[client_id];
                 // Vanilla clients ack teleports in the order they got them.
                 let acked = unacked
                     .iter()
@@ -480,7 +479,7 @@ impl VersionData {
         }
         let packet = UncompressedPacket::from_packet(&self.position)?
             .to_raw_packet_compressed(self.threshold)?;
-        self.unacked[active.opposite().index()].push_back(Teleport::Own);
+        self.unacked[active.opposite()].push_back(Teleport::Own);
         Ok(Some(ServerBoundEvent::SendToInactive(packet)))
     }
 
@@ -524,7 +523,7 @@ impl Teleport {
 pub struct PingSync {
     pub id: i32,
     pub seq: u64,
-    answered: [bool; 2],
+    answered: PerClient<bool>,
     /// Whether a reply already reached the server.
     sent: bool,
 }
@@ -534,22 +533,22 @@ impl PingSync {
         Self {
             id,
             seq,
-            answered: [false; 2],
+            answered: PerClient::splat(false),
             sent: false,
         }
     }
 
     pub fn answered(&self, client: ClientId) -> bool {
-        self.answered[client.index()]
+        self.answered[client]
     }
 
     pub fn answered_by_both(&self) -> bool {
-        self.answered == [true; 2]
+        self.answered == PerClient::splat(true)
     }
 
     /// Records a reply and returns whether the server already got one.
     pub fn answer(&mut self, client: ClientId, is_active: bool) -> bool {
-        self.answered[client.index()] = true;
+        self.answered[client] = true;
         let duplicate = is_active && self.sent;
         self.sent |= is_active;
         duplicate
@@ -560,7 +559,7 @@ impl PingSync {
 pub struct TeleportSync {
     pub id: i32,
     pub seq: u64,
-    answered: [bool; 2],
+    answered: PerClient<bool>,
     /// Whether an ack already reached the server.
     sent: bool,
 }
@@ -570,22 +569,22 @@ impl TeleportSync {
         Self {
             id,
             seq,
-            answered: [false; 2],
+            answered: PerClient::splat(false),
             sent: false,
         }
     }
 
     pub fn answered(&self, client: ClientId) -> bool {
-        self.answered[client.index()]
+        self.answered[client]
     }
 
     pub fn answered_by_both(&self) -> bool {
-        self.answered == [true; 2]
+        self.answered == PerClient::splat(true)
     }
 
     /// Records an ack and returns whether the server already got one.
     pub fn answer(&mut self, client: ClientId, is_active: bool) -> bool {
-        self.answered[client.index()] = true;
+        self.answered[client] = true;
         let duplicate = is_active && self.sent;
         self.sent |= is_active;
         duplicate
@@ -597,7 +596,7 @@ pub struct KeepAliveSync {
     pub id: i64,
     pub state: State,
     pub seq: u64,
-    answered: [bool; 2],
+    answered: PerClient<bool>,
     /// Whether an answer already reached the server.
     sent: bool,
 }
@@ -608,22 +607,22 @@ impl KeepAliveSync {
             id,
             state,
             seq,
-            answered: [false; 2],
+            answered: PerClient::splat(false),
             sent: false,
         }
     }
 
     pub fn answered(&self, client: ClientId) -> bool {
-        self.answered[client.index()]
+        self.answered[client]
     }
 
     pub fn answered_by_both(&self) -> bool {
-        self.answered == [true; 2]
+        self.answered == PerClient::splat(true)
     }
 
     /// Records an answer and returns whether the server already got one.
     pub fn answer(&mut self, client: ClientId, is_active: bool) -> bool {
-        self.answered[client.index()] = true;
+        self.answered[client] = true;
         let duplicate = is_active && self.sent;
         self.sent |= is_active;
         duplicate
@@ -871,7 +870,7 @@ mod tests {
 
         // The primary drops before the secondary acked the reconfiguration.
         data.handle_client_disconnect(S);
-        assert_eq!(data.state_out[S.index()], State::Game);
+        assert_eq!(data.state_out[S], State::Game);
 
         let ack = c2s::game::AcceptTeleportation {
             id: VarInt(TELEPORT_ID),
@@ -887,7 +886,7 @@ mod tests {
             S,
             false,
         );
-        assert_eq!(data.state_out[S.index()], State::Configuration);
+        assert_eq!(data.state_out[S], State::Configuration);
     }
 
     #[test]

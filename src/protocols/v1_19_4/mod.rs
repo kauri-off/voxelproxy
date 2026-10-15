@@ -10,7 +10,7 @@ use mc_protocol::{
 use super::{PacketIdReader, VersionProtocol, decode};
 use crate::{
     config,
-    events::ClientId,
+    events::{ClientId, PerClient},
     protocols::{ClientBoundEvent, ClientDisconnectEvent, ServerBoundEvent},
 };
 use packets::{c2s, s2c};
@@ -21,7 +21,7 @@ const TELEPORT_ID: i32 = -1;
 pub struct VersionData {
     pub position: s2c::game::Position,
     /// Teleports each client got and has not acked yet, in the order it got them.
-    pub unacked: [VecDeque<Teleport>; 2],
+    pub unacked: PerClient<VecDeque<Teleport>>,
     pub pings: Vec<PingSync>,
     pub teleports: Vec<TeleportSync>,
     pub keep_alives: Vec<KeepAliveSync>,
@@ -206,7 +206,7 @@ impl VersionData {
         match id {
             c2s::game::AcceptTeleportation::PACKET_ID => {
                 let teleport: c2s::game::AcceptTeleportation = decode(packet, self.threshold)?;
-                let unacked = &mut self.unacked[client_id.index()];
+                let unacked = &mut self.unacked[client_id];
                 // Vanilla clients ack teleports in the order they got them.
                 let acked = unacked
                     .iter()
@@ -328,7 +328,7 @@ impl VersionData {
         }
         let packet = UncompressedPacket::from_packet(&self.position)?
             .to_raw_packet_compressed(self.threshold)?;
-        self.unacked[active.opposite().index()].push_back(Teleport::Own);
+        self.unacked[active.opposite()].push_back(Teleport::Own);
         Ok(Some(ServerBoundEvent::SendToInactive(packet)))
     }
 }
@@ -353,7 +353,7 @@ impl Teleport {
 pub struct PingSync {
     pub id: i32,
     pub seq: u64,
-    answered: [bool; 2],
+    answered: PerClient<bool>,
     /// Whether a reply already reached the server.
     sent: bool,
 }
@@ -363,22 +363,22 @@ impl PingSync {
         Self {
             id,
             seq,
-            answered: [false; 2],
+            answered: PerClient::splat(false),
             sent: false,
         }
     }
 
     pub fn answered(&self, client: ClientId) -> bool {
-        self.answered[client.index()]
+        self.answered[client]
     }
 
     pub fn answered_by_both(&self) -> bool {
-        self.answered == [true; 2]
+        self.answered == PerClient::splat(true)
     }
 
     /// Records a reply and returns whether the server already got one.
     pub fn answer(&mut self, client: ClientId, is_active: bool) -> bool {
-        self.answered[client.index()] = true;
+        self.answered[client] = true;
         let duplicate = is_active && self.sent;
         self.sent |= is_active;
         duplicate
@@ -389,7 +389,7 @@ impl PingSync {
 pub struct TeleportSync {
     pub id: i32,
     pub seq: u64,
-    answered: [bool; 2],
+    answered: PerClient<bool>,
     /// Whether an ack already reached the server.
     sent: bool,
 }
@@ -399,22 +399,22 @@ impl TeleportSync {
         Self {
             id,
             seq,
-            answered: [false; 2],
+            answered: PerClient::splat(false),
             sent: false,
         }
     }
 
     pub fn answered(&self, client: ClientId) -> bool {
-        self.answered[client.index()]
+        self.answered[client]
     }
 
     pub fn answered_by_both(&self) -> bool {
-        self.answered == [true; 2]
+        self.answered == PerClient::splat(true)
     }
 
     /// Records an ack and returns whether the server already got one.
     pub fn answer(&mut self, client: ClientId, is_active: bool) -> bool {
-        self.answered[client.index()] = true;
+        self.answered[client] = true;
         let duplicate = is_active && self.sent;
         self.sent |= is_active;
         duplicate
@@ -425,7 +425,7 @@ impl TeleportSync {
 pub struct KeepAliveSync {
     pub id: i64,
     pub seq: u64,
-    answered: [bool; 2],
+    answered: PerClient<bool>,
     /// Whether an answer already reached the server.
     sent: bool,
 }
@@ -435,22 +435,22 @@ impl KeepAliveSync {
         Self {
             id,
             seq,
-            answered: [false; 2],
+            answered: PerClient::splat(false),
             sent: false,
         }
     }
 
     pub fn answered(&self, client: ClientId) -> bool {
-        self.answered[client.index()]
+        self.answered[client]
     }
 
     pub fn answered_by_both(&self) -> bool {
-        self.answered == [true; 2]
+        self.answered == PerClient::splat(true)
     }
 
     /// Records an answer and returns whether the server already got one.
     pub fn answer(&mut self, client: ClientId, is_active: bool) -> bool {
-        self.answered[client.index()] = true;
+        self.answered[client] = true;
         let duplicate = is_active && self.sent;
         self.sent |= is_active;
         duplicate

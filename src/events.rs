@@ -1,3 +1,5 @@
+use std::ops::{Index, IndexMut};
+
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,11 +23,70 @@ impl ClientId {
             ClientId::Secondary => ClientId::Primary,
         }
     }
+}
 
-    pub fn index(self) -> usize {
-        match self {
-            ClientId::Primary => 0,
-            ClientId::Secondary => 1,
+/// One value per client, indexed by [`ClientId`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PerClient<T> {
+    pub primary: T,
+    pub secondary: T,
+}
+
+impl<T> PerClient<T> {
+    pub fn new(primary: T, secondary: T) -> Self {
+        Self { primary, secondary }
+    }
+
+    pub fn splat(value: T) -> Self
+    where
+        T: Clone,
+    {
+        Self::new(value.clone(), value)
+    }
+
+    pub fn iter(&self) -> std::array::IntoIter<&T, 2> {
+        [&self.primary, &self.secondary].into_iter()
+    }
+
+    pub fn iter_mut(&mut self) -> std::array::IntoIter<&mut T, 2> {
+        [&mut self.primary, &mut self.secondary].into_iter()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a PerClient<T> {
+    type Item = &'a T;
+    type IntoIter = std::array::IntoIter<&'a T, 2>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a mut PerClient<T> {
+    type Item = &'a mut T;
+    type IntoIter = std::array::IntoIter<&'a mut T, 2>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
+
+impl<T> Index<ClientId> for PerClient<T> {
+    type Output = T;
+
+    fn index(&self, client: ClientId) -> &T {
+        match client {
+            ClientId::Primary => &self.primary,
+            ClientId::Secondary => &self.secondary,
+        }
+    }
+}
+
+impl<T> IndexMut<ClientId> for PerClient<T> {
+    fn index_mut(&mut self, client: ClientId) -> &mut T {
+        match client {
+            ClientId::Primary => &mut self.primary,
+            ClientId::Secondary => &mut self.secondary,
         }
     }
 }
