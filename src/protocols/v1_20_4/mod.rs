@@ -242,7 +242,7 @@ impl VersionProtocol for VersionData {
         }
         self.tasks.retain(|t| !t.done(new_active));
 
-        // Vanilla clients answer these in server order; keep-alives only roughly, off the main thread.
+        // Vanilla clients answer these in server order; keep-alives only roughly (netty thread).
         replies.sort_by_key(|(seq, _)| *seq);
         let mut packets: Vec<_> = replies.into_iter().map(|(_, packet)| packet).collect();
 
@@ -1331,6 +1331,34 @@ mod tests {
         let pong: c2s::configuration::Pong =
             super::super::decode(&packets[0], data.threshold).unwrap();
         assert_eq!(pong.id, 2);
+    }
+
+    #[test]
+    fn lagging_pong_with_reused_id_is_not_counted() {
+        let mut data = in_game(None);
+        s2c(&mut data, &s2c::game::Ping { id: 1 }, true);
+        s2c(&mut data, &s2c::game::StartConfiguration {}, true);
+        c2s(&mut data, &c2s::game::Pong { id: 1 }, P, P, true);
+        c2s(
+            &mut data,
+            &c2s::game::ConfigurationAcknowledged {},
+            P,
+            P,
+            true,
+        );
+        s2c(&mut data, &s2c::configuration::Ping { id: 1 }, true);
+        assert!(c2s(&mut data, &c2s::game::Pong { id: 1 }, S, P, true).is_none());
+        c2s(
+            &mut data,
+            &c2s::game::ConfigurationAcknowledged {},
+            S,
+            P,
+            true,
+        );
+
+        assert!(replayed(data.handle_client_disconnect(S)).is_empty());
+        assert!(c2s(&mut data, &c2s::configuration::Pong { id: 1 }, S, S, false).is_none());
+        assert!(data.pings.is_empty());
     }
 
     #[test]

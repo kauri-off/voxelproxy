@@ -1108,6 +1108,25 @@ pub(crate) fn pong_to_listener_server_reached_later_is_replayed<W: Wire>() {
     assert_eq!(h.sent(), [C2s::Pong(1)]);
 }
 
+pub(crate) fn lagging_pong_with_reused_id_is_not_counted<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(S2c::Ping(1));
+    h.serve(S2c::StartConfiguration);
+    h.obey(P);
+    h.serve(S2c::Ping(1));
+    assert_eq!(h.received(P), [S2c::Ping(1)]);
+    assert_eq!(h.sent(), [C2s::Pong(1), C2s::ConfigurationAck]);
+
+    // The secondary answers the game listener's ping after the new listener sent the same id.
+    h.send_all(S, [C2s::Pong(1), C2s::ConfigurationAck]);
+    h.received(S);
+    assert!(h.sent().is_empty());
+    h.leave(P);
+    assert!(h.sent().is_empty());
+    h.send(S, C2s::Pong(1));
+    assert_eq!(h.sent(), [C2s::Pong(1)]);
+}
+
 pub(crate) fn lagging_pongs_are_dropped_after_failover<W: Wire>() {
     let mut h = Harness::<W>::in_game();
     h.serve(S2c::Ping(1));
@@ -1621,6 +1640,7 @@ macro_rules! controller_tests {
             failover_relays_pong_after_phase_ack_once
             pong_to_listener_server_reached_later_is_replayed
             lagging_pongs_are_dropped_after_failover
+            lagging_pong_with_reused_id_is_not_counted
             resource_pack_answers_reach_server_once
             pack_answers_are_not_repeated_after_failover
             failover_replays_pack_answers_new_active_sent
