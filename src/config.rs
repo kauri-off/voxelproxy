@@ -153,6 +153,8 @@ pub async fn send_start_auto(windivert: bool) {
 }
 
 pub async fn send_join(server_addr: String, nickname: String, protocol_version: i32) {
+    // The server keeps only the first join per session id.
+    get_config().lock().unwrap().new_session();
     let Some(mut client) = client() else { return };
     let request = JoinRequest {
         client: Some(client_info()),
