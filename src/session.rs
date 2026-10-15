@@ -13,7 +13,7 @@ use tokio::{
 };
 
 use crate::{
-    config,
+    config, diag,
     events::{AppEvent, ClientId, EventSink},
     logger::Logger,
     packets::universal::{Intent, handshaking::c2s::Handshake},
@@ -64,7 +64,32 @@ async fn open_upstream(
     protocol: i32,
     login_start: &RawPacket,
 ) -> anyhow::Result<TcpStream> {
-    let mut stream = connect(addr).await?;
+    let started = std::time::Instant::now();
+    diag::info(
+        "upstream",
+        format!("connecting to {addr} (handshake host={host:?} port={port} protocol={protocol})"),
+    );
+    let mut stream = match connect(addr).await {
+        Ok(stream) => stream,
+        Err(e) => {
+            diag::error(
+                "upstream",
+                format!(
+                    "connect to {addr} failed after {:?}: {e:#}",
+                    started.elapsed()
+                ),
+            );
+            return Err(e);
+        }
+    };
+    diag::info(
+        "upstream",
+        format!(
+            "connected to {addr} in {:?}, local={:?}",
+            started.elapsed(),
+            stream.local_addr().ok()
+        ),
+    );
     let handshake = Handshake {
         protocol_version: VarInt(protocol),
         server_address: host,
@@ -93,6 +118,24 @@ async fn start_pair(
     events: EventSink,
 ) -> anyhow::Result<()> {
     let log = Logger::new(&events);
+    diag::info(
+        "session",
+        format!(
+            "pair: primary={:?} protocol={} host={:?}:{} | secondary={:?} protocol={} host={:?}:{} | upstream host={:?} port={} addr={:?} server_addr={:?}",
+            primary.stream.peer_addr().ok(),
+            primary.protocol_version,
+            primary.server_host,
+            primary.server_port,
+            secondary.stream.peer_addr().ok(),
+            secondary.protocol_version,
+            secondary.server_host,
+            secondary.server_port,
+            upstream.host,
+            upstream.port,
+            upstream.addr,
+            upstream.server_addr
+        ),
+    );
 
     if primary.protocol_version != secondary.protocol_version {
         let reason = "Версии клиентов различаются".to_string();
@@ -116,15 +159,17 @@ async fn start_pair(
     };
 
     // Only the primary's LoginStart is forwarded; the secondary's is discarded.
-    let Ok(remote_stream) = open_upstream(
+    let remote_stream = open_upstream(
         addr,
         upstream.host,
         upstream.port,
         primary.protocol_version,
         &primary.login_start,
     )
-    .await
-    else {
+    .await;
+    let Ok(remote_stream) = remote_stream.inspect_err(|e| {
+        diag::error("session", format!("open upstream failed: {e:#}"));
+    }) else {
         let reason = "Ошибка при подключении к удалённому серверу".to_string();
         return Err(reject(&mut primary, &mut secondary, reason).await);
     };
@@ -133,6 +178,13 @@ async fn start_pair(
     let nickname = version
         .parse_login_start(&primary.login_start)
         .unwrap_or("...".to_string());
+    diag::info(
+        "session",
+        format!(
+            "login name={nickname:?}, login_start {} bytes",
+            primary.login_start.data.len()
+        ),
+    );
     events.emit(AppEvent::NickName(nickname.clone()));
     events.emit(AppEvent::ServerAddr(upstream.server_addr.clone()));
     tokio::spawn(config::send_join(
@@ -156,14 +208,22 @@ pub async fn run_manual_mode(server_addr: String, events: EventSink) -> anyhow::
         events: events.clone(),
     };
     let log = Logger::new(&events);
+    diag::info(
+        "session",
+        format!("manual mode, server_addr={server_addr:?}"),
+    );
     let Some(target) = resolve_server(&server_addr).await else {
         anyhow::bail!("Не удалось разрешить адрес: \"{}\"", server_addr);
     };
 
     let listener = match TcpListener::bind(format!("0.0.0.0:{}", BIND_PORT)).await {
         Ok(t) => t,
-        Err(e) => anyhow::bail!("Ошибка при создании сокета: {}", e),
+        Err(e) => {
+            diag::error("session", format!("bind 0.0.0.0:{BIND_PORT} failed: {e:?}"));
+            anyhow::bail!("Ошибка при создании сокета: {}", e)
+        }
     };
+    diag::info("session", format!("listening on 0.0.0.0:{BIND_PORT}"));
 
     let (tx, mut rx) = mpsc::channel(HANDSHAKE_CHANNEL_CAPACITY);
     let mut _dispatch_set: JoinSet<()> = JoinSet::new();
@@ -180,6 +240,13 @@ pub async fn run_manual_mode(server_addr: String, events: EventSink) -> anyhow::
             None => anyhow::bail!("Диспетчер подключений завершился"),
         };
         events.client_status(ClientId::Primary, true);
+        diag::info(
+            "session",
+            format!(
+                "manual: primary arrived from {:?}, waiting for secondary",
+                primary.stream.peer_addr().ok()
+            ),
+        );
 
         enum Sec {
             Got(LoginClient),
@@ -232,7 +299,17 @@ async fn run_auto_session(
 }
 
 pub async fn run_check_mode(mut client: LoginClient) -> anyhow::Result<()> {
+    diag::info(
+        "check",
+        format!(
+            "check-mode connection from {:?} to {:?}:{}",
+            client.stream.peer_addr().ok(),
+            client.server_host,
+            client.server_port
+        ),
+    );
     let Some(target) = resolve_host_port(&client.server_host, client.server_port).await else {
+        diag::warn("check", "check-mode target did not resolve");
         return Ok(());
     };
 
@@ -245,7 +322,9 @@ pub async fn run_check_mode(mut client: LoginClient) -> anyhow::Result<()> {
     )
     .await?;
 
-    tokio::io::copy_bidirectional(&mut client.stream, &mut remote_stream).await?;
+    let copied = tokio::io::copy_bidirectional(&mut client.stream, &mut remote_stream).await;
+    diag::info("check", format!("check-mode connection ended: {copied:?}"));
+    copied?;
     Ok(())
 }
 
@@ -264,6 +343,10 @@ pub async fn run_auto_mode(
             anyhow::bail!("Режим «Через раздачу Wi-Fi» требует прав администратора.");
         }
 
+        diag::info(
+            "windivert",
+            format!("starting redirect bind_port={BIND_PORT} ports={port_min}-{port_max}"),
+        );
         let redirect = match crate::hotspot_redirect::start_redirect(
             BIND_PORT,
             port_min,
@@ -271,7 +354,10 @@ pub async fn run_auto_mode(
             events.clone(),
         ) {
             Ok(r) => r,
-            Err(e) => anyhow::bail!("WinDivert недоступен: {}", e),
+            Err(e) => {
+                diag::error("windivert", format!("start failed: {e:#}"));
+                anyhow::bail!("WinDivert недоступен: {}", e)
+            }
         };
         log.success("WinDivert перехват активен");
         Some(redirect)
@@ -284,8 +370,15 @@ pub async fn run_auto_mode(
 
     let listener = match TcpListener::bind(format!("0.0.0.0:{}", BIND_PORT)).await {
         Ok(l) => l,
-        Err(e) => anyhow::bail!("Ошибка при создании сокета: {}", e),
+        Err(e) => {
+            diag::error("session", format!("bind 0.0.0.0:{BIND_PORT} failed: {e:?}"));
+            anyhow::bail!("Ошибка при создании сокета: {}", e)
+        }
     };
+    diag::info(
+        "session",
+        format!("auto mode listening on 0.0.0.0:{BIND_PORT}"),
+    );
 
     let (tx, rx) = mpsc::channel(HANDSHAKE_CHANNEL_CAPACITY);
     let mut _dispatch_set: JoinSet<()> = JoinSet::new();
@@ -333,6 +426,9 @@ async fn serve_auto_pair(
             Step::PairFinished(res) => {
                 let res =
                     res.unwrap_or_else(|_| Err(anyhow::anyhow!("Сессия аварийно завершилась")));
+                if let Err(e) = &res {
+                    diag::error("session", format!("pair finished with error: {e:#}"));
+                }
                 if checks.is_empty() {
                     return res;
                 }
@@ -345,6 +441,7 @@ async fn serve_auto_pair(
             Step::Rejected => continue,
             Step::CheckFinished(res) => {
                 if let Ok(Err(e)) = res {
+                    diag::warn("check", format!("check-mode connection failed: {e:#}"));
                     log.error(e.to_string());
                 }
                 if paired && pair.is_empty() && checks.is_empty() {
@@ -358,7 +455,22 @@ async fn serve_auto_pair(
                 pending = None;
                 continue;
             }
-            Step::Client(Some(c)) => c,
+            Step::Client(Some(c)) => {
+                diag::info(
+                    "session",
+                    format!(
+                        "auto: login client from {:?} protocol={} host={:?}:{} loopback={} pending={} paired={}",
+                        c.stream.peer_addr().ok(),
+                        c.protocol_version,
+                        c.server_host,
+                        c.server_port,
+                        c.is_loopback,
+                        pending.is_some(),
+                        paired
+                    ),
+                );
+                c
+            }
             Step::Client(None) => anyhow::bail!("Диспетчер подключений завершился"),
         };
 

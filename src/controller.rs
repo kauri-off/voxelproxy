@@ -11,10 +11,14 @@ use tokio::{
 };
 
 use crate::{
+    diag,
     events::{ClientId, EventSink, PerClient},
     logger::Logger,
-    protocols::{ClientBoundEvent, ServerBoundEvent, Version, VersionProtocol},
+    protocols::{ClientBoundEvent, PacketIdReader, ServerBoundEvent, Version, VersionProtocol},
 };
+
+mod stats;
+use stats::SessionStats;
 
 const IO_BUFFER_SIZE: usize = 64 * 1024;
 /// Bytes a peer may have queued but not yet written before it is considered stalled.
@@ -100,6 +104,8 @@ pub struct Controller {
     event_rx: Receiver<ControllerEvent>,
     version: Version,
     events: EventSink,
+    threshold: Option<i32>,
+    stats: SessionStats,
 }
 
 impl Controller {
@@ -120,20 +126,56 @@ impl Controller {
             event_rx,
             version,
             events,
+            threshold: None,
+            stats: SessionStats::new(),
         }
     }
 
+    /// Lets diagnostics decode packet ids; relaying does not depend on it.
+    pub fn with_threshold(mut self, threshold: Option<i32>) -> Self {
+        self.threshold = threshold;
+        self
+    }
+
     pub async fn run(mut self) {
+        diag::info(
+            "controller",
+            format!(
+                "started, active={:?} threshold={:?}",
+                self.active_client, self.threshold
+            ),
+        );
         while let Some(event) = self.event_rx.recv().await {
+            self.stats.maybe_report();
             if self.handle(event).await.is_break() {
+                diag::info("controller", "stopped");
                 return;
             }
         }
+        diag::info("controller", "event channel closed");
+    }
+
+    fn describe_ids(&self, packets: &[RawPacket]) -> String {
+        let mut reader = PacketIdReader::default();
+        let mut counts: Vec<(i32, usize)> = Vec::new();
+        for packet in packets {
+            let id = reader.read(packet, self.threshold).unwrap_or(-1);
+            match counts.iter_mut().find(|(i, _)| *i == id) {
+                Some((_, n)) => *n += 1,
+                None => counts.push((id, 1)),
+            }
+        }
+        counts
+            .iter()
+            .map(|(id, n)| format!("{id:#04x}x{n}"))
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     async fn handle(&mut self, event: ControllerEvent) -> ControlFlow<()> {
         match event {
             ControllerEvent::ClientData(client_id, packet) => {
+                self.stats.from_client[client_id].add(packet.data.len());
                 let event = self.version.handle_c2s(
                     &packet,
                     client_id,
@@ -145,6 +187,7 @@ impl Controller {
                     match event {
                         ServerBoundEvent::SendToInactive(raw_packet) => {
                             if self.both_online() {
+                                self.stats.to_inactive.add(raw_packet.data.len());
                                 self.relay(
                                     self.active_client.opposite(),
                                     Arc::new(raw_packet),
@@ -153,18 +196,37 @@ impl Controller {
                                 .await;
                             }
                         }
-                        ServerBoundEvent::SkipRelay => return ControlFlow::Continue(()),
-                        ServerBoundEvent::PhaseAcked => self.release(client_id).await,
+                        ServerBoundEvent::SkipRelay => {
+                            self.stats.skipped[client_id] += 1;
+                            return ControlFlow::Continue(());
+                        }
+                        ServerBoundEvent::PhaseAcked => {
+                            self.stats.phase_acks[client_id] += 1;
+                            diag::info(
+                                "controller",
+                                format!("{client_id:?} acked phase switch, releasing held"),
+                            );
+                            self.release(client_id).await
+                        }
                         ServerBoundEvent::PhaseCaughtUp => {
+                            self.stats.caught_up[client_id] += 1;
+                            diag::info(
+                                "controller",
+                                format!("{client_id:?} caught up with server phase"),
+                            );
                             self.release(client_id).await;
                             return ControlFlow::Continue(());
                         }
                     }
                 }
 
+                if client_id == self.active_client {
+                    self.stats.to_server.add(packet.data.len());
+                }
                 if client_id == self.active_client
                     && let Err(e) = self.remote_tx.send(packet).await
                 {
+                    diag::error("controller", format!("server queue closed: {e}"));
                     Logger::new(&self.events)
                         .error(format!("Ошибка отправки пакета на сервер: {}", e));
                     return ControlFlow::Break(());
@@ -172,14 +234,24 @@ impl Controller {
             }
 
             ControllerEvent::ClientDisconnected(client_id) => {
+                diag::info(
+                    "controller",
+                    format!(
+                        "{client_id:?} disconnected (active={:?}, online={:?})",
+                        self.active_client,
+                        self.peers.iter().map(Option::is_some).collect::<Vec<_>>()
+                    ),
+                );
                 self.mark_offline(client_id);
 
                 if self.peers.iter().all(Option::is_none) {
+                    diag::info("controller", "both clients gone, ending session");
                     return ControlFlow::Break(());
                 }
 
                 if self.active_client == client_id {
                     self.active_client = client_id.opposite();
+                    self.stats.failovers += 1;
                     Logger::new(&self.events).info(format!(
                         "Активный клиент отключился, управление передано: {}",
                         match self.active_client {
@@ -188,11 +260,38 @@ impl Controller {
                         }
                     ));
 
-                    if let Some(event) = self.version.handle_client_disconnect(self.active_client) {
+                    let event = self.version.handle_client_disconnect(self.active_client);
+                    match &event {
+                        Some(crate::protocols::ClientDisconnectEvent::SendToServer(packets)) => {
+                            let bytes: usize = packets.iter().map(|p| p.data.len()).sum();
+                            diag::info(
+                                "failover",
+                                format!(
+                                    "active -> {:?}; version module replays {} packets ({bytes} bytes): [{}]",
+                                    self.active_client,
+                                    packets.len(),
+                                    self.describe_ids(packets)
+                                ),
+                            );
+                        }
+                        None => diag::info(
+                            "failover",
+                            format!(
+                                "active -> {:?}; version module replays nothing",
+                                self.active_client
+                            ),
+                        ),
+                    }
+                    if let Some(event) = event {
                         match event {
                             crate::protocols::ClientDisconnectEvent::SendToServer(packets) => {
                                 for packet in packets {
+                                    self.stats.replayed.add(packet.data.len());
                                     if self.remote_tx.send(packet).await.is_err() {
+                                        diag::error(
+                                            "failover",
+                                            "server queue closed during replay",
+                                        );
                                         Logger::new(&self.events)
                                             .error("Соединение с сервером потеряно");
                                         return ControlFlow::Break(());
@@ -205,10 +304,21 @@ impl Controller {
             }
 
             ControllerEvent::ServerData(packet) => {
+                self.stats.from_server.add(packet.data.len());
                 let phase_switch = matches!(
                     self.version.handle_s2c(&packet, self.both_online()),
                     Some(ClientBoundEvent::PhaseSwitch)
                 );
+                if phase_switch {
+                    self.stats.phase_switches += 1;
+                    diag::info(
+                        "controller",
+                        format!(
+                            "server started a phase switch (both_online={})",
+                            self.both_online()
+                        ),
+                    );
+                }
 
                 let packet = Arc::new(packet);
                 let inactive = self.active_client.opposite();
@@ -218,7 +328,10 @@ impl Controller {
             }
 
             // Ending here also tears down half-open clients that never sent a FIN.
-            ControllerEvent::ServerDisconnected => return ControlFlow::Break(()),
+            ControllerEvent::ServerDisconnected => {
+                diag::info("controller", "server disconnected");
+                return ControlFlow::Break(());
+            }
         }
         ControlFlow::Continue(())
     }
@@ -229,6 +342,8 @@ impl Controller {
         if let Some(held) = &mut self.held[client_id] {
             held.bytes += packet.data.len();
             held.queue.push_back((packet, phase_switch));
+            let peak = &mut self.stats.held_peak_bytes[client_id];
+            *peak = (*peak).max(held.bytes);
             if held.bytes > PEER_QUEUE_BYTES {
                 self.drop_stalled(client_id);
             }
@@ -261,16 +376,28 @@ impl Controller {
         let Some(link) = &self.peers[client_id] else {
             return;
         };
+        let size = packet.data.len();
         if client_id == self.active_client {
-            link.send(packet).await;
+            if link.send(packet).await {
+                self.stats.to_client[client_id].add(size);
+            }
             return;
         }
-        if let Err(TrySendError::Full) = link.try_send(packet) {
-            self.drop_stalled(client_id);
+        match link.try_send(packet) {
+            Ok(()) => self.stats.to_client[client_id].add(size),
+            Err(TrySendError::Full) => self.drop_stalled(client_id),
+            Err(TrySendError::Closed) => {}
         }
     }
 
     fn drop_stalled(&mut self, client_id: ClientId) {
+        self.stats.stalled_drops[client_id] += 1;
+        diag::warn(
+            "controller",
+            format!(
+                "{client_id:?} stalled (queue/held over {PEER_QUEUE_BYTES} bytes), dropping it"
+            ),
+        );
         Logger::new(&self.events).warn("Клиент не успевает принимать данные и был отключён");
         self.mark_offline(client_id);
     }
@@ -345,6 +472,7 @@ async fn write_loop<Q: PacketQueue>(
 
 /// Forwards packets as events until the stream fails, then reports `eof_event`.
 async fn read_loop(
+    peer: &str,
     read_half: OwnedReadHalf,
     event_tx: Sender<ControllerEvent>,
     on_packet: impl Fn(RawPacket) -> ControllerEvent,
@@ -358,7 +486,8 @@ async fn read_loop(
                     return;
                 }
             }
-            Err(_) => {
+            Err(e) => {
+                diag::info("io", format!("{peer} read ended: {e:#}"));
                 event_tx.send(eof_event).await.ok();
                 return;
             }
@@ -373,8 +502,10 @@ pub async fn run_client(
     event_tx: Sender<ControllerEvent>,
     packet_rx: UnboundedReceiver<Outgoing>,
 ) {
-    let _ = tokio::join!(
+    let peer = format!("{client_id:?}");
+    let (_, written) = tokio::join!(
         read_loop(
+            &peer,
             read_half,
             event_tx,
             |packet| ControllerEvent::ClientData(client_id, packet),
@@ -382,6 +513,7 @@ pub async fn run_client(
         ),
         write_loop(write_half, packet_rx)
     );
+    diag::info("io", format!("{peer} writer ended: {written:?}"));
 }
 
 pub async fn run_server(
@@ -390,8 +522,9 @@ pub async fn run_server(
     event_tx: Sender<ControllerEvent>,
     packet_rx: Receiver<RawPacket>,
 ) {
-    let _ = tokio::join!(
+    let (_, written) = tokio::join!(
         read_loop(
+            "server",
             read_half,
             event_tx,
             ControllerEvent::ServerData,
@@ -399,6 +532,7 @@ pub async fn run_server(
         ),
         write_loop(write_half, packet_rx)
     );
+    diag::info("io", format!("server writer ended: {written:?}"));
 }
 
 #[cfg(test)]

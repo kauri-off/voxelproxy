@@ -69,11 +69,22 @@ message DeveloperMessage {
   string text = 3;
   // Unix time in milliseconds, assigned by the server.
   int64 created_at_ms = 4;
+  // Whether a diagnostic log came with this message; the log itself is never returned.
+  bool has_diagnostic_log = 5;
+}
+
+enum DiagnosticLogEncoding {
+  DIAGNOSTIC_LOG_ENCODING_UNSPECIFIED = 0;
+  DIAGNOSTIC_LOG_ENCODING_PLAIN = 1;
+  DIAGNOSTIC_LOG_ENCODING_GZIP = 2;
 }
 
 message SendDeveloperMessageRequest {
   ClientInfo client = 1;
   string message = 2;
+  // Hidden UTF-8 diagnostic log for the developer, empty when not attached.
+  bytes diagnostic_log = 3;
+  DiagnosticLogEncoding diagnostic_log_encoding = 4;
 }
 message SendDeveloperMessageResponse {
   // The stored message as the server saved it (id and timestamp filled in).

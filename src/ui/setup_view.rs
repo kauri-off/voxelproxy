@@ -325,6 +325,10 @@ impl AppView {
                                     .disabled(blocked)
                                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                         this.use_windivert = *checked;
+                                        crate::diag::info(
+                                            "ui",
+                                            format!("use_windivert toggled: {checked}"),
+                                        );
                                         cx.notify();
                                     })),
                                 ),

@@ -2,13 +2,15 @@
 
 use std::{
     net::{IpAddr, SocketAddr},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use hickory_resolver::{
     TokioResolver,
     proto::rr::{Name, RData, RecordType},
 };
+
+use crate::diag;
 
 const DEFAULT_PORT: u16 = 25565;
 
@@ -22,22 +24,37 @@ pub struct ServerTarget {
 
 /// Resolves an address typed by the user, like the multiplayer screen does.
 pub async fn resolve_server(input: &str) -> Option<ServerTarget> {
-    let (host, port) = parse_address(input)?;
+    let Some((host, port)) = parse_address(input) else {
+        diag::warn("resolver", format!("cannot parse address {input:?}"));
+        return None;
+    };
     resolve_host_port(&host, port).await
 }
 
 /// Resolves an already split host and port, e.g. taken from a client's handshake.
 pub async fn resolve_host_port(host: &str, port: u16) -> Option<ServerTarget> {
+    let started = Instant::now();
+    let raw = host;
     // Modded clients append markers like "\0FML3\0" to the handshake host.
     let host = to_ascii(host.split('\0').next().unwrap_or(host));
     if host.is_empty() {
+        diag::warn("resolver", format!("empty host in {raw:?}"));
         return None;
     }
     // Vanilla has no fallback: an SRV target that fails to resolve fails the connection.
-    match srv_redirect(&host, port).await {
-        Some((target, target_port)) => resolve_system(&target, target_port).await,
+    let srv = srv_redirect(&host, port).await;
+    let result = match &srv {
+        Some((target, target_port)) => resolve_system(target, *target_port).await,
         None => resolve_system(&host, port).await,
-    }
+    };
+    diag::info(
+        "resolver",
+        format!(
+            "{raw:?}:{port} ascii={host:?} srv={srv:?} -> {result:?} in {:?}",
+            started.elapsed()
+        ),
+    );
+    result
 }
 
 /// Guava `HostAndPort.fromString(..).withDefaultPort(25565)`.
@@ -93,7 +110,14 @@ async fn resolve_system(host: &str, port: u16) -> Option<ServerTarget> {
             addr: SocketAddr::new(ip, port),
         });
     }
-    let addrs: Vec<SocketAddr> = tokio::net::lookup_host((bare, port)).await.ok()?.collect();
+    let addrs: Vec<SocketAddr> = match tokio::net::lookup_host((bare, port)).await {
+        Ok(addrs) => addrs.collect(),
+        Err(e) => {
+            diag::warn("resolver", format!("lookup {bare:?} failed: {e:?}"));
+            return None;
+        }
+    };
+    diag::debug("resolver", format!("lookup {bare:?} -> {addrs:?}"));
     let addr = addrs
         .iter()
         .find(|a| a.is_ipv4())
@@ -147,10 +171,16 @@ async fn srv_redirect(host: &str, port: u16) -> Option<(String, u16)> {
         return None;
     }
     let resolver = system_resolver()?;
-    let lookup = resolver
+    let lookup = match resolver
         .lookup(format!("_minecraft._tcp.{host}"), RecordType::SRV)
         .await
-        .ok()?;
+    {
+        Ok(lookup) => lookup,
+        Err(e) => {
+            diag::debug("resolver", format!("no SRV for {host:?}: {e}"));
+            return None;
+        }
+    };
     lookup.answers().iter().find_map(|r| match &r.data {
         RData::SRV(srv) => Some((srv.target.to_ascii(), srv.port)),
         _ => None,
@@ -159,7 +189,13 @@ async fn srv_redirect(host: &str, port: u16) -> Option<(String, u16)> {
 
 /// Reads the system DNS config on every call, like JNDI's `dns:` provider; no fallback servers.
 fn system_resolver() -> Option<TokioResolver> {
-    let mut builder = TokioResolver::builder_tokio().ok()?;
+    let mut builder = match TokioResolver::builder_tokio() {
+        Ok(builder) => builder,
+        Err(e) => {
+            diag::warn("resolver", format!("system DNS config unavailable: {e}"));
+            return None;
+        }
+    };
     let opts = builder.options_mut();
     opts.timeout = Duration::from_secs(1);
     opts.attempts = 1;

@@ -12,6 +12,7 @@ gpui_kit::assets::icon_assets!(
         ListChecks,
         Mail,
         MessageCircle,
+        Paperclip,
         Monitor,
         Send,
         Server,

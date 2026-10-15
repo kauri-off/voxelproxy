@@ -16,6 +16,7 @@ use tokio::{
 };
 
 use crate::{
+    diag,
     events::{ClientId, EventSink},
     packets::universal::status::s2c::StatusResponse,
     resolver::{ServerTarget, resolve_host_port},
@@ -95,11 +96,22 @@ where
     loop {
         while connections.try_join_next().is_some() {}
         match listener.accept().await {
-            Ok((stream, _addr)) => {
+            Ok((stream, addr)) => {
                 tune(&stream);
-                connections.spawn(handle(stream));
+                diag::debug("conn", format!("accepted {addr}"));
+                let fut = handle(stream);
+                connections.spawn(async move {
+                    let result = fut.await;
+                    if let Err(e) = &result {
+                        diag::warn("conn", format!("connection from {addr} failed: {e:#}"));
+                    }
+                    result
+                });
             }
-            Err(_) => tokio::time::sleep(ACCEPT_RETRY_DELAY).await,
+            Err(e) => {
+                diag::warn("conn", format!("accept failed: {e:?}"));
+                tokio::time::sleep(ACCEPT_RETRY_DELAY).await
+            }
         }
     }
 }
@@ -163,6 +175,17 @@ async fn handle_connection(
         .await?
         .as_uncompressed()?
         .deserialize_payload()?;
+    diag::info(
+        "conn",
+        format!(
+            "handshake from {:?}: protocol={} host={:?} port={} intent={}",
+            stream.peer_addr().ok(),
+            handshake.protocol_version.0,
+            handshake.server_address,
+            handshake.server_port,
+            handshake.intent.0
+        ),
+    );
 
     match Intent::try_from(handshake.intent.0) {
         Ok(Intent::Status) => {
@@ -177,6 +200,7 @@ async fn handle_connection(
                         addr: t.addr,
                     }),
             };
+            diag::debug("conn", format!("status ping -> {target:?}"));
             if let Some(target) = target {
                 timeout(STATUS_TIMEOUT, process_status(stream, target, handshake))
                     .await
@@ -190,6 +214,13 @@ async fn handle_connection(
             let is_loopback = cfg!(target_os = "windows")
                 && status_target.is_none()
                 && is_loopback_host(&handshake.server_address).await;
+            diag::info(
+                "conn",
+                format!(
+                    "login start {} bytes, loopback={is_loopback}",
+                    login_start.data.len()
+                ),
+            );
             tx.send(LoginClient {
                 protocol_version: handshake.protocol_version.0,
                 server_host: handshake.server_address,
@@ -201,7 +232,7 @@ async fn handle_connection(
             .await
             .map_err(|_| anyhow!("dispatcher closed"))?;
         }
-        Err(_) => {}
+        Err(_) => diag::warn("conn", format!("unknown intent {}", handshake.intent.0)),
     }
     Ok(())
 }
@@ -283,18 +314,40 @@ pub async fn run_proxy_session(
     events: EventSink,
 ) -> anyhow::Result<()> {
     let mut threshold = None;
+    let login_started = std::time::Instant::now();
+    diag::info("login", "waiting for server login packets");
 
     loop {
-        let raw = read_with_timeout(&mut remote, LOGIN_TIMEOUT).await?;
+        let raw = read_with_timeout(&mut remote, LOGIN_TIMEOUT)
+            .await
+            .inspect_err(|e| diag::error("login", format!("read from server failed: {e:#}")))?;
         let packet = raw.uncompress(threshold)?;
+        diag::debug(
+            "login",
+            format!(
+                "s2c packet id={:#04x} size={} after {:?}",
+                packet.packet_id,
+                raw.data.len(),
+                login_started.elapsed()
+            ),
+        );
 
         match packet.packet_id {
             LoginDisconnect::PACKET_ID => {
+                let reason = packet
+                    .deserialize_payload::<LoginDisconnect>()
+                    .map(|d| d.reason)
+                    .unwrap_or_else(|e| format!("<unparsed: {e}>"));
+                diag::warn(
+                    "login",
+                    format!("server disconnected during login: {reason}"),
+                );
                 let _ = raw.write_async(&mut primary).await;
                 let _ = raw.write_async(&mut secondary).await;
                 return Err(anyhow!("Disconnected by server"));
             }
             EncryptionRequest::PACKET_ID => {
+                diag::warn("login", "server requested encryption (online-mode)");
                 send_login_error(
                     &mut primary,
                     &mut secondary,
@@ -305,6 +358,13 @@ pub async fn run_proxy_session(
                 return Err(anyhow!("Licensed server"));
             }
             LoginSuccess::PACKET_ID => {
+                diag::info(
+                    "login",
+                    format!(
+                        "login success after {:?}, threshold={threshold:?}",
+                        login_started.elapsed()
+                    ),
+                );
                 raw.write_async(&mut primary).await?;
                 raw.write_async(&mut secondary).await?;
                 break;
@@ -312,6 +372,10 @@ pub async fn run_proxy_session(
             SetCompression::PACKET_ID => {
                 let compression: SetCompression = packet.deserialize_payload()?;
                 threshold = Some(compression.threshold.0);
+                diag::info(
+                    "login",
+                    format!("compression threshold={}", compression.threshold.0),
+                );
 
                 raw.write_async(&mut primary).await?;
                 raw.write_async(&mut secondary).await?;
@@ -319,6 +383,13 @@ pub async fn run_proxy_session(
             // Answered the way a vanilla client without mods/cookies would.
             LoginPluginRequest::PACKET_ID => {
                 let request: LoginPluginRequest = packet.deserialize_payload()?;
+                diag::info(
+                    "login",
+                    format!(
+                        "plugin request id={}, answering not understood",
+                        request.message_id.0
+                    ),
+                );
                 UncompressedPacket::from_packet(&LoginPluginResponse {
                     message_id: request.message_id,
                     successful: false,
@@ -329,6 +400,7 @@ pub async fn run_proxy_session(
             }
             CookieRequest::PACKET_ID => {
                 let request: CookieRequest = packet.deserialize_payload()?;
+                diag::info("login", format!("cookie request key={:?}", request.key));
                 UncompressedPacket::from_packet(&CookieResponse {
                     key: request.key,
                     payload: None,
@@ -338,6 +410,7 @@ pub async fn run_proxy_session(
                 .await?;
             }
             id => {
+                diag::error("login", format!("unexpected login packet {id:#04x}"));
                 send_login_error(
                     &mut primary,
                     &mut secondary,
@@ -368,7 +441,8 @@ pub async fn run_proxy_session(
         event_rx,
         version,
         events,
-    );
+    )
+    .with_threshold(threshold);
 
     // Dropping the set aborts the I/O tasks, closing their sockets. That happens both
     // when the controller stops and when this whole session future is cancelled; it is

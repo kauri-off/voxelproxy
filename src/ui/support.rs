@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use gpui_kit::base::Selectable as _;
 use gpui_kit::component::{
     ActiveTheme, Disableable, Icon, Sizable, WindowExt,
     button::{Button, ButtonVariants},
@@ -33,6 +34,9 @@ pub struct SupportView {
     loaded_once: bool,
     loading: bool,
     sending: bool,
+    attach_log: bool,
+    /// Ids of messages sent with a log, for servers that don't report `has_log`.
+    sent_with_log: HashSet<String>,
     error: Option<SharedString>,
     last_read_at: i64,
     is_open: bool,
@@ -67,6 +71,8 @@ impl SupportView {
             loaded_once: false,
             loading: false,
             sending: false,
+            attach_log: false,
+            sent_with_log: HashSet::new(),
             error: None,
             last_read_at: prefs::last_read_reply_at(),
             is_open: false,
@@ -162,9 +168,10 @@ impl SupportView {
         self.error = None;
         cx.notify();
 
+        let attach_log = self.attach_log;
         let job = self
             .backend
-            .spawn(config::send_developer_message(text.clone()));
+            .spawn(config::send_developer_message(text.clone(), attach_log));
         cx.spawn_in(window, async move |this, cx| {
             let result = job.await.map_err(anyhow::Error::from).and_then(|r| r);
             let _ = this.update_in(cx, |this, window, cx| {
@@ -173,12 +180,18 @@ impl SupportView {
                     Ok(saved) => {
                         this.input
                             .update(cx, |input, cx| input.set_value("", window, cx));
-                        let saved = saved.unwrap_or_else(|| ChatMessage {
+                        let mut saved = saved.unwrap_or_else(|| ChatMessage {
                             id: uuid::Uuid::new_v4().to_string(),
                             from_developer: false,
                             text,
                             created_at_ms: chrono::Utc::now().timestamp_millis(),
+                            has_log: false,
                         });
+                        if attach_log {
+                            saved.has_log = true;
+                            this.sent_with_log.insert(saved.id.clone());
+                            this.attach_log = false;
+                        }
                         this.seen_ids.insert(saved.id.clone());
                         this.messages.push(saved);
                         this.scroll.scroll_to_bottom();
@@ -202,9 +215,15 @@ impl SupportView {
         cx.notify();
     }
 
+    fn set_attach_log(&mut self, value: bool, cx: &mut Context<Self>) {
+        self.attach_log = value;
+        cx.notify();
+    }
+
     fn render_message(&self, message: &ChatMessage, cx: &App) -> impl IntoElement {
         let theme = cx.theme();
         let mine = !message.from_developer;
+        let has_log = message.has_log || self.sent_with_log.contains(&message.id);
         h_flex().w_full().when(mine, |el| el.justify_end()).child(
             v_flex()
                 .max_w(px(420.))
@@ -229,7 +248,17 @@ impl SupportView {
                     },
                     format_time(message.created_at_ms)
                 )))
-                .child(div().text_sm().child(message.text.clone())),
+                .child(div().text_sm().child(message.text.clone()))
+                .when(has_log, |el| {
+                    el.child(
+                        h_flex()
+                            .gap_1()
+                            .text_xs()
+                            .opacity(0.75)
+                            .child(Icon::new(IconName::Paperclip).xsmall())
+                            .child("Лог прикреплён"),
+                    )
+                }),
         )
     }
 }
@@ -307,6 +336,50 @@ impl Render for SupportView {
                     .gap_2()
                     .child(widgets::hint("Ctrl+Enter — отправить", cx).text_xs())
                     .child(div().flex_1())
+                    .when(self.attach_log, |el| {
+                        el.child(
+                            h_flex()
+                                .gap_1()
+                                .pl_2()
+                                .rounded(px(6.))
+                                .bg(theme.secondary)
+                                .text_xs()
+                                .text_color(theme.secondary_foreground)
+                                .child(Icon::new(IconName::Paperclip).xsmall())
+                                .child("Лог будет прикреплён")
+                                .child(
+                                    Button::new("support-detach-log")
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(Icon::new(IconName::Close))
+                                        .tooltip("Не прикреплять лог")
+                                        .disabled(self.sending)
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| {
+                                                this.set_attach_log(false, cx)
+                                            }),
+                                        ),
+                                ),
+                        )
+                    })
+                    .child(
+                        Button::new("support-attach-log")
+                            .ghost()
+                            .small()
+                            .icon(Icon::new(IconName::Paperclip))
+                            .selected(self.attach_log)
+                            .toggled(self.attach_log)
+                            .tooltip(if self.attach_log {
+                                "Не прикреплять лог"
+                            } else {
+                                "Прикрепить технический лог — он поможет разработчику найти причину проблемы"
+                            })
+                            .disabled(self.sending)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let value = !this.attach_log;
+                                this.set_attach_log(value, cx)
+                            })),
+                    )
                     .child(
                         Button::new("support-refresh")
                             .ghost()
