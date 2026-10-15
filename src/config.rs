@@ -144,7 +144,7 @@ enum Report {
     SessionJoined(SessionJoinedRequest),
     ActiveClientSwitched(ActiveClientSwitchedRequest),
     SessionEnded(SessionEndedRequest),
-    Chat(SendProtocolMetadataRequest),
+    ChatMessageSent(ChatMessageSentRequest),
 }
 
 struct Reporter {
@@ -177,9 +177,11 @@ pub fn start_reporter(rt: &Handle) {
                 Report::SessionEnded(r) => traced("SessionEnded", client.session_ended(r))
                     .await
                     .map(drop),
-                Report::Chat(r) => traced("SendProtocolMetadata", client.send_protocol_metadata(r))
-                    .await
-                    .map(drop),
+                Report::ChatMessageSent(r) => {
+                    traced("ChatMessageSent", client.chat_message_sent(r))
+                        .await
+                        .map(drop)
+                }
             };
         }
     });
@@ -330,10 +332,10 @@ pub fn report_chat(text: String, is_command: bool) {
     let Some(session) = current_session() else {
         return;
     };
-    report(Report::Chat(SendProtocolMetadataRequest {
+    report(Report::ChatMessageSent(ChatMessageSentRequest {
         session_id: session.id.to_string(),
-        payload: text,
-        custom: is_command,
+        text,
+        is_command,
     }));
 }
 

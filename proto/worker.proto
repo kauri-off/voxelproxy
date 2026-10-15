@@ -11,15 +11,15 @@ service Worker {
   rpc SessionJoined (SessionJoinedRequest) returns (SessionJoinedResponse);
   rpc ActiveClientSwitched (ActiveClientSwitchedRequest) returns (ActiveClientSwitchedResponse);
   rpc SessionEnded (SessionEndedRequest) returns (SessionEndedResponse);
+  rpc ChatMessageSent (ChatMessageSentRequest) returns (ChatMessageSentResponse);
 
   // Legacy lifecycle of clients before 7.3, replaced by the calls above.
   rpc Ping (PingRequest) returns (PingResponse);
   rpc ManualStart (ManualStartRequest) returns (ManualStartResponse);
   rpc AutoStart (AutoStartRequest) returns (AutoStartResponse);
   rpc Join (JoinRequest) returns (JoinResponse);
-
-  // Chat of a session, keyed by its session id.
   rpc SendProtocolMetadata (SendProtocolMetadataRequest) returns (SendProtocolMetadataResponse);
+
   rpc SendDeveloperMessage (SendDeveloperMessageRequest) returns (SendDeveloperMessageResponse);
   // Returns the whole support conversation of `client.install_id`, oldest first.
   rpc ListDeveloperMessages (ListDeveloperMessagesRequest) returns (ListDeveloperMessagesResponse);
@@ -140,6 +140,14 @@ message JoinRequest {
   int32 protocol_version = 5;
 }
 message JoinResponse {}
+
+// Chat message the user sent during a session.
+message ChatMessageSentRequest {
+  string session_id = 1;
+  string text = 2;
+  bool is_command = 3;
+}
+message ChatMessageSentResponse {}
 
 message SendProtocolMetadataRequest {
   string session_id = 1;
