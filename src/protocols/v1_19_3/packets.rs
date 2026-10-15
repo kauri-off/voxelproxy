@@ -19,6 +19,12 @@ pub mod c2s {
         use super::*;
 
         #[derive(Packet, Debug)]
+        #[packet(12)] // ServerboundCustomPayloadPacket
+        pub struct CustomPayload {
+            pub channel: String,
+        }
+
+        #[derive(Packet, Debug)]
         #[packet(0)] // ServerboundAcceptTeleportationPacket
         pub struct AcceptTeleportation {
             pub id: VarInt,
@@ -119,6 +125,10 @@ pub mod s2c {
         use uuid::Uuid;
 
         use super::*;
+
+        #[derive(Packet, Debug)]
+        #[packet(36)] // ClientboundLoginPacket
+        pub struct Login {}
 
         #[derive(Packet, Debug)]
         #[packet(49)] // ClientboundPlayerChatPacket

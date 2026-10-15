@@ -878,7 +878,7 @@ macro_rules! config_phase_tests {
                     }),
                     S2c::PlayerChat(signature) => pack(&crate::protocols::config_phase_tests!(
                         @write_player_chat $chat,
-                        signature.map(|s| Fixed([s; 256]))
+                        signature.map(|s| Fixed(crate::controller::tests::signature(s)))
                     )),
                     S2c::Raw(id, len) => UncompressedPacket::new(id, vec![0; len]),
                 }

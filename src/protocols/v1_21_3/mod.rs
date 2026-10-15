@@ -564,6 +564,9 @@ impl VersionData {
             }
             c2s::game::ChatCommandSigned::PACKET_ID => {
                 let mut command: c2s::game::ChatCommandSigned = decode(packet, self.threshold)?;
+                if !command.argument_signatures.is_empty() {
+                    warn_signed(client_id);
+                }
                 if self.sync_last_seen(&mut command.last_seen, client_id, is_active) {
                     return Ok(Some(self.rewrite(&command)?));
                 }
@@ -573,6 +576,9 @@ impl VersionData {
                     config::report_chat(text, false);
                 }
                 let mut chat: c2s::game::Chat = decode(packet, self.threshold)?;
+                if chat.signature.is_some() {
+                    warn_signed(client_id);
+                }
                 if self.sync_last_seen(&mut chat.last_seen, client_id, is_active) {
                     return Ok(Some(self.rewrite(&chat)?));
                 }
@@ -837,6 +843,14 @@ impl TeleportSync {
     }
 }
 
+/// Rewritten acks break a signature, and clients behind the proxy should never sign.
+fn warn_signed(client: ClientId) {
+    crate::diag::warn(
+        "chat",
+        format!("{client:?} sent signed chat, acks may not match it"),
+    );
+}
+
 /// The server's `LastSeenMessagesValidator` and how far each client's chat acks went.
 #[derive(Debug)]
 pub struct ChatSync {
@@ -891,7 +905,14 @@ impl ChatSync {
         }
         // A client behind the server moves nothing, and `applyOffset` allows no more than it sent.
         let ahead = self.offsets[client].saturating_sub(self.server_offset) as usize;
-        let offset = ahead.min(self.tracked.len() - LAST_SEEN);
+        let max = self.tracked.len() - LAST_SEEN;
+        if ahead > max {
+            crate::diag::warn(
+                "chat",
+                format!("{client:?} acked {ahead} messages, the server only allows {max}"),
+            );
+        }
+        let offset = ahead.min(max);
         self.tracked.drain(..offset);
         self.server_offset += offset as u64;
         Some(offset as i32)

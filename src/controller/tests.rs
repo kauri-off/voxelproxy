@@ -1556,10 +1556,17 @@ pub(crate) fn pack_pushed_again_is_answered_again<W: Wire>() {
     assert_eq!(h.sent(), W::respond(PACK));
 }
 
-/// `MessageSignature.checksum` of a signature filled with one byte.
-fn signature_hash(signature: u8) -> i32 {
-    (0..256).fold(1i32, |hash, _| {
-        hash.wrapping_mul(31).wrapping_add(signature as i8 as i32)
+/// A test signature told apart by its first byte, so windows get distinct checksums.
+pub(crate) fn signature(id: u8) -> [u8; 256] {
+    let mut bytes = [0; 256];
+    bytes[0] = id;
+    bytes
+}
+
+/// `MessageSignature.checksum`.
+fn signature_hash(id: u8) -> i32 {
+    signature(id).iter().fold(1i32, |hash, b| {
+        hash.wrapping_mul(31).wrapping_add(*b as i8 as i32)
     })
 }
 
@@ -1851,6 +1858,28 @@ fn wire_checksum<W: Wire>(signatures: &[u8]) -> u8 {
     if W::CHECKSUM { checksum(signatures) } else { 0 }
 }
 
+pub(crate) fn lagging_client_checksum_matches_server_window<W: Wire>() {
+    let mut lab = ChatLab::<W>::new();
+    lab.broadcast(1..=65);
+    lab.read(P);
+    lab.read(S);
+    assert_eq!(lab.check(), [C2s::ChatAck(65)]);
+    lab.broadcast([66]);
+    lab.read(P);
+    lab.chat(P);
+    lab.check();
+
+    // The secondary acks the same 20 slots as the server, one message earlier.
+    lab.h.leave(P);
+    let seen = lab.chat(S);
+    assert_eq!((seen.offset, seen.acked), (0, (1 << 20) - 1));
+    let synced = Seen {
+        checksum: wire_checksum::<W>(&(47..=66).collect::<Vec<_>>()),
+        ..seen
+    };
+    assert_eq!(lab.check(), [C2s::Chat(synced)]);
+}
+
 pub(crate) fn hidden_message_acked_by_old_active_stays_acked<W: Wire>() {
     let mut lab = ChatLab::<W>::new();
     lab.broadcast(1..=3);
@@ -2068,6 +2097,7 @@ macro_rules! controller_tests {
             chat_ack_after_failover_matches_server_window
             chat_ack_server_already_got_is_dropped
             lagging_client_keeps_acks_server_got
+            lagging_client_checksum_matches_server_window
             hidden_message_acked_by_old_active_stays_acked
             message_ignored_by_old_active_is_not_acked
             unsigned_chat_is_not_tracked
