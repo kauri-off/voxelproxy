@@ -40,9 +40,10 @@ pub struct VersionData {
     pub pings: Vec<PingSync>,
     pub teleports: Vec<TeleportSync>,
     pub keep_alives: Vec<KeepAliveSync>,
+    pub chunk_batches: Vec<ChunkBatchSync>,
     /// Configuration tasks the server waits to be answered, see `ServerConfigurationPacketListenerImpl`.
     pub tasks: Vec<TaskSync>,
-    /// Counts tracked pings, teleports, keep-alives and tasks in server stream order.
+    /// Counts tracked pings, teleports, keep-alives, tasks and chunk batches in server stream order.
     pub seq: u64,
     /// Phase switches each client acked.
     pub phases: PerClient<u32>,
@@ -79,6 +80,7 @@ impl VersionData {
             pings: vec![],
             teleports: vec![],
             keep_alives: vec![],
+            chunk_batches: vec![],
             tasks: vec![],
             seq: 0,
             phases: PerClient::splat(0),
@@ -208,6 +210,16 @@ impl VersionProtocol for VersionData {
             false
         });
 
+        self.chunk_batches.retain_mut(|t| {
+            let Some(answer) = t.answers[new_active].take() else {
+                return true;
+            };
+            if !t.sent {
+                replies.push((t.seq, answer));
+            }
+            false
+        });
+
         for task in &mut self.tasks {
             let seq = task.seq;
             replies.extend(task.catch_up(new_active).into_iter().map(|p| (seq, p)));
@@ -295,6 +307,8 @@ impl VersionData {
                 self.state_in = State::Configuration;
                 // The next game listener starts teleport ids over.
                 self.teleports.clear();
+                // The closing game listener ignores batch answers and the next one starts over.
+                self.chunk_batches.clear();
                 return Ok(Some(ClientBoundEvent::PhaseSwitch));
             }
             s2c::game::Ping::PACKET_ID if both_online => {
@@ -307,6 +321,10 @@ impl VersionData {
                 self.seq += 1;
                 self.keep_alives
                     .push(KeepAliveSync::new(keep_alive.id, State::Game, self.seq));
+            }
+            s2c::game::ChunkBatchFinished::PACKET_ID if both_online => {
+                self.seq += 1;
+                self.chunk_batches.push(ChunkBatchSync::new(self.seq));
             }
             s2c::game::Position::PACKET_ID if both_online => {
                 let teleport: s2c::game::Position = decode(packet, self.threshold)?;
@@ -488,6 +506,9 @@ impl VersionData {
                     both_online,
                 ));
             }
+            c2s::game::ChunkBatchReceived::PACKET_ID => {
+                return Ok(self.answer_chunk_batch(packet, client_id, is_active, both_online));
+            }
             c2s::game::ContainerClose::PACKET_ID => {
                 if is_active {
                     let container_close: c2s::game::ContainerClose =
@@ -544,6 +565,29 @@ impl VersionData {
         let duplicate = self.keep_alives[i].answer(client_id, is_active);
         if !both_online || self.keep_alives[i].answered_by_both() {
             self.keep_alives.remove(i);
+        }
+        duplicate.then_some(ServerBoundEvent::SkipRelay)
+    }
+
+    fn answer_chunk_batch(
+        &mut self,
+        packet: &RawPacket,
+        client_id: ClientId,
+        is_active: bool,
+        both_online: bool,
+    ) -> Option<ServerBoundEvent> {
+        if self.phases[client_id] != self.server_phases {
+            // A lagging client answers an earlier game listener's batch.
+            return None;
+        }
+        // Vanilla clients answer every batch in the order they got them.
+        let i = self
+            .chunk_batches
+            .iter()
+            .position(|b| !b.answered(client_id))?;
+        let duplicate = self.chunk_batches[i].answer(client_id, packet, is_active);
+        if !both_online || self.chunk_batches[i].answered_by_both() {
+            self.chunk_batches.remove(i);
         }
         duplicate.then_some(ServerBoundEvent::SkipRelay)
     }
@@ -709,6 +753,41 @@ impl KeepAliveSync {
     /// Records an answer and returns whether the server already got one.
     pub fn answer(&mut self, client: ClientId, is_active: bool) -> bool {
         self.answered[client] = true;
+        let duplicate = is_active && self.sent;
+        self.sent |= is_active;
+        duplicate
+    }
+}
+
+#[derive(Debug)]
+pub struct ChunkBatchSync {
+    pub seq: u64,
+    /// Each client's answer; it carries the client's own `desiredChunksPerTick`.
+    answers: PerClient<Option<RawPacket>>,
+    /// Whether an answer already reached the server.
+    sent: bool,
+}
+
+impl ChunkBatchSync {
+    pub fn new(seq: u64) -> Self {
+        Self {
+            seq,
+            answers: PerClient::default(),
+            sent: false,
+        }
+    }
+
+    pub fn answered(&self, client: ClientId) -> bool {
+        self.answers[client].is_some()
+    }
+
+    pub fn answered_by_both(&self) -> bool {
+        self.answered(ClientId::Primary) && self.answered(ClientId::Secondary)
+    }
+
+    /// Records an answer and returns whether the server already got one.
+    pub fn answer(&mut self, client: ClientId, packet: &RawPacket, is_active: bool) -> bool {
+        self.answers[client] = Some(packet.clone());
         let duplicate = is_active && self.sent;
         self.sent |= is_active;
         duplicate
@@ -1113,6 +1192,32 @@ mod tests {
             Some(ServerBoundEvent::SkipRelay)
         ));
         assert!(c2s(&mut data, &c2s::game::Pong { id: 9 }, S, S, false).is_none());
+    }
+
+    #[test]
+    fn chunk_batch_answers_follow_server_across_failover() {
+        let mut data = in_game(None);
+        let batch = s2c::game::ChunkBatchFinished {
+            batch_size: VarInt(4),
+        };
+        let answer = |desired_chunks_per_tick| c2s::game::ChunkBatchReceived {
+            desired_chunks_per_tick,
+        };
+        for _ in 0..3 {
+            s2c(&mut data, &batch, true);
+        }
+        assert!(c2s(&mut data, &answer(5.0), P, P, true).is_none());
+        for desired in [20.0, 21.0] {
+            assert!(c2s(&mut data, &answer(desired), S, P, true).is_none());
+        }
+
+        let packets = replayed(data.handle_client_disconnect(S));
+        assert_eq!(packets.len(), 1);
+        let got: c2s::game::ChunkBatchReceived =
+            super::super::decode(&packets[0], data.threshold).unwrap();
+        assert_eq!(got.desired_chunks_per_tick, 21.0);
+        assert!(c2s(&mut data, &answer(22.0), S, S, false).is_none());
+        assert!(data.chunk_batches.is_empty());
     }
 
     #[test]

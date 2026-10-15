@@ -17,6 +17,8 @@ pub(crate) const P: ClientId = ClientId::Primary;
 pub(crate) const S: ClientId = ClientId::Secondary;
 /// The teleport id of our mirrored positions.
 pub(crate) const OURS: i32 = -1;
+/// What a fresh `ChunkBatchSizeCalculator` asks for.
+pub(crate) const CHUNKS_PER_TICK: f32 = 3.5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub(crate) struct Spot {
@@ -55,6 +57,7 @@ pub(crate) enum C2s {
     AcceptCodeOfConduct,
     /// The pack id is only on the wire for versions with `PACK_IDS`.
     ResourcePack(u8, Pack),
+    ChunkBatchReceived(f32),
     Raw(i32),
 }
 
@@ -93,6 +96,7 @@ pub(crate) enum S2c {
     SelectKnownPacks,
     CodeOfConduct,
     ResourcePackPush(u8),
+    ChunkBatchFinished(i32),
     Raw(i32, usize),
 }
 
@@ -140,6 +144,7 @@ pub(crate) trait Wire: Default + Into<Version> {
                 C2s::ResourcePack(id, Pack::Accepted),
                 C2s::ResourcePack(id, Pack::Loaded),
             ],
+            S2c::ChunkBatchFinished(_) => vec![C2s::ChunkBatchReceived(CHUNKS_PER_TICK)],
             S2c::ContainerClose(_) | S2c::Raw(..) => vec![],
         }
     }
@@ -1032,6 +1037,124 @@ pub(crate) fn failover_replays_keep_alive_before_phase_ack<W: Wire>() {
     assert_eq!(h.sent(), [C2s::KeepAlive(1), C2s::ConfigurationAck]);
 }
 
+const BATCH: S2c = S2c::ChunkBatchFinished(4);
+
+pub(crate) fn active_chunk_batch_answer_reaches_server_once<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(BATCH);
+    assert_eq!(h.received(P), [BATCH]);
+    assert_eq!(h.received(S), [BATCH]);
+    h.send(S, C2s::ChunkBatchReceived(20.0));
+    assert!(h.sent().is_empty());
+    h.send(P, C2s::ChunkBatchReceived(5.0));
+    assert_eq!(h.sent(), [C2s::ChunkBatchReceived(5.0)]);
+}
+
+pub(crate) fn forwarded_chunk_batch_answer_is_dropped_after_failover<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(BATCH);
+    h.obey(P);
+    assert_eq!(h.sent(), [C2s::ChunkBatchReceived(CHUNKS_PER_TICK)]);
+
+    h.leave(P);
+    assert!(h.sent().is_empty());
+    assert_eq!(h.obey(S), [BATCH]);
+    assert!(h.sent().is_empty());
+
+    h.serve(BATCH);
+    h.obey(S);
+    assert_eq!(h.sent(), [C2s::ChunkBatchReceived(CHUNKS_PER_TICK)]);
+}
+
+pub(crate) fn failover_replays_chunk_batch_answer_of_new_active<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(BATCH);
+    h.serve(BATCH);
+    h.received(P);
+    h.received(S);
+    h.send(P, C2s::ChunkBatchReceived(5.0));
+    h.send_all(
+        S,
+        [C2s::ChunkBatchReceived(20.0), C2s::ChunkBatchReceived(21.0)],
+    );
+    assert_eq!(h.sent(), [C2s::ChunkBatchReceived(5.0)]);
+
+    h.leave(P);
+    assert_eq!(h.sent(), [C2s::ChunkBatchReceived(21.0)]);
+}
+
+pub(crate) fn unanswered_chunk_batch_is_relayed_after_failover<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(BATCH);
+    h.received(P);
+    h.received(S);
+
+    h.leave(P);
+    assert!(h.sent().is_empty());
+    h.send(S, C2s::ChunkBatchReceived(20.0));
+    assert_eq!(h.sent(), [C2s::ChunkBatchReceived(20.0)]);
+}
+
+pub(crate) fn chunk_batch_answer_reaches_server_after_inactive_left<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(BATCH);
+    h.obey(S);
+    h.leave(S);
+    h.send(P, C2s::ChunkBatchReceived(5.0));
+    assert_eq!(h.sent(), [C2s::ChunkBatchReceived(5.0)]);
+}
+
+pub(crate) fn failover_chunk_batch_answer_follows_server_order<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    let at = spot(1.0, 2.0, 3.0, 0.0, 0.0);
+    h.serve(S2c::Ping(1));
+    h.serve(BATCH);
+    h.serve(S2c::KeepAlive(2));
+    h.serve(S2c::Position(5, at));
+    h.received(P);
+    h.obey(S);
+    assert!(h.sent().is_empty());
+
+    h.leave(P);
+    assert_eq!(
+        h.sent(),
+        [
+            C2s::Pong(1),
+            C2s::ChunkBatchReceived(CHUNKS_PER_TICK),
+            C2s::KeepAlive(2),
+            W::ack(5, at)
+        ]
+    );
+}
+
+pub(crate) fn chunk_batches_of_closed_game_listener_are_forgotten<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(BATCH);
+    h.serve(S2c::StartConfiguration);
+    h.obey(P);
+    h.serve(S2c::FinishConfiguration);
+    h.obey(P);
+    h.serve(BATCH);
+    assert_eq!(h.received(P), [BATCH]);
+    assert_eq!(
+        h.sent(),
+        [
+            C2s::ChunkBatchReceived(CHUNKS_PER_TICK),
+            C2s::ConfigurationAck,
+            C2s::FinishConfiguration
+        ]
+    );
+
+    // The secondary still answers the first listener's batch.
+    assert_eq!(h.received(S), [BATCH, S2c::StartConfiguration]);
+    h.send(S, C2s::ChunkBatchReceived(20.0));
+    h.leave(P);
+    assert!(h.sent().is_empty());
+    h.send(S, C2s::ConfigurationAck);
+    assert_eq!(h.obey(S), [S2c::FinishConfiguration, BATCH]);
+    assert_eq!(h.sent(), [C2s::ChunkBatchReceived(CHUNKS_PER_TICK)]);
+}
+
 const PACK: S2c = S2c::ResourcePackPush(0);
 
 pub(crate) fn resource_pack_answers_reach_server_once<W: Wire>() {
@@ -1405,6 +1528,13 @@ macro_rules! controller_tests {
             pack_answers_after_inactive_left_reach_server
             tasks_of_finished_listener_are_forgotten
             lagging_answer_to_earlier_listener_is_not_counted
+            active_chunk_batch_answer_reaches_server_once
+            forwarded_chunk_batch_answer_is_dropped_after_failover
+            failover_replays_chunk_batch_answer_of_new_active
+            unanswered_chunk_batch_is_relayed_after_failover
+            chunk_batch_answer_reaches_server_after_inactive_left
+            failover_chunk_batch_answer_follows_server_order
+            chunk_batches_of_closed_game_listener_are_forgotten
             $($extra)*
         );
     };

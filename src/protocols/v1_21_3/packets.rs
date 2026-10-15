@@ -101,6 +101,12 @@ pub mod c2s {
         }
 
         #[derive(Packet, Debug)]
+        #[packet(9)] // ServerboundChunkBatchReceivedPacket
+        pub struct ChunkBatchReceived {
+            pub desired_chunks_per_tick: f32,
+        }
+
+        #[derive(Packet, Debug)]
         #[packet(41)] // ServerboundPongPacket
         pub struct Pong {
             pub id: i32,
@@ -165,6 +171,12 @@ pub mod s2c {
             pub yaw: f32,
             pub pitch: f32,
             pub relative_flags: i32,
+        }
+
+        #[derive(Packet, Debug)]
+        #[packet(12)] // ClientboundChunkBatchFinishedPacket
+        pub struct ChunkBatchFinished {
+            pub batch_size: VarInt,
         }
 
         #[derive(Packet, Debug)]

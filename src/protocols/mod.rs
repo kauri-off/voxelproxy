@@ -709,6 +709,9 @@ macro_rules! config_phase_tests {
                         ..Default::default()
                     }),
                     C2s::Pong(id) => pack(&c2s::game::Pong { id }),
+                    C2s::ChunkBatchReceived(desired) => pack(&c2s::game::ChunkBatchReceived {
+                        desired_chunks_per_tick: desired,
+                    }),
                     C2s::KeepAlive(id) if phase == Phase::Configuration => {
                         pack(&c2s::configuration::KeepAlive { id })
                     }
@@ -744,6 +747,9 @@ macro_rules! config_phase_tests {
                         relative_flags: 0,
                     }),
                     S2c::Ping(id) => pack(&s2c::game::Ping { id }),
+                    S2c::ChunkBatchFinished(size) => pack(&s2c::game::ChunkBatchFinished {
+                        batch_size: VarInt(size),
+                    }),
                     S2c::KeepAlive(id) if phase == Phase::Configuration => {
                         pack(&s2c::configuration::KeepAlive { id })
                     }
@@ -811,6 +817,9 @@ macro_rules! config_phase_tests {
                     (Phase::Game, game::KeepAlive::PACKET_ID) => {
                         C2s::KeepAlive(unpack::<game::KeepAlive>(packet).id)
                     }
+                    (Phase::Game, game::ChunkBatchReceived::PACKET_ID) => C2s::ChunkBatchReceived(
+                        unpack::<game::ChunkBatchReceived>(packet).desired_chunks_per_tick,
+                    ),
                     (Phase::Game, game::ContainerClose::PACKET_ID) => {
                         C2s::ContainerClose(unpack::<game::ContainerClose>(packet).container_id.0)
                     }
@@ -861,6 +870,9 @@ macro_rules! config_phase_tests {
                     (Phase::Game, game::KeepAlive::PACKET_ID) => {
                         S2c::KeepAlive(unpack::<game::KeepAlive>(packet).id)
                     }
+                    (Phase::Game, game::ChunkBatchFinished::PACKET_ID) => S2c::ChunkBatchFinished(
+                        unpack::<game::ChunkBatchFinished>(packet).batch_size.0,
+                    ),
                     (Phase::Game, game::ContainerClose::PACKET_ID) => {
                         S2c::ContainerClose(unpack::<game::ContainerClose>(packet).container_id.0)
                     }
