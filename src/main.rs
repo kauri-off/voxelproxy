@@ -4,6 +4,7 @@ pub mod backend;
 pub mod changelog;
 pub mod config;
 pub mod controller;
+pub mod diag;
 pub mod events;
 #[cfg(target_os = "windows")]
 pub mod hotspot_redirect;

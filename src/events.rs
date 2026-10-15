@@ -114,10 +114,32 @@ impl EventSink {
     }
 
     pub fn emit(&self, event: AppEvent) {
+        record(&event);
         let _ = self.0.unbounded_send(event);
     }
 
     pub fn client_status(&self, which: ClientId, online: bool) {
         self.emit(AppEvent::ClientStatus { which, online });
+    }
+}
+
+/// Mirrors every UI event into the diagnostic log, so it is a superset of the journal.
+fn record(event: &AppEvent) {
+    use crate::diag;
+    match event {
+        AppEvent::Log { level, message } => {
+            let level = match level {
+                LogLevel::Info | LogLevel::Success => diag::Level::Info,
+                LogLevel::Warn => diag::Level::Warn,
+                LogLevel::Error => diag::Level::Error,
+            };
+            diag::record(level, "journal", message);
+        }
+        AppEvent::UpdateProgress { downloaded, total } => {
+            if *downloaded == 0 || downloaded == total {
+                diag::info("update", format!("download {downloaded}/{total} bytes"));
+            }
+        }
+        other => diag::info("event", format!("{other:?}")),
     }
 }

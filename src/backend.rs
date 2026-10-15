@@ -10,7 +10,7 @@ use tokio::task::JoinHandle;
 
 use crate::{
     changelog::{self, ChangelogEntry},
-    config,
+    config, diag,
     events::{AppEvent, EventSink},
     logger::Logger,
     prefs, session,
@@ -58,12 +58,23 @@ impl Backend {
     }
 
     pub fn start_manual(&self, server_addr: String) {
+        diag::info(
+            "backend",
+            format!("start manual mode: server_addr={server_addr:?}"),
+        );
         self.spawn(config::send_start_manual(server_addr.clone()));
         let events = self.events.clone();
         self.start_session(async move { session::run_manual_mode(server_addr, events).await });
     }
 
     pub fn start_auto(&self, use_windivert: bool, port_min: u16, port_max: u16) {
+        diag::info(
+            "backend",
+            format!(
+                "start auto mode: use_windivert={use_windivert} ports={port_min}-{port_max} elevated={}",
+                is_elevated()
+            ),
+        );
         self.spawn(config::send_start_auto(use_windivert));
         self.set_check_mode(false);
         let events = self.events.clone();
@@ -90,11 +101,20 @@ impl Backend {
                 let _ = prev.task.await;
             }
             events.emit(AppEvent::SessionStarted);
+            let started = std::time::Instant::now();
             match AssertUnwindSafe(fut).catch_unwind().await {
-                Ok(Ok(Err(e))) => Logger::new(&events).error(e.to_string()),
-                Err(_) => Logger::new(&events).error("Сессия аварийно завершилась"),
-                _ => {}
+                Ok(Ok(Err(e))) => {
+                    diag::error("backend", format!("session failed: {e:#} ({e:?})"));
+                    Logger::new(&events).error(e.to_string())
+                }
+                Err(_) => {
+                    diag::error("backend", "session panicked");
+                    Logger::new(&events).error("Сессия аварийно завершилась")
+                }
+                Ok(Err(_)) => diag::info("backend", "session aborted"),
+                Ok(Ok(Ok(()))) => diag::info("backend", "session finished"),
             }
+            diag::info("backend", format!("session lasted {:?}", started.elapsed()));
             events.emit(AppEvent::SessionEnded);
         });
         *session = Some(Session { task, abort });
@@ -102,10 +122,12 @@ impl Backend {
 
     /// The session task emits `SessionEnded` itself once fully torn down.
     pub fn stop(&self) {
+        diag::info("backend", "stop requested");
         self.abort_existing();
     }
 
     pub fn set_check_mode(&self, value: bool) {
+        diag::info("backend", format!("check_mode={value}"));
         self.check_mode.store(value, Ordering::Relaxed);
     }
 
@@ -121,9 +143,12 @@ impl Backend {
             if cfg!(debug_assertions) || !cfg!(windows) {
                 return Ok(None);
             }
-            crate::updater::has_update(env!("CARGO_PKG_VERSION"), &log)
-                .await
-                .map_err(|e| e.to_string())
+            let result = crate::updater::has_update(env!("CARGO_PKG_VERSION"), &log).await;
+            match &result {
+                Ok(update) => diag::info("update", format!("check result: {update:?}")),
+                Err(e) => diag::warn("update", format!("check failed: {e:#}")),
+            }
+            result.map_err(|e| e.to_string())
         })
     }
 
@@ -134,10 +159,14 @@ impl Backend {
         tag: String,
     ) -> JoinHandle<Result<(), String>> {
         let events = self.events.clone();
+        diag::info("update", format!("download and install {tag} from {url}"));
         self.spawn(async move {
-            crate::updater::download_and_install(url, tag, events)
-                .await
-                .map_err(|e| e.to_string())
+            let result = crate::updater::download_and_install(url, tag, events).await;
+            match &result {
+                Ok(()) => diag::info("update", "installer launched"),
+                Err(e) => diag::error("update", format!("install failed: {e:#}")),
+            }
+            result.map_err(|e| e.to_string())
         })
     }
 }

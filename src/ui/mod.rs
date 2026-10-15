@@ -37,6 +37,7 @@ pub use gpui_kit::assets::IconName;
 const SUPPORT_POLL_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 pub fn run() {
+    crate::diag::init();
     let (events, rx) = EventSink::channel();
     let backend = Backend::new(events);
     backend.spawn(config::send_startup_ping());
@@ -327,7 +328,7 @@ impl AppView {
 
     fn handle_event(&mut self, event: AppEvent, cx: &mut Context<Self>) {
         match event {
-            AppEvent::Log { level, message } => self.push_log(level, message),
+            AppEvent::Log { level, message } => self.show_log(level, message),
             AppEvent::SessionStarted => {
                 self.phase = Phase::Running;
                 self.starting = false;
@@ -378,6 +379,21 @@ impl AppView {
     }
 
     pub fn push_log(&mut self, level: LogLevel, message: impl Into<SharedString>) {
+        let message = message.into();
+        crate::diag::record(
+            match level {
+                LogLevel::Info | LogLevel::Success => crate::diag::Level::Info,
+                LogLevel::Warn => crate::diag::Level::Warn,
+                LogLevel::Error => crate::diag::Level::Error,
+            },
+            "journal",
+            &message,
+        );
+        self.show_log(level, message);
+    }
+
+    /// Shows a line in the journal; backend lines were already recorded by `EventSink`.
+    fn show_log(&mut self, level: LogLevel, message: impl Into<SharedString>) {
         if level == LogLevel::Error {
             self.log_open = true;
         }
@@ -398,6 +414,7 @@ impl AppView {
     }
 
     pub fn set_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
+        crate::diag::info("ui", format!("mode selected: {mode:?}"));
         self.mode = mode;
         cx.notify();
     }
