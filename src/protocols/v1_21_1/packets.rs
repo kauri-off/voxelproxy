@@ -21,6 +21,8 @@ pub mod c2s {
     }
 
     pub mod configuration {
+        use uuid::Uuid;
+
         use super::*;
 
         #[derive(Packet, Debug)]
@@ -32,6 +34,17 @@ pub mod c2s {
         pub struct KeepAlive {
             pub id: i64,
         }
+
+        #[derive(Packet, Debug)]
+        #[packet(6)] // ServerboundResourcePackPacket
+        pub struct ResourcePack {
+            pub id: Uuid,
+            pub action: VarInt,
+        }
+
+        #[derive(Packet, Debug)]
+        #[packet(7)] // ServerboundSelectKnownPacks
+        pub struct SelectKnownPacks {}
     }
 
     pub mod game {
@@ -111,6 +124,8 @@ pub mod s2c {
     use super::*;
 
     pub mod configuration {
+        use uuid::Uuid;
+
         use super::*;
 
         #[derive(Packet, Debug)]
@@ -122,6 +137,16 @@ pub mod s2c {
         pub struct KeepAlive {
             pub id: i64,
         }
+
+        #[derive(Packet, Debug)]
+        #[packet(9)] // ClientboundResourcePackPushPacket
+        pub struct ResourcePackPush {
+            pub id: Uuid,
+        }
+
+        #[derive(Packet, Debug)]
+        #[packet(14)] // ClientboundSelectKnownPacks
+        pub struct SelectKnownPacks {}
     }
 
     pub mod game {
