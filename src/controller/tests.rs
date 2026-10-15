@@ -405,6 +405,64 @@ pub(crate) fn server_teleport_with_own_id_is_acked_once<W: Wire>() {
     assert_eq!(acks(&h.sent()), Vec::<i32>::new());
 }
 
+/// The server sends a teleport with our id, then the inactive client gets one of ours.
+fn server_teleport_then_ours<W: Wire>(h: &mut Harness<W>, at: Spot) -> Vec<S2c> {
+    h.serve(S2c::Position(OURS, at));
+    h.send(P, C2s::Rot(1.0, 1.0));
+    h.sent();
+    let got = h.received(S);
+    assert_eq!(got[0], S2c::Position(OURS, at));
+    assert!(got.len() > 1);
+    got
+}
+
+pub(crate) fn inactive_ack_of_server_teleport_with_own_id_is_not_ours<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    let at = spot(1.0, 2.0, 3.0, 0.0, 0.0);
+    let got = server_teleport_then_ours(&mut h, at);
+    h.received(P);
+    h.send_all(S, W::respond(got[0]));
+    assert!(h.sent().is_empty());
+
+    h.leave(P);
+    assert_eq!(h.sent(), [W::ack(OURS, at)]);
+    for packet in &got[1..] {
+        h.send_all(S, W::respond(*packet));
+    }
+    assert_eq!(acks(&h.sent()), Vec::<i32>::new());
+}
+
+pub(crate) fn failover_replays_ack_of_server_teleport_with_own_id<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    let at = spot(1.0, 2.0, 3.0, 0.0, 0.0);
+    let got = server_teleport_then_ours(&mut h, at);
+    h.received(P);
+    for packet in got {
+        h.send_all(S, W::respond(packet));
+    }
+    assert!(h.sent().is_empty());
+
+    h.leave(P);
+    assert_eq!(h.sent(), [W::ack(OURS, at)]);
+}
+
+pub(crate) fn own_ack_after_reconfiguration_is_dropped<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    let at = spot(1.0, 2.0, 3.0, 0.0, 0.0);
+    let got = server_teleport_then_ours(&mut h, at);
+    h.obey(P);
+    let got = [got, h.received(S)].concat();
+    h.send_all(S, W::respond(got[0]));
+    h.serve(S2c::StartConfiguration);
+    h.sent();
+
+    h.leave(P);
+    for packet in &got[1..] {
+        h.send_all(S, W::respond(*packet));
+    }
+    assert_eq!(acks(&h.sent()), Vec::<i32>::new());
+}
+
 pub(crate) fn container_close_is_mirrored<W: Wire>() {
     let mut h = Harness::<W>::in_game();
     h.send(P, C2s::ContainerClose(3));
@@ -757,6 +815,7 @@ macro_rules! controller_tests {
             failover_keeps_packets_held_for_new_active
             #[ignore = "bug: after failover mid-reconfiguration the new active client's game packets reach a server already in configuration"]
             failover_during_reconfiguration_keeps_server_phase
+            own_ack_after_reconfiguration_is_dropped
         );
     };
     () => {
@@ -770,8 +829,9 @@ macro_rules! controller_tests {
             own_acks_in_flight_are_dropped_after_failover
             server_teleports_after_failover_are_acked_once
             server_teleports_after_inactive_left_are_acked_once
-            #[ignore = "bug: any ack of id -1 counts as ours, so a server teleport with id -1 can be acked twice"]
             server_teleport_with_own_id_is_acked_once
+            inactive_ack_of_server_teleport_with_own_id_is_not_ours
+            failover_replays_ack_of_server_teleport_with_own_id
             container_close_is_mirrored
             active_pong_reaches_server_once
             failover_sends_pongs_only_new_active_answered

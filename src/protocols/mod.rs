@@ -465,7 +465,7 @@ macro_rules! config_phase_tests {
             assert!(c2s(&mut data, &rot(1.0, 0.0), P, P, false).is_none());
             s2c(&mut data, &s2c::game::StartConfiguration {}, true);
             assert!(c2s(&mut data, &rot(2.0, 0.0), P, P, true).is_none());
-            assert_eq!(data.own_teleports, [0, 0]);
+            assert!(data.unacked.iter().all(VecDeque::is_empty));
         }
 
         #[test]
