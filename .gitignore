@@ -34,3 +34,5 @@ TG*
 debug.log
 TODO.md
 .aider*
+# claude code worktrees
+.claude/worktrees/
