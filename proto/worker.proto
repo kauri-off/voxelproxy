@@ -11,15 +11,8 @@ service Worker {
   rpc SessionJoined (SessionJoinedRequest) returns (SessionJoinedResponse);
   rpc ActiveClientSwitched (ActiveClientSwitchedRequest) returns (ActiveClientSwitchedResponse);
   rpc SessionEnded (SessionEndedRequest) returns (SessionEndedResponse);
+  rpc ChatMessageSent (ChatMessageSentRequest) returns (ChatMessageSentResponse);
 
-  // Legacy lifecycle of clients before 7.3, replaced by the calls above.
-  rpc Ping (PingRequest) returns (PingResponse);
-  rpc ManualStart (ManualStartRequest) returns (ManualStartResponse);
-  rpc AutoStart (AutoStartRequest) returns (AutoStartResponse);
-  rpc Join (JoinRequest) returns (JoinResponse);
-
-  // Chat of a session, keyed by its session id.
-  rpc SendProtocolMetadata (SendProtocolMetadataRequest) returns (SendProtocolMetadataResponse);
   rpc SendDeveloperMessage (SendDeveloperMessageRequest) returns (SendDeveloperMessageResponse);
   // Returns the whole support conversation of `client.install_id`, oldest first.
   rpc ListDeveloperMessages (ListDeveloperMessagesRequest) returns (ListDeveloperMessagesResponse);
@@ -115,38 +108,13 @@ message SessionEndedRequest {
 }
 message SessionEndedResponse {}
 
-message PingRequest {
-  ClientInfo client = 1;
-}
-message PingResponse {}
-
-message ManualStartRequest {
-  ClientInfo client = 1;
-  string server_addr = 2;
-}
-message ManualStartResponse {}
-
-message AutoStartRequest {
-  ClientInfo client = 1;
-  bool use_windivert = 2;
-}
-message AutoStartResponse {}
-
-message JoinRequest {
-  ClientInfo client = 1;
-  string session_id = 2;
-  string server_addr = 3;
-  string nickname = 4;
-  int32 protocol_version = 5;
-}
-message JoinResponse {}
-
-message SendProtocolMetadataRequest {
+// Chat message the user sent during a session.
+message ChatMessageSentRequest {
   string session_id = 1;
-  string payload = 2;
-  bool custom = 3;
+  string text = 2;
+  bool is_command = 3;
 }
-message SendProtocolMetadataResponse {}
+message ChatMessageSentResponse {}
 
 enum MessageAuthor {
   MESSAGE_AUTHOR_UNSPECIFIED = 0;
