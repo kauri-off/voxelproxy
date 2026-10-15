@@ -498,7 +498,8 @@ mod tests {
                 | C2s::ConfigurationAck
                 | C2s::KnownPacks
                 | C2s::AcceptCodeOfConduct
-                | C2s::ResourcePack(..) => {
+                | C2s::ResourcePack(..)
+                | C2s::ChunkBatchReceived(_) => {
                     panic!("{packet:?} does not exist in 1.20.1")
                 }
             }
@@ -525,7 +526,8 @@ mod tests {
                 | S2c::FinishConfiguration
                 | S2c::SelectKnownPacks
                 | S2c::CodeOfConduct
-                | S2c::ResourcePackPush(_) => {
+                | S2c::ResourcePackPush(_)
+                | S2c::ChunkBatchFinished(_) => {
                     panic!("{packet:?} does not exist in 1.20.1")
                 }
             }
