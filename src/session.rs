@@ -187,11 +187,7 @@ async fn start_pair(
     );
     events.emit(AppEvent::NickName(nickname.clone()));
     events.emit(AppEvent::ServerAddr(upstream.server_addr.clone()));
-    tokio::spawn(config::send_join(
-        upstream.server_addr,
-        nickname,
-        primary.protocol_version,
-    ));
+    config::report_join(upstream.server_addr, nickname, primary.protocol_version);
 
     crate::proxy::run_proxy_session(
         primary.stream,

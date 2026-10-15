@@ -3,10 +3,22 @@ syntax = "proto3";
 package worker.v1;
 
 service Worker {
+  // Lifecycle tree: install_id > app run > session > session events.
+  // The client generates every id, so it never waits for a reply to report.
+  rpc AppStarted (AppStartedRequest) returns (AppStartedResponse);
+  rpc AppClosed (AppClosedRequest) returns (AppClosedResponse);
+  rpc SessionStarted (SessionStartedRequest) returns (SessionStartedResponse);
+  rpc SessionJoined (SessionJoinedRequest) returns (SessionJoinedResponse);
+  rpc ActiveClientSwitched (ActiveClientSwitchedRequest) returns (ActiveClientSwitchedResponse);
+  rpc SessionEnded (SessionEndedRequest) returns (SessionEndedResponse);
+
+  // Legacy lifecycle of clients before 7.3, replaced by the calls above.
   rpc Ping (PingRequest) returns (PingResponse);
   rpc ManualStart (ManualStartRequest) returns (ManualStartResponse);
   rpc AutoStart (AutoStartRequest) returns (AutoStartResponse);
   rpc Join (JoinRequest) returns (JoinResponse);
+
+  // Chat of a session, keyed by its session id.
   rpc SendProtocolMetadata (SendProtocolMetadataRequest) returns (SendProtocolMetadataResponse);
   rpc SendDeveloperMessage (SendDeveloperMessageRequest) returns (SendDeveloperMessageResponse);
   // Returns the whole support conversation of `client.install_id`, oldest first.
@@ -23,6 +35,85 @@ message ClientInfo {
   // installation so developer replies can be routed back to it.
   string install_id = 4;
 }
+
+message AppStartedRequest {
+  ClientInfo client = 1;
+  // Random UUID of this app run.
+  string app_id = 2;
+}
+message AppStartedResponse {}
+
+message AppClosedRequest {
+  string app_id = 1;
+  int64 uptime_ms = 2;
+}
+message AppClosedResponse {}
+
+enum SessionMode {
+  SESSION_MODE_UNSPECIFIED = 0;
+  SESSION_MODE_AUTO = 1;
+  SESSION_MODE_MANUAL = 2;
+}
+
+message SessionStartedRequest {
+  ClientInfo client = 1;
+  string app_id = 2;
+  // Random UUID of this session; a join and the chat of the session use it too.
+  string session_id = 3;
+  SessionMode mode = 4;
+  // Manual mode only.
+  string server_addr = 5;
+  // Auto mode only.
+  bool use_windivert = 6;
+}
+message SessionStartedResponse {}
+
+// Sent once both clients connected and the upstream server accepted the connection.
+message SessionJoinedRequest {
+  ClientInfo client = 1;
+  string session_id = 2;
+  string server_addr = 3;
+  string nickname = 4;
+  int32 protocol_version = 5;
+}
+message SessionJoinedResponse {}
+
+enum ClientRole {
+  CLIENT_ROLE_UNSPECIFIED = 0;
+  CLIENT_ROLE_PRIMARY = 1;
+  CLIENT_ROLE_SECONDARY = 2;
+}
+
+// The active client disconnected and the other one took over.
+message ActiveClientSwitchedRequest {
+  string session_id = 1;
+  // The client that is active now.
+  ClientRole active = 2;
+  // Answers replayed to the server on behalf of the new active client.
+  uint32 replayed_packets = 3;
+  // Time since the session started.
+  int64 session_uptime_ms = 4;
+}
+message ActiveClientSwitchedResponse {}
+
+enum SessionEndReason {
+  SESSION_END_REASON_UNSPECIFIED = 0;
+  // Both clients or the server disconnected.
+  SESSION_END_REASON_FINISHED = 1;
+  // The user stopped it, started another session or closed the app.
+  SESSION_END_REASON_STOPPED = 2;
+  SESSION_END_REASON_FAILED = 3;
+  SESSION_END_REASON_PANICKED = 4;
+}
+
+message SessionEndedRequest {
+  string session_id = 1;
+  SessionEndReason reason = 2;
+  // Set when the reason is FAILED.
+  string error = 3;
+  int64 duration_ms = 4;
+}
+message SessionEndedResponse {}
 
 message PingRequest {
   ClientInfo client = 1;
