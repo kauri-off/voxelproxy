@@ -58,7 +58,19 @@ pub(crate) enum C2s {
     /// The pack id is only on the wire for versions with `PACK_IDS`.
     ResourcePack(u8, Pack),
     ChunkBatchReceived(f32),
+    ChatAck(i32),
+    Chat(Seen),
+    /// A command with signable arguments, the only kind carrying acks since 1.20.5.
+    SignedCommand(Seen),
     Raw(i32),
+}
+
+/// A `LastSeenMessages.Update`; the checksum is only on the wire for versions with `CHECKSUM`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Seen {
+    pub offset: i32,
+    pub acked: u32,
+    pub checksum: u8,
 }
 
 /// Resource pack answers, numbered like `ServerboundResourcePackPacket.Action`.
@@ -97,6 +109,8 @@ pub(crate) enum S2c {
     CodeOfConduct,
     ResourcePackPush(u8),
     ChunkBatchFinished(i32),
+    /// A player message, with the byte its signature is filled with if it is signed.
+    PlayerChat(Option<u8>),
     Raw(i32, usize),
 }
 
@@ -114,6 +128,8 @@ pub(crate) trait Wire: Default + Into<Version> {
     const ACK_MOVES: bool = false;
     /// Resource packs have UUIDs and a DOWNLOADED answer, since 1.20.3.
     const PACK_IDS: bool = true;
+    /// Last seen updates carry a checksum, since 1.21.5.
+    const CHECKSUM: bool = false;
 
     fn write_c2s(phase: Phase, packet: C2s) -> UncompressedPacket;
     fn write_s2c(phase: Phase, packet: S2c) -> UncompressedPacket;
@@ -145,7 +161,7 @@ pub(crate) trait Wire: Default + Into<Version> {
                 C2s::ResourcePack(id, Pack::Loaded),
             ],
             S2c::ChunkBatchFinished(_) => vec![C2s::ChunkBatchReceived(CHUNKS_PER_TICK)],
-            S2c::ContainerClose(_) | S2c::Raw(..) => vec![],
+            S2c::ContainerClose(_) | S2c::PlayerChat(_) | S2c::Raw(..) => vec![],
         }
     }
 }
@@ -1540,6 +1556,418 @@ pub(crate) fn pack_pushed_again_is_answered_again<W: Wire>() {
     assert_eq!(h.sent(), W::respond(PACK));
 }
 
+/// A test signature told apart by its first byte, so windows get distinct checksums.
+pub(crate) fn signature(id: u8) -> [u8; 256] {
+    let mut bytes = [0; 256];
+    bytes[0] = id;
+    bytes
+}
+
+/// `MessageSignature.checksum`.
+fn signature_hash(id: u8) -> i32 {
+    signature(id).iter().fold(1i32, |hash, b| {
+        hash.wrapping_mul(31).wrapping_add(*b as i8 as i32)
+    })
+}
+
+/// `LastSeenMessages.computeChecksum`.
+fn checksum(signatures: &[u8]) -> u8 {
+    let hash = signatures.iter().fold(1i32, |hash, s| {
+        hash.wrapping_mul(31).wrapping_add(signature_hash(*s))
+    });
+    match hash as u8 {
+        0 => 1,
+        b => b,
+    }
+}
+
+/// A vanilla client's `LastSeenMessagesTracker`.
+#[derive(Default, Clone)]
+pub(crate) struct ClientChat {
+    tracked: [Option<(u8, bool)>; 20],
+    tail: usize,
+    offset: i32,
+    last: Option<u8>,
+}
+
+impl ClientChat {
+    /// `ClientPacketListener.markMessageAsProcessed`, returning the ack it may send.
+    fn see(&mut self, signature: u8, shown: bool) -> Option<C2s> {
+        if self.last == Some(signature) {
+            return None;
+        }
+        self.last = Some(signature);
+        self.tracked[self.tail] = shown.then_some((signature, true));
+        self.tail = (self.tail + 1) % 20;
+        self.offset += 1;
+        if self.offset > 64 { self.ack() } else { None }
+    }
+
+    /// `ClientPacketListener.sendChatAcknowledgement`.
+    fn ack(&mut self) -> Option<C2s> {
+        let offset = std::mem::take(&mut self.offset);
+        (offset > 0).then_some(C2s::ChatAck(offset))
+    }
+
+    /// `LastSeenMessagesTracker.generateAndApplyUpdate`.
+    fn update(&mut self, with_checksum: bool) -> Seen {
+        let mut acked = 0;
+        let mut signatures = vec![];
+        for i in 0..20 {
+            let slot = &mut self.tracked[(self.tail + i) % 20];
+            if let Some((signature, _)) = *slot {
+                acked |= 1 << i;
+                signatures.push(signature);
+                *slot = Some((signature, false));
+            }
+        }
+        Seen {
+            offset: std::mem::take(&mut self.offset),
+            acked,
+            checksum: if with_checksum {
+                checksum(&signatures)
+            } else {
+                0
+            },
+        }
+    }
+}
+
+/// The server's `LastSeenMessagesValidator`; an error is a `chat_validation_failed` kick.
+pub(crate) struct ServerChat {
+    tracked: Vec<Option<(u8, bool)>>,
+    last: Option<u8>,
+}
+
+impl Default for ServerChat {
+    fn default() -> Self {
+        Self {
+            tracked: vec![None; 20],
+            last: None,
+        }
+    }
+}
+
+impl ServerChat {
+    fn add(&mut self, signature: u8) {
+        if self.last != Some(signature) {
+            self.tracked.push(Some((signature, true)));
+            self.last = Some(signature);
+        }
+    }
+
+    fn apply_offset(&mut self, offset: i32) -> Result<(), String> {
+        let max = self.tracked.len() - 20;
+        if offset < 0 || offset as usize > max {
+            return Err(format!("advanced by {offset}, expected at most {max}"));
+        }
+        self.tracked.drain(..offset as usize);
+        Ok(())
+    }
+
+    fn apply_update(&mut self, seen: Seen) -> Result<(), String> {
+        self.apply_offset(seen.offset)?;
+        if seen.acked >> 20 != 0 {
+            return Err(format!("acked {:#x} is wider than the window", seen.acked));
+        }
+        let mut signatures = vec![];
+        for (i, slot) in self.tracked.iter_mut().take(20).enumerate() {
+            match (seen.acked >> i & 1 == 1, *slot) {
+                (true, None) => return Err(format!("acked unknown message at {i}")),
+                (true, Some((signature, _))) => {
+                    *slot = Some((signature, false));
+                    signatures.push(signature);
+                }
+                (false, Some((_, false))) => {
+                    return Err(format!("ignored acknowledged message at {i}"));
+                }
+                (false, _) => *slot = None,
+            }
+        }
+        if seen.checksum != 0 && seen.checksum != checksum(&signatures) {
+            return Err("checksum mismatch".into());
+        }
+        Ok(())
+    }
+
+    fn handle(&mut self, packet: C2s) -> Result<(), String> {
+        match packet {
+            C2s::ChatAck(offset) => self.apply_offset(offset),
+            C2s::Chat(seen) | C2s::SignedCommand(seen) => self.apply_update(seen),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// Signed chat through the proxy, with vanilla chat state on the clients and the server.
+pub(crate) struct ChatLab<W> {
+    pub h: Harness<W>,
+    server: ServerChat,
+    clients: PerClient<ClientChat>,
+}
+
+impl<W: Wire> ChatLab<W> {
+    pub fn new() -> Self {
+        Self {
+            h: Harness::in_game(),
+            server: ServerChat::default(),
+            clients: PerClient::default(),
+        }
+    }
+
+    /// The server sends signed player messages.
+    pub fn broadcast(&mut self, signatures: impl IntoIterator<Item = u8>) {
+        for signature in signatures {
+            self.h.serve(S2c::PlayerChat(Some(signature)));
+            self.server.add(signature);
+        }
+    }
+
+    /// The client shows what it got, except messages in `hidden`, acking like vanilla.
+    pub fn read_hiding(&mut self, client: ClientId, hidden: &[u8]) {
+        for packet in self.h.received(client) {
+            if let S2c::PlayerChat(Some(signature)) = packet
+                && let Some(ack) = self.clients[client].see(signature, !hidden.contains(&signature))
+            {
+                self.h.send(client, ack);
+            }
+        }
+    }
+
+    pub fn read(&mut self, client: ClientId) {
+        self.read_hiding(client, &[]);
+    }
+
+    pub fn chat(&mut self, client: ClientId) -> Seen {
+        let seen = self.clients[client].update(W::CHECKSUM);
+        self.h.send(client, C2s::Chat(seen));
+        seen
+    }
+
+    pub fn command(&mut self, client: ClientId) -> Seen {
+        let seen = self.clients[client].update(W::CHECKSUM);
+        self.h.send(client, C2s::SignedCommand(seen));
+        seen
+    }
+
+    /// What the server got, after its validator accepted every packet.
+    pub fn check(&mut self) -> Vec<C2s> {
+        let sent = self.h.sent();
+        for packet in &sent {
+            if let Err(e) = self.server.handle(*packet) {
+                panic!("chat_validation_failed on {packet:?}: {e}");
+            }
+        }
+        sent
+    }
+}
+
+pub(crate) fn active_chat_acks_pass_unchanged<W: Wire>() {
+    let mut lab = ChatLab::<W>::new();
+    lab.broadcast(1..=3);
+    lab.read(P);
+    lab.read(S);
+    let seen = lab.chat(P);
+    assert_eq!(lab.check(), [C2s::Chat(seen)]);
+    lab.broadcast(4..=70);
+    lab.read(P);
+    assert_eq!(lab.check(), [C2s::ChatAck(65)]);
+    let seen = lab.command(P);
+    assert_eq!(lab.check(), [C2s::SignedCommand(seen)]);
+}
+
+pub(crate) fn inactive_chat_acks_never_reach_server<W: Wire>() {
+    let mut lab = ChatLab::<W>::new();
+    lab.broadcast(1..=70);
+    lab.read(S);
+    lab.chat(S);
+    lab.command(S);
+    assert!(lab.check().is_empty());
+}
+
+pub(crate) fn chat_after_failover_matches_server_window<W: Wire>() {
+    let mut lab = ChatLab::<W>::new();
+    lab.broadcast(1..=3);
+    lab.read(P);
+    lab.read(S);
+    lab.chat(P);
+    lab.check();
+
+    lab.h.leave(P);
+    let seen = lab.chat(S);
+    assert_eq!(lab.check(), [C2s::Chat(Seen { offset: 0, ..seen })]);
+    lab.broadcast(4..=5);
+    lab.read(S);
+    let seen = lab.command(S);
+    assert_eq!(lab.check(), [C2s::SignedCommand(seen)]);
+}
+
+pub(crate) fn chat_ack_after_failover_matches_server_window<W: Wire>() {
+    let mut lab = ChatLab::<W>::new();
+    lab.broadcast(1..=10);
+    lab.read(P);
+    lab.read(S);
+    lab.chat(P);
+    lab.check();
+
+    lab.h.leave(P);
+    lab.broadcast(11..=70);
+    lab.read(S);
+    assert_eq!(lab.check(), [C2s::ChatAck(55)]);
+    let seen = lab.chat(S);
+    assert_eq!(lab.check(), [C2s::Chat(seen)]);
+}
+
+pub(crate) fn chat_ack_server_already_got_is_dropped<W: Wire>() {
+    let mut lab = ChatLab::<W>::new();
+    lab.broadcast(1..=65);
+    lab.read(P);
+    assert_eq!(lab.check(), [C2s::ChatAck(65)]);
+    lab.broadcast(66..=67);
+    lab.read(P);
+    lab.chat(P);
+    lab.check();
+
+    lab.h.leave(P);
+    lab.read(S);
+    assert!(lab.check().is_empty());
+    let seen = lab.chat(S);
+    assert_eq!(lab.check(), [C2s::Chat(Seen { offset: 0, ..seen })]);
+}
+
+pub(crate) fn lagging_client_keeps_acks_server_got<W: Wire>() {
+    let mut lab = ChatLab::<W>::new();
+    lab.broadcast(1..=3);
+    lab.read(P);
+    lab.chat(P);
+    lab.check();
+
+    // The secondary chats before it shows the messages the primary acked.
+    lab.h.leave(P);
+    assert_eq!(lab.chat(S).acked, 0);
+    lab.check();
+    lab.read(S);
+    lab.broadcast([4]);
+    lab.read(S);
+    let seen = lab.chat(S);
+    assert_eq!(lab.check(), [C2s::Chat(Seen { offset: 1, ..seen })]);
+}
+
+/// The checksum a version puts on the wire for these acked messages.
+fn wire_checksum<W: Wire>(signatures: &[u8]) -> u8 {
+    if W::CHECKSUM { checksum(signatures) } else { 0 }
+}
+
+pub(crate) fn lagging_client_checksum_matches_server_window<W: Wire>() {
+    let mut lab = ChatLab::<W>::new();
+    lab.broadcast(1..=65);
+    lab.read(P);
+    lab.read(S);
+    assert_eq!(lab.check(), [C2s::ChatAck(65)]);
+    lab.broadcast([66]);
+    lab.read(P);
+    lab.chat(P);
+    lab.check();
+
+    // The secondary acks the same 20 slots as the server, one message earlier.
+    lab.h.leave(P);
+    let seen = lab.chat(S);
+    assert_eq!((seen.offset, seen.acked), (0, (1 << 20) - 1));
+    let synced = Seen {
+        checksum: wire_checksum::<W>(&(47..=66).collect::<Vec<_>>()),
+        ..seen
+    };
+    assert_eq!(lab.check(), [C2s::Chat(synced)]);
+}
+
+pub(crate) fn hidden_message_acked_by_old_active_stays_acked<W: Wire>() {
+    let mut lab = ChatLab::<W>::new();
+    lab.broadcast(1..=3);
+    lab.read(P);
+    lab.read_hiding(S, &[2]);
+    lab.chat(S);
+    lab.chat(P);
+    lab.check();
+
+    // The window lines up, but only the primary acked the second message.
+    lab.h.leave(P);
+    let seen = lab.chat(S);
+    assert_eq!((seen.offset, seen.acked), (0, 0b101 << 17));
+    let synced = Seen {
+        offset: 0,
+        acked: 0b111 << 17,
+        checksum: wire_checksum::<W>(&[1, 2, 3]),
+    };
+    assert_eq!(lab.check(), [C2s::Chat(synced)]);
+}
+
+pub(crate) fn message_ignored_by_old_active_is_not_acked<W: Wire>() {
+    let mut lab = ChatLab::<W>::new();
+    lab.broadcast(1..=3);
+    lab.read_hiding(P, &[2]);
+    lab.read(S);
+    lab.chat(S);
+    lab.chat(P);
+    lab.check();
+
+    lab.h.leave(P);
+    let seen = lab.chat(S);
+    assert_eq!((seen.offset, seen.acked), (0, 0b111 << 17));
+    let synced = Seen {
+        offset: 0,
+        acked: 0b101 << 17,
+        checksum: wire_checksum::<W>(&[1, 3]),
+    };
+    assert_eq!(lab.check(), [C2s::Chat(synced)]);
+}
+
+pub(crate) fn unsigned_chat_is_not_tracked<W: Wire>() {
+    let mut lab = ChatLab::<W>::new();
+    for _ in 0..70 {
+        lab.h.serve(S2c::PlayerChat(None));
+    }
+    lab.read(P);
+    lab.read(S);
+    lab.h.leave(P);
+    let seen = lab.chat(S);
+    assert_eq!(seen.offset, 0);
+    assert_eq!(lab.check(), [C2s::Chat(seen)]);
+}
+
+pub(crate) fn chat_window_restarts_with_game_listener<W: Wire>() {
+    let mut lab = ChatLab::<W>::new();
+    lab.broadcast(1..=3);
+    lab.read(P);
+    lab.read(S);
+    lab.chat(P);
+    lab.check();
+    lab.broadcast(4..=5);
+
+    // `handleConfigurationStart` acks what the client saw before it acks the switch.
+    lab.h.serve(S2c::StartConfiguration);
+    for client in [P, S] {
+        lab.read(client);
+        let ack = lab.clients[client].ack().unwrap();
+        lab.h.send_all(client, [ack, C2s::ConfigurationAck]);
+    }
+    assert_eq!(lab.check(), [C2s::ChatAck(2), C2s::ConfigurationAck]);
+    lab.h.serve(S2c::FinishConfiguration);
+    lab.h.obey(P);
+    lab.h.obey(S);
+    assert_eq!(lab.check(), [C2s::FinishConfiguration]);
+    lab.server = ServerChat::default();
+    lab.clients = PerClient::default();
+
+    lab.broadcast(6..=8);
+    lab.read(P);
+    lab.read(S);
+    let seen = lab.chat(P);
+    assert_eq!(lab.check(), [C2s::Chat(seen)]);
+    lab.h.leave(P);
+    let seen = lab.chat(S);
+    assert_eq!(lab.check(), [C2s::Chat(Seen { offset: 0, ..seen })]);
+}
+
 /// Just over half the budget, so the second one overflows it.
 const BIG: usize = PEER_QUEUE_BYTES / 2 + 1;
 
@@ -1616,7 +2044,7 @@ macro_rules! controller_tests {
         }
     };
     (configuration $($extra:ident)*) => {
-        $crate::controller::tests::controller_tests!(@common
+        $crate::controller::tests::controller_tests!(signed_chat
             nothing_is_mirrored_during_reconfiguration
             start_configuration_holds_packets_until_ack
             finish_configuration_holds_packets_until_ack
@@ -1657,6 +2085,22 @@ macro_rules! controller_tests {
             chunk_batch_answer_reaches_server_after_inactive_left
             failover_chunk_batch_answer_follows_server_order
             chunk_batches_of_closed_game_listener_are_forgotten
+            chat_window_restarts_with_game_listener
+            $($extra)*
+        );
+    };
+    (signed_chat $($extra:ident)*) => {
+        $crate::controller::tests::controller_tests!(@common
+            active_chat_acks_pass_unchanged
+            inactive_chat_acks_never_reach_server
+            chat_after_failover_matches_server_window
+            chat_ack_after_failover_matches_server_window
+            chat_ack_server_already_got_is_dropped
+            lagging_client_keeps_acks_server_got
+            lagging_client_checksum_matches_server_window
+            hidden_message_acked_by_old_active_stays_acked
+            message_ignored_by_old_active_is_not_acked
+            unsigned_chat_is_not_tracked
             $($extra)*
         );
     };

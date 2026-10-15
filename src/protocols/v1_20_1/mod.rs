@@ -3,11 +3,12 @@ pub mod packets;
 use std::collections::VecDeque;
 
 use mc_protocol::{
-    packet::{RawPacket, UncompressedPacket},
+    packet::{PacketId, RawPacket, UncompressedPacket},
+    ser::Serialize,
     varint::VarInt,
 };
 
-use super::{PacketIdReader, VersionProtocol, decode};
+use super::{Fixed, PacketIdReader, VersionProtocol, decode};
 use crate::{
     config,
     events::{ClientId, PerClient},
@@ -17,6 +18,8 @@ use packets::{c2s, s2c};
 
 /// Vanilla servers never issue negative teleport ids.
 const TELEPORT_ID: i32 = -1;
+/// Messages in the last seen window, see `LastSeenMessagesValidator`.
+const LAST_SEEN: usize = 20;
 
 pub struct VersionData {
     pub position: s2c::game::Position,
@@ -25,6 +28,7 @@ pub struct VersionData {
     pub pings: Vec<PingSync>,
     pub teleports: Vec<TeleportSync>,
     pub keep_alives: Vec<KeepAliveSync>,
+    pub chat: ChatSync,
     /// Counts tracked pings, teleports and keep-alives in server stream order.
     pub seq: u64,
     pub threshold: Option<i32>,
@@ -53,6 +57,7 @@ impl VersionData {
             pings: vec![],
             teleports: vec![],
             keep_alives: vec![],
+            chat: ChatSync::default(),
             seq: 0,
             threshold: None,
             ids: PacketIdReader::default(),
@@ -165,6 +170,13 @@ impl VersionData {
         let id = self.ids.read(packet, self.threshold)?;
 
         match id {
+            s2c::game::Login::PACKET_ID => self.chat.restart_server(),
+            s2c::game::PlayerChat::PACKET_ID => {
+                let chat: s2c::game::PlayerChat = decode(packet, self.threshold)?;
+                if let Some(signature) = chat.signature {
+                    self.chat.track(signature);
+                }
+            }
             s2c::game::Ping::PACKET_ID if both_online => {
                 let ping: s2c::game::Ping = decode(packet, self.threshold)?;
                 self.seq += 1;
@@ -306,16 +318,84 @@ impl VersionData {
                     )));
                 }
             }
-            c2s::game::ChatCommand::PACKET_ID | c2s::game::Chat::PACKET_ID => {
+            c2s::game::ChatCommand::PACKET_ID => {
                 if is_active && let Ok(text) = decode::<String>(packet, self.threshold) {
-                    let is_command = id == c2s::game::ChatCommand::PACKET_ID;
-                    config::report_chat(text, is_command);
+                    config::report_chat(text, true);
                 }
+                let mut command: c2s::game::ChatCommand = decode(packet, self.threshold)?;
+                if !command.argument_signatures.is_empty() {
+                    warn_signed(client_id);
+                }
+                if self.sync_last_seen(&mut command.last_seen, client_id, is_active) {
+                    return Ok(Some(self.rewrite(&command)?));
+                }
+            }
+            c2s::game::Chat::PACKET_ID => {
+                if is_active && let Ok(text) = decode::<String>(packet, self.threshold) {
+                    config::report_chat(text, false);
+                }
+                let mut chat: c2s::game::Chat = decode(packet, self.threshold)?;
+                if chat.signature.is_some() {
+                    warn_signed(client_id);
+                }
+                if self.sync_last_seen(&mut chat.last_seen, client_id, is_active) {
+                    return Ok(Some(self.rewrite(&chat)?));
+                }
+            }
+            c2s::game::CustomPayload::PACKET_ID => {
+                let payload: c2s::game::CustomPayload = decode(packet, self.threshold)?;
+                if payload.channel == "minecraft:brand" {
+                    self.chat.restart_client(client_id);
+                }
+            }
+            c2s::game::ChatAck::PACKET_ID => {
+                let ack: c2s::game::ChatAck = decode(packet, self.threshold)?;
+                let relay = is_active && self.chat.current(client_id);
+                return Ok(match self.chat.offset(client_id, ack.offset.0, relay) {
+                    Some(offset) if offset == ack.offset.0 => None,
+                    // `sendChatAcknowledgement` never sends an empty ack.
+                    Some(0) => Some(ServerBoundEvent::SkipRelay),
+                    Some(offset) => Some(self.rewrite(&c2s::game::ChatAck {
+                        offset: VarInt(offset),
+                    })?),
+                    None => None,
+                });
             }
             _ => {}
         };
 
         Ok(None)
+    }
+
+    /// Moves a client's last seen update onto the server's window, returning whether it changed.
+    fn sync_last_seen(
+        &mut self,
+        last_seen: &mut c2s::game::LastSeen,
+        client_id: ClientId,
+        is_active: bool,
+    ) -> bool {
+        let relay = is_active && self.chat.current(client_id);
+        let acked = last_seen.acknowledged.bits();
+        let Some((offset, synced)) = self
+            .chat
+            .update(client_id, last_seen.offset.0, acked, relay)
+        else {
+            return false;
+        };
+        if offset == last_seen.offset.0 && synced == acked {
+            return false;
+        }
+        *last_seen = c2s::game::LastSeen {
+            offset: VarInt(offset),
+            acknowledged: Fixed::from_bits(synced),
+        };
+        true
+    }
+
+    fn rewrite<T: PacketId + Serialize>(&self, packet: &T) -> anyhow::Result<ServerBoundEvent> {
+        Ok(ServerBoundEvent::Rewrite(
+            UncompressedPacket::from_packet(packet)?.to_raw_packet_compressed(self.threshold)?,
+        ))
     }
 
     fn send_position_to_inactive(
@@ -421,6 +501,124 @@ impl TeleportSync {
     }
 }
 
+/// Rewritten acks break a signature, and clients behind the proxy should never sign.
+fn warn_signed(client: ClientId) {
+    crate::diag::warn(
+        "chat",
+        format!("{client:?} sent signed chat, acks may not match it"),
+    );
+}
+
+/// The server's `LastSeenMessagesValidator` and how far each client's chat acks went.
+#[derive(Debug)]
+pub struct ChatSync {
+    /// What the server tracks: its window, then pending messages, as `Some(pending)`.
+    tracked: VecDeque<Option<bool>>,
+    last_pending: Option<Fixed<256>>,
+    /// Messages the server's window moved past since its login.
+    server_offset: u64,
+    /// Messages each client's window moved past since its login.
+    offsets: PerClient<u64>,
+    /// `ClientboundLoginPacket`s the server sent, each with a fresh validator behind it.
+    server_logins: u32,
+    /// Logins each client handled, each resetting its `LastSeenMessagesTracker`.
+    logins: PerClient<u32>,
+}
+
+impl Default for ChatSync {
+    fn default() -> Self {
+        Self {
+            tracked: (0..LAST_SEEN).map(|_| None).collect(),
+            last_pending: None,
+            server_offset: 0,
+            offsets: PerClient::splat(0),
+            server_logins: 0,
+            logins: PerClient::splat(0),
+        }
+    }
+}
+
+impl ChatSync {
+    /// Each `ClientboundLoginPacket`, a backend switch behind a proxy too, has a fresh validator.
+    pub fn restart_server(&mut self) {
+        *self = Self {
+            offsets: self.offsets,
+            server_logins: self.server_logins + 1,
+            logins: self.logins,
+            ..Self::default()
+        };
+    }
+
+    /// `handleLogin` sends the brand right before it resets the tracker; repeats are ignored.
+    pub fn restart_client(&mut self, client: ClientId) {
+        if self.logins[client] < self.server_logins {
+            self.offsets[client] = 0;
+            self.logins[client] = self.server_logins;
+        }
+    }
+
+    /// Whether the client's tracker belongs to the server's latest login.
+    pub fn current(&self, client: ClientId) -> bool {
+        self.logins[client] == self.server_logins
+    }
+
+    /// `sendPlayerChatMessage` tracks every signed message, skipping a repeat of the last one.
+    pub fn track(&mut self, signature: Fixed<256>) {
+        if self.last_pending != Some(signature) {
+            self.tracked.push_back(Some(true));
+            self.last_pending = Some(signature);
+        }
+    }
+
+    /// Records a client's offset and returns the one the server expects, if it is relayed.
+    pub fn offset(&mut self, client: ClientId, offset: i32, relay: bool) -> Option<i32> {
+        self.offsets[client] += offset.max(0) as u64;
+        if !relay {
+            return None;
+        }
+        // A client behind the server moves nothing, and `applyOffset` allows no more than it sent.
+        let ahead = self.offsets[client].saturating_sub(self.server_offset) as usize;
+        let max = self.tracked.len() - LAST_SEEN;
+        if ahead > max {
+            crate::diag::warn(
+                "chat",
+                format!("{client:?} acked {ahead} messages, the server only allows {max}"),
+            );
+        }
+        let offset = ahead.min(max);
+        self.tracked.drain(..offset);
+        self.server_offset += offset as u64;
+        Some(offset as i32)
+    }
+
+    /// Records a client's update and returns the offset and acks the server expects, if relayed.
+    pub fn update(
+        &mut self,
+        client: ClientId,
+        offset: i32,
+        acked: u32,
+        relay: bool,
+    ) -> Option<(i32, u32)> {
+        let offset = self.offset(client, offset, relay)?;
+        // The server's slot `i` is the client's slot `i + behind`.
+        let behind = self.server_offset as i64 - self.offsets[client] as i64;
+        let mut synced = 0;
+        for (i, slot) in self.tracked.iter_mut().take(LAST_SEEN).enumerate() {
+            let at = i as i64 + behind;
+            let seen = (0..LAST_SEEN as i64).contains(&at) && acked >> at & 1 == 1;
+            // `applyUpdate` kicks for acking an empty slot or not acking an acked message.
+            match slot {
+                Some(pending) if seen || !*pending => {
+                    *pending = false;
+                    synced |= 1 << i;
+                }
+                _ => *slot = None,
+            }
+        }
+        Some((offset, synced))
+    }
+}
+
 #[derive(Debug)]
 pub struct KeepAliveSync {
     pub id: i64,
@@ -459,8 +657,25 @@ impl KeepAliveSync {
 
 #[cfg(test)]
 mod tests {
+    use uuid::Uuid;
+
     use super::*;
-    use crate::controller::tests::{C2s, Phase, S2c, Spot, Wire, pack, unpack};
+    use crate::controller::tests::{C2s, Phase, S2c, Seen, Spot, Wire, pack, unpack};
+
+    fn wire_last_seen(seen: Seen) -> c2s::game::LastSeen {
+        c2s::game::LastSeen {
+            offset: VarInt(seen.offset),
+            acknowledged: Fixed::from_bits(seen.acked),
+        }
+    }
+
+    fn seen(last_seen: c2s::game::LastSeen) -> Seen {
+        Seen {
+            offset: last_seen.offset.0,
+            acked: last_seen.acknowledged.bits(),
+            checksum: 0,
+        }
+    }
 
     impl Wire for VersionData {
         const CONFIGURATION: bool = false;
@@ -492,6 +707,23 @@ mod tests {
                 C2s::ContainerClose(id) => pack(&c2s::game::ContainerClose {
                     container_id: id as u8,
                 }),
+                C2s::ChatAck(offset) => pack(&c2s::game::ChatAck {
+                    offset: VarInt(offset),
+                }),
+                C2s::Chat(seen) => pack(&c2s::game::Chat {
+                    message: "hi".into(),
+                    time_stamp: 0,
+                    salt: 0,
+                    signature: None,
+                    last_seen: wire_last_seen(seen),
+                }),
+                C2s::SignedCommand(seen) => pack(&c2s::game::ChatCommand {
+                    command: "msg a b".into(),
+                    time_stamp: 0,
+                    salt: 0,
+                    argument_signatures: vec![],
+                    last_seen: wire_last_seen(seen),
+                }),
                 C2s::Raw(id) => UncompressedPacket::new(id, vec![]),
                 C2s::LoginAck
                 | C2s::FinishConfiguration
@@ -520,6 +752,11 @@ mod tests {
                 S2c::KeepAlive(id) => pack(&s2c::game::KeepAlive { id }),
                 S2c::ContainerClose(id) => pack(&s2c::game::ContainerClose {
                     container_id: id as u8,
+                }),
+                S2c::PlayerChat(signature) => pack(&s2c::game::PlayerChat {
+                    sender: Uuid::nil(),
+                    index: VarInt(0),
+                    signature: signature.map(|s| Fixed(crate::controller::tests::signature(s))),
                 }),
                 S2c::Raw(id, len) => UncompressedPacket::new(id, vec![0; len]),
                 S2c::StartConfiguration
@@ -563,6 +800,11 @@ mod tests {
                 game::ContainerClose::PACKET_ID => {
                     C2s::ContainerClose(unpack::<game::ContainerClose>(packet).container_id.into())
                 }
+                game::ChatAck::PACKET_ID => C2s::ChatAck(unpack::<game::ChatAck>(packet).offset.0),
+                game::Chat::PACKET_ID => C2s::Chat(seen(unpack::<game::Chat>(packet).last_seen)),
+                game::ChatCommand::PACKET_ID => {
+                    C2s::SignedCommand(seen(unpack::<game::ChatCommand>(packet).last_seen))
+                }
                 _ => return None,
             })
         }
@@ -589,10 +831,175 @@ mod tests {
                 game::ContainerClose::PACKET_ID => {
                     S2c::ContainerClose(unpack::<game::ContainerClose>(packet).container_id.into())
                 }
+                game::PlayerChat::PACKET_ID => {
+                    S2c::PlayerChat(unpack::<game::PlayerChat>(packet).signature.map(|s| s.0[0]))
+                }
                 _ => return None,
             })
         }
     }
 
-    crate::controller::tests::controller_tests!();
+    crate::controller::tests::controller_tests!(signed_chat);
+
+    const P: ClientId = ClientId::Primary;
+    const S: ClientId = ClientId::Secondary;
+
+    fn raw<T: PacketId + Serialize>(data: &VersionData, packet: &T) -> RawPacket {
+        UncompressedPacket::from_packet(packet)
+            .unwrap()
+            .to_raw_packet_compressed(data.threshold)
+            .unwrap()
+    }
+
+    fn c2s<T: PacketId + Serialize>(
+        data: &mut VersionData,
+        packet: &T,
+        client: ClientId,
+        active: ClientId,
+        both_online: bool,
+    ) -> Option<ServerBoundEvent> {
+        let packet = raw(data, packet);
+        data.handle_c2s(&packet, client, client == active, both_online)
+    }
+
+    fn s2c<T: PacketId + Serialize>(
+        data: &mut VersionData,
+        packet: &T,
+        both_online: bool,
+    ) -> Option<ClientBoundEvent> {
+        let packet = raw(data, packet);
+        data.handle_s2c(&packet, both_online)
+    }
+
+    fn player_chat(signature: u8) -> s2c::game::PlayerChat {
+        s2c::game::PlayerChat {
+            sender: uuid::Uuid::nil(),
+            index: VarInt(0),
+            signature: Some(Fixed([signature; 256])),
+        }
+    }
+
+    fn last_seen(offset: i32, acked: u32) -> c2s::game::LastSeen {
+        c2s::game::LastSeen {
+            offset: VarInt(offset),
+            acknowledged: Fixed::from_bits(acked),
+        }
+    }
+
+    fn chat(offset: i32, acked: u32) -> c2s::game::Chat {
+        c2s::game::Chat {
+            message: "hi".into(),
+            time_stamp: 0,
+            salt: 0,
+            signature: None,
+            last_seen: last_seen(offset, acked),
+        }
+    }
+
+    fn rewritten(data: &VersionData, event: Option<ServerBoundEvent>) -> c2s::game::LastSeen {
+        match event {
+            Some(ServerBoundEvent::Rewrite(packet)) => {
+                super::super::decode::<c2s::game::Chat>(&packet, data.threshold)
+                    .unwrap()
+                    .last_seen
+            }
+            _ => panic!("expected a rewritten chat"),
+        }
+    }
+
+    /// The server sent three signed messages and the primary acked them in a chat message.
+    fn chatted(mut data: VersionData) -> VersionData {
+        for signature in 1..=3 {
+            s2c(&mut data, &player_chat(signature), true);
+        }
+        assert!(c2s(&mut data, &chat(3, 0b111 << 17), P, P, true).is_none());
+        data.handle_client_disconnect(S);
+        data
+    }
+
+    #[test]
+    fn chat_offset_follows_server_window_across_failover() {
+        let mut data = chatted(VersionData::new());
+        let event = c2s(&mut data, &chat(3, 0b111 << 17), S, S, false);
+        assert_eq!(rewritten(&data, event), last_seen(0, 0b111 << 17));
+        s2c(&mut data, &player_chat(4), false);
+        assert!(c2s(&mut data, &chat(1, 0b1111 << 16), S, S, false).is_none());
+    }
+
+    #[test]
+    fn lagging_chat_keeps_acks_server_got() {
+        let mut data = chatted(VersionData::new());
+        let event = c2s(&mut data, &chat(0, 0), S, S, false);
+        assert_eq!(rewritten(&data, event), last_seen(0, 0b111 << 17));
+    }
+
+    #[test]
+    fn chat_ack_server_already_got_is_dropped() {
+        let mut data = chatted(VersionData::new());
+        let ack = c2s::game::ChatAck { offset: VarInt(3) };
+        assert!(matches!(
+            c2s(&mut data, &ack, S, S, false),
+            Some(ServerBoundEvent::SkipRelay)
+        ));
+    }
+
+    fn brand() -> c2s::game::CustomPayload {
+        c2s::game::CustomPayload {
+            channel: "minecraft:brand".into(),
+        }
+    }
+
+    #[test]
+    fn chat_window_restarts_with_backend_login() {
+        let mut data = VersionData::new();
+        for signature in 1..=5 {
+            s2c(&mut data, &player_chat(signature), true);
+        }
+        assert!(c2s(&mut data, &chat(5, 0b11111 << 15), P, P, true).is_none());
+        s2c(&mut data, &s2c::game::Login {}, true);
+        c2s(&mut data, &brand(), P, P, true);
+        c2s(&mut data, &brand(), S, P, true);
+        for signature in 6..=8 {
+            s2c(&mut data, &player_chat(signature), true);
+        }
+        assert!(c2s(&mut data, &chat(3, 0b111 << 17), P, P, true).is_none());
+        data.handle_client_disconnect(S);
+        let event = c2s(&mut data, &chat(3, 0b111 << 17), S, S, false);
+        assert_eq!(rewritten(&data, event), last_seen(0, 0b111 << 17));
+    }
+
+    #[test]
+    fn chat_before_client_handles_new_login_is_relayed_untouched() {
+        let mut data = VersionData::new();
+        for signature in 1..=5 {
+            s2c(&mut data, &player_chat(signature), true);
+        }
+        c2s(&mut data, &chat(5, 0b11111 << 15), P, P, true);
+        s2c(&mut data, &s2c::game::Login {}, true);
+        // The primary has not handled the new login yet and still acks its old tracker.
+        assert!(c2s(&mut data, &chat(0, 0b11111 << 15), P, P, true).is_none());
+        c2s(&mut data, &brand(), P, P, true);
+        for signature in 6..=8 {
+            s2c(&mut data, &player_chat(signature), true);
+        }
+        assert!(c2s(&mut data, &chat(3, 0b111 << 17), P, P, true).is_none());
+    }
+
+    #[test]
+    fn extra_brand_keeps_chat_in_sync() {
+        let mut data = VersionData::new();
+        s2c(&mut data, &s2c::game::Login {}, true);
+        c2s(&mut data, &brand(), P, P, true);
+        c2s(&mut data, &brand(), S, P, true);
+        for signature in 1..=3 {
+            s2c(&mut data, &player_chat(signature), true);
+        }
+        assert!(c2s(&mut data, &chat(3, 0b111 << 17), P, P, true).is_none());
+        // A mod sends the brand again mid-session; the tracker did not restart.
+        c2s(&mut data, &brand(), P, P, true);
+        c2s(&mut data, &brand(), S, P, true);
+        data.handle_client_disconnect(S);
+        let event = c2s(&mut data, &chat(3, 0b111 << 17), S, S, false);
+        assert_eq!(rewritten(&data, event), last_seen(0, 0b111 << 17));
+    }
 }
