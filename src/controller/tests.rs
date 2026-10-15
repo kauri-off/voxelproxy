@@ -1037,6 +1037,121 @@ pub(crate) fn failover_replays_keep_alive_before_phase_ack<W: Wire>() {
     assert_eq!(h.sent(), [C2s::KeepAlive(1), C2s::ConfigurationAck]);
 }
 
+pub(crate) fn configuration_ping_is_synced<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(S2c::StartConfiguration);
+    h.obey(P);
+    h.obey(S);
+    assert_eq!(h.sent(), [C2s::ConfigurationAck]);
+
+    h.serve(S2c::Ping(1));
+    h.obey(S);
+    h.obey(P);
+    assert_eq!(h.sent(), [C2s::Pong(1)]);
+
+    h.serve(S2c::Ping(2));
+    h.obey(S);
+    h.received(P);
+    assert!(h.sent().is_empty());
+    h.leave(P);
+    assert_eq!(h.sent(), [C2s::Pong(2)]);
+}
+
+pub(crate) fn ping_of_closed_listener_is_not_replayed<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(S2c::Ping(1));
+    h.serve(S2c::StartConfiguration);
+    assert_eq!(h.received(P), [S2c::Ping(1), S2c::StartConfiguration]);
+    h.send(P, C2s::ConfigurationAck);
+    assert_eq!(h.sent(), [C2s::ConfigurationAck]);
+    assert_eq!(h.obey(S), [S2c::Ping(1), S2c::StartConfiguration]);
+
+    h.leave(P);
+    assert!(h.sent().is_empty());
+}
+
+pub(crate) fn failover_replays_pong_before_phase_ack<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(S2c::Ping(1));
+    h.serve(S2c::StartConfiguration);
+    h.received(P);
+    assert_eq!(h.obey(S), [S2c::Ping(1), S2c::StartConfiguration]);
+    assert!(h.sent().is_empty());
+
+    h.leave(P);
+    assert_eq!(h.sent(), [C2s::Pong(1), C2s::ConfigurationAck]);
+}
+
+pub(crate) fn failover_relays_pong_after_phase_ack_once<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(S2c::StartConfiguration);
+    h.serve(S2c::Ping(1));
+    h.received(P);
+    assert_eq!(h.obey(S), [S2c::StartConfiguration, S2c::Ping(1)]);
+    assert!(h.sent().is_empty());
+
+    h.leave(P);
+    assert_eq!(h.sent(), [C2s::ConfigurationAck, C2s::Pong(1)]);
+}
+
+pub(crate) fn pong_to_listener_server_reached_later_is_replayed<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(S2c::StartConfiguration);
+    h.serve(S2c::Ping(1));
+    assert_eq!(h.obey(S), [S2c::StartConfiguration, S2c::Ping(1)]);
+    assert_eq!(h.received(P), [S2c::StartConfiguration]);
+    h.send(P, C2s::ConfigurationAck);
+    assert_eq!(h.sent(), [C2s::ConfigurationAck]);
+
+    // The primary leaves before it handles the ping released by its ack.
+    h.leave(P);
+    assert_eq!(h.sent(), [C2s::Pong(1)]);
+}
+
+pub(crate) fn lagging_pong_with_reused_id_is_not_counted<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(S2c::Ping(1));
+    h.serve(S2c::StartConfiguration);
+    h.obey(P);
+    h.serve(S2c::Ping(1));
+    assert_eq!(h.received(P), [S2c::Ping(1)]);
+    assert_eq!(h.sent(), [C2s::Pong(1), C2s::ConfigurationAck]);
+
+    // The secondary answers the game listener's ping after the new listener sent the same id.
+    h.send_all(S, [C2s::Pong(1), C2s::ConfigurationAck]);
+    h.received(S);
+    assert!(h.sent().is_empty());
+    h.leave(P);
+    assert!(h.sent().is_empty());
+    h.send(S, C2s::Pong(1));
+    assert_eq!(h.sent(), [C2s::Pong(1)]);
+}
+
+pub(crate) fn lagging_pongs_are_dropped_after_failover<W: Wire>() {
+    let mut h = Harness::<W>::in_game();
+    h.serve(S2c::Ping(1));
+    h.serve(S2c::StartConfiguration);
+    h.serve(S2c::Ping(2));
+    assert_eq!(
+        h.obey(P),
+        [S2c::Ping(1), S2c::StartConfiguration, S2c::Ping(2)]
+    );
+    assert_eq!(
+        h.sent(),
+        [C2s::Pong(1), C2s::ConfigurationAck, C2s::Pong(2)]
+    );
+
+    h.leave(P);
+    assert_eq!(
+        h.obey(S),
+        [S2c::Ping(1), S2c::StartConfiguration, S2c::Ping(2)]
+    );
+    assert!(h.sent().is_empty());
+    h.serve(S2c::Ping(3));
+    h.obey(S);
+    assert_eq!(h.sent(), [C2s::Pong(3)]);
+}
+
 const BATCH: S2c = S2c::ChunkBatchFinished(4);
 
 pub(crate) fn active_chunk_batch_answer_reaches_server_once<W: Wire>() {
@@ -1519,6 +1634,13 @@ macro_rules! controller_tests {
             configuration_keep_alive_is_synced
             keep_alive_of_closed_listener_is_not_replayed
             failover_replays_keep_alive_before_phase_ack
+            configuration_ping_is_synced
+            ping_of_closed_listener_is_not_replayed
+            failover_replays_pong_before_phase_ack
+            failover_relays_pong_after_phase_ack_once
+            pong_to_listener_server_reached_later_is_replayed
+            lagging_pongs_are_dropped_after_failover
+            lagging_pong_with_reused_id_is_not_counted
             resource_pack_answers_reach_server_once
             pack_answers_are_not_repeated_after_failover
             failover_replays_pack_answers_new_active_sent
