@@ -154,6 +154,8 @@ struct Reporter {
 
 /// Starts sending reports on `rt`; reports made before are dropped.
 pub fn start_reporter(rt: &Handle) {
+    // connect_lazy needs a runtime context to spawn the connection task
+    let _guard = rt.enter();
     let Some(mut client) = client() else { return };
     let (tx, mut rx) = mpsc::unbounded_channel();
     let task = rt.spawn(async move {
