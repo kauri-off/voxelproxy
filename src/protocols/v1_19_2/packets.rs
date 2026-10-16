@@ -32,17 +32,31 @@ pub mod c2s {
         }
 
         /// `LastSeenMessages.Entry`
-        #[derive(Packet, Debug)]
+        #[derive(Packet, Debug, Clone, PartialEq)]
         pub struct LastSeenEntry {
             pub profile_id: Uuid,
             pub signature: ByteArray,
         }
 
         /// `LastSeenMessages.Update`
-        #[derive(Packet, Debug)]
+        #[derive(Packet, Debug, Clone, PartialEq)]
         pub struct LastSeen {
             pub last_seen: Vec<LastSeenEntry>,
             pub last_received: Option<LastSeenEntry>,
+        }
+
+        #[derive(Packet, Debug)]
+        #[packet(3)] // ServerboundChatAckPacket
+        pub struct ChatAck {
+            pub last_seen: LastSeen,
+        }
+
+        #[derive(Packet, Debug)]
+        #[packet(8)] // ServerboundClientInformationPacket
+        pub struct ClientInformation {
+            pub language: String,
+            pub view_distance: u8,
+            pub chat_visibility: VarInt,
         }
 
         #[derive(Packet, Debug)]
@@ -119,7 +133,22 @@ pub mod s2c {
     use super::*;
 
     pub mod game {
+        use uuid::Uuid;
+
         use super::*;
+
+        #[derive(Packet, Debug)]
+        #[packet(37)] // ClientboundLoginPacket
+        pub struct Login {}
+
+        /// Read up to the header signature.
+        #[derive(Packet, Debug)]
+        #[packet(51)] // ClientboundPlayerChatPacket
+        pub struct PlayerChat {
+            pub previous_signature: Option<ByteArray>,
+            pub sender: Uuid,
+            pub signature: ByteArray,
+        }
 
         #[derive(Packet, Debug)]
         #[packet(57)] // ClientboundPlayerPositionPacket
