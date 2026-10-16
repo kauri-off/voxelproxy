@@ -29,6 +29,8 @@ pub struct VersionData {
     pub teleports: Vec<TeleportSync>,
     pub keep_alives: Vec<KeepAliveSync>,
     pub chat: ChatSync,
+    /// The latest chat time stamp the server got, from `Instant.EPOCH` like `lastChatTimeStamp`.
+    pub chat_time_stamp: i64,
     /// Counts tracked pings, teleports and keep-alives in server stream order.
     pub seq: u64,
     pub threshold: Option<i32>,
@@ -58,6 +60,7 @@ impl VersionData {
             teleports: vec![],
             keep_alives: vec![],
             chat: ChatSync::default(),
+            chat_time_stamp: 0,
             seq: 0,
             threshold: None,
             ids: PacketIdReader::default(),
@@ -326,7 +329,9 @@ impl VersionData {
                 if !command.argument_signatures.is_empty() {
                     warn_signed(client_id);
                 }
-                if self.sync_last_seen(&mut command.last_seen, client_id, is_active) {
+                let signed = !command.argument_signatures.is_empty();
+                let raised = self.order_chat(&mut command.time_stamp, client_id, is_active, signed);
+                if self.sync_last_seen(&mut command.last_seen, client_id, is_active) || raised {
                     return Ok(Some(self.rewrite(&command)?));
                 }
             }
@@ -338,7 +343,9 @@ impl VersionData {
                 if chat.signature.is_some() {
                     warn_signed(client_id);
                 }
-                if self.sync_last_seen(&mut chat.last_seen, client_id, is_active) {
+                let signed = chat.signature.is_some();
+                let raised = self.order_chat(&mut chat.time_stamp, client_id, is_active, signed);
+                if self.sync_last_seen(&mut chat.last_seen, client_id, is_active) || raised {
                     return Ok(Some(self.rewrite(&chat)?));
                 }
             }
@@ -389,6 +396,33 @@ impl VersionData {
             offset: VarInt(offset),
             acknowledged: Fixed::from_bits(synced),
         };
+        true
+    }
+
+    /// Raises a time stamp behind the last one the server got, which `updateChatOrder` kicks for.
+    fn order_chat(
+        &mut self,
+        time_stamp: &mut i64,
+        client_id: ClientId,
+        is_active: bool,
+        signed: bool,
+    ) -> bool {
+        if !is_active {
+            return false;
+        }
+        if *time_stamp >= self.chat_time_stamp {
+            self.chat_time_stamp = *time_stamp;
+            return false;
+        }
+        if signed {
+            crate::diag::warn(
+                "chat",
+                format!(
+                    "{client_id:?} sent signed chat behind the server's clock, raising it breaks the signature"
+                ),
+            );
+        }
+        *time_stamp = self.chat_time_stamp;
         true
     }
 
@@ -679,6 +713,7 @@ mod tests {
 
     impl Wire for VersionData {
         const CONFIGURATION: bool = false;
+        const CHAT_ORDER: bool = true;
 
         fn write_c2s(_: Phase, packet: C2s) -> UncompressedPacket {
             match packet {
@@ -710,16 +745,16 @@ mod tests {
                 C2s::ChatAck(offset) => pack(&c2s::game::ChatAck {
                     offset: VarInt(offset),
                 }),
-                C2s::Chat(seen) => pack(&c2s::game::Chat {
+                C2s::Chat(seen, time_stamp) => pack(&c2s::game::Chat {
                     message: "hi".into(),
-                    time_stamp: 0,
+                    time_stamp,
                     salt: 0,
                     signature: None,
                     last_seen: wire_last_seen(seen),
                 }),
-                C2s::SignedCommand(seen) => pack(&c2s::game::ChatCommand {
+                C2s::SignedCommand(seen, time_stamp) => pack(&c2s::game::ChatCommand {
                     command: "msg a b".into(),
-                    time_stamp: 0,
+                    time_stamp,
                     salt: 0,
                     argument_signatures: vec![],
                     last_seen: wire_last_seen(seen),
@@ -801,9 +836,13 @@ mod tests {
                     C2s::ContainerClose(unpack::<game::ContainerClose>(packet).container_id.into())
                 }
                 game::ChatAck::PACKET_ID => C2s::ChatAck(unpack::<game::ChatAck>(packet).offset.0),
-                game::Chat::PACKET_ID => C2s::Chat(seen(unpack::<game::Chat>(packet).last_seen)),
+                game::Chat::PACKET_ID => {
+                    let p: game::Chat = unpack(packet);
+                    C2s::Chat(seen(p.last_seen), p.time_stamp)
+                }
                 game::ChatCommand::PACKET_ID => {
-                    C2s::SignedCommand(seen(unpack::<game::ChatCommand>(packet).last_seen))
+                    let p: game::ChatCommand = unpack(packet);
+                    C2s::SignedCommand(seen(p.last_seen), p.time_stamp)
                 }
                 _ => return None,
             })

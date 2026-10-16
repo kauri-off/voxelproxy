@@ -1,4 +1,4 @@
-use mc_protocol::{Packet, varint::VarInt};
+use mc_protocol::{Packet, ser::ByteArray, varint::VarInt};
 
 pub mod c2s {
     use super::*;
@@ -22,16 +22,31 @@ pub mod c2s {
             pub id: VarInt,
         }
 
+        /// An `ArgumentSignatures` map entry.
+        #[derive(Packet, Debug)]
+        pub struct ArgumentSignature {
+            pub name: String,
+            pub signature: ByteArray,
+        }
+
         #[derive(Packet, Debug)]
         #[packet(3)] // ServerboundChatCommandPacket
         pub struct ChatCommand {
             pub command: String,
+            pub time_stamp: i64,
+            pub salt: i64,
+            pub argument_signatures: Vec<ArgumentSignature>,
+            pub signed_preview: bool,
         }
 
         #[derive(Packet, Debug)]
         #[packet(4)] // ServerboundChatPacket
         pub struct Chat {
             pub message: String,
+            pub time_stamp: i64,
+            pub salt: i64,
+            pub signature: ByteArray,
+            pub signed_preview: bool,
         }
 
         #[derive(Packet, Debug)]

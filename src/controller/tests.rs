@@ -59,9 +59,10 @@ pub(crate) enum C2s {
     ResourcePack(u8, Pack),
     ChunkBatchReceived(f32),
     ChatAck(i32),
-    Chat(Seen),
+    /// With the client's `Instant.now()` in epoch millis, as `writeInstant` puts it on the wire.
+    Chat(Seen, i64),
     /// A command with signable arguments, the only kind carrying acks since 1.20.5.
-    SignedCommand(Seen),
+    SignedCommand(Seen, i64),
     Raw(i32),
 }
 
@@ -130,6 +131,8 @@ pub(crate) trait Wire: Default + Into<Version> {
     const PACK_IDS: bool = true;
     /// Last seen updates carry a checksum, since 1.21.5.
     const CHECKSUM: bool = false;
+    /// The server kicks for chat older than the last, before 1.20.3.
+    const CHAT_ORDER: bool = false;
 
     fn write_c2s(phase: Phase, packet: C2s) -> UncompressedPacket;
     fn write_s2c(phase: Phase, packet: S2c) -> UncompressedPacket;
@@ -1633,10 +1636,12 @@ impl ClientChat {
     }
 }
 
-/// The server's `LastSeenMessagesValidator`; an error is a `chat_validation_failed` kick.
+/// The server's `LastSeenMessagesValidator` and chat order; an error is a kick.
 pub(crate) struct ServerChat {
     tracked: Vec<Option<(u8, bool)>>,
     last: Option<u8>,
+    /// `lastChatTimeStamp`, from `Instant.EPOCH`.
+    last_time_stamp: i64,
 }
 
 impl Default for ServerChat {
@@ -1644,6 +1649,7 @@ impl Default for ServerChat {
         Self {
             tracked: vec![None; 20],
             last: None,
+            last_time_stamp: 0,
         }
     }
 }
@@ -1690,10 +1696,27 @@ impl ServerChat {
         Ok(())
     }
 
-    fn handle(&mut self, packet: C2s) -> Result<(), String> {
+    /// `ServerGamePacketListenerImpl.updateChatOrder`; an error is an `out_of_order_chat` kick.
+    fn update_chat_order(&mut self, time_stamp: i64) -> Result<(), String> {
+        if time_stamp < self.last_time_stamp {
+            return Err(format!(
+                "out_of_order_chat: {time_stamp} is before {}",
+                self.last_time_stamp
+            ));
+        }
+        self.last_time_stamp = time_stamp;
+        Ok(())
+    }
+
+    fn handle(&mut self, packet: C2s, chat_order: bool) -> Result<(), String> {
         match packet {
             C2s::ChatAck(offset) => self.apply_offset(offset),
-            C2s::Chat(seen) | C2s::SignedCommand(seen) => self.apply_update(seen),
+            C2s::Chat(seen, time_stamp) | C2s::SignedCommand(seen, time_stamp) => {
+                if chat_order {
+                    self.update_chat_order(time_stamp)?;
+                }
+                self.apply_update(seen)
+            }
             _ => Ok(()),
         }
     }
@@ -1704,6 +1727,8 @@ pub(crate) struct ChatLab<W> {
     pub h: Harness<W>,
     server: ServerChat,
     clients: PerClient<ClientChat>,
+    /// Each client's clock, in epoch millis.
+    pub clocks: PerClient<i64>,
 }
 
 impl<W: Wire> ChatLab<W> {
@@ -1712,6 +1737,7 @@ impl<W: Wire> ChatLab<W> {
             h: Harness::in_game(),
             server: ServerChat::default(),
             clients: PerClient::default(),
+            clocks: PerClient::default(),
         }
     }
 
@@ -1740,13 +1766,14 @@ impl<W: Wire> ChatLab<W> {
 
     pub fn chat(&mut self, client: ClientId) -> Seen {
         let seen = self.clients[client].update(W::CHECKSUM);
-        self.h.send(client, C2s::Chat(seen));
+        self.h.send(client, C2s::Chat(seen, self.clocks[client]));
         seen
     }
 
     pub fn command(&mut self, client: ClientId) -> Seen {
         let seen = self.clients[client].update(W::CHECKSUM);
-        self.h.send(client, C2s::SignedCommand(seen));
+        self.h
+            .send(client, C2s::SignedCommand(seen, self.clocks[client]));
         seen
     }
 
@@ -1754,8 +1781,8 @@ impl<W: Wire> ChatLab<W> {
     pub fn check(&mut self) -> Vec<C2s> {
         let sent = self.h.sent();
         for packet in &sent {
-            if let Err(e) = self.server.handle(*packet) {
-                panic!("chat_validation_failed on {packet:?}: {e}");
+            if let Err(e) = self.server.handle(*packet, W::CHAT_ORDER) {
+                panic!("server kicked on {packet:?}: {e}");
             }
         }
         sent
@@ -1768,12 +1795,12 @@ pub(crate) fn active_chat_acks_pass_unchanged<W: Wire>() {
     lab.read(P);
     lab.read(S);
     let seen = lab.chat(P);
-    assert_eq!(lab.check(), [C2s::Chat(seen)]);
+    assert_eq!(lab.check(), [C2s::Chat(seen, 0)]);
     lab.broadcast(4..=70);
     lab.read(P);
     assert_eq!(lab.check(), [C2s::ChatAck(65)]);
     let seen = lab.command(P);
-    assert_eq!(lab.check(), [C2s::SignedCommand(seen)]);
+    assert_eq!(lab.check(), [C2s::SignedCommand(seen, 0)]);
 }
 
 pub(crate) fn inactive_chat_acks_never_reach_server<W: Wire>() {
@@ -1795,11 +1822,11 @@ pub(crate) fn chat_after_failover_matches_server_window<W: Wire>() {
 
     lab.h.leave(P);
     let seen = lab.chat(S);
-    assert_eq!(lab.check(), [C2s::Chat(Seen { offset: 0, ..seen })]);
+    assert_eq!(lab.check(), [C2s::Chat(Seen { offset: 0, ..seen }, 0)]);
     lab.broadcast(4..=5);
     lab.read(S);
     let seen = lab.command(S);
-    assert_eq!(lab.check(), [C2s::SignedCommand(seen)]);
+    assert_eq!(lab.check(), [C2s::SignedCommand(seen, 0)]);
 }
 
 pub(crate) fn chat_ack_after_failover_matches_server_window<W: Wire>() {
@@ -1815,7 +1842,7 @@ pub(crate) fn chat_ack_after_failover_matches_server_window<W: Wire>() {
     lab.read(S);
     assert_eq!(lab.check(), [C2s::ChatAck(55)]);
     let seen = lab.chat(S);
-    assert_eq!(lab.check(), [C2s::Chat(seen)]);
+    assert_eq!(lab.check(), [C2s::Chat(seen, 0)]);
 }
 
 pub(crate) fn chat_ack_server_already_got_is_dropped<W: Wire>() {
@@ -1832,7 +1859,7 @@ pub(crate) fn chat_ack_server_already_got_is_dropped<W: Wire>() {
     lab.read(S);
     assert!(lab.check().is_empty());
     let seen = lab.chat(S);
-    assert_eq!(lab.check(), [C2s::Chat(Seen { offset: 0, ..seen })]);
+    assert_eq!(lab.check(), [C2s::Chat(Seen { offset: 0, ..seen }, 0)]);
 }
 
 pub(crate) fn lagging_client_keeps_acks_server_got<W: Wire>() {
@@ -1850,7 +1877,7 @@ pub(crate) fn lagging_client_keeps_acks_server_got<W: Wire>() {
     lab.broadcast([4]);
     lab.read(S);
     let seen = lab.chat(S);
-    assert_eq!(lab.check(), [C2s::Chat(Seen { offset: 1, ..seen })]);
+    assert_eq!(lab.check(), [C2s::Chat(Seen { offset: 1, ..seen }, 0)]);
 }
 
 /// The checksum a version puts on the wire for these acked messages.
@@ -1877,7 +1904,7 @@ pub(crate) fn lagging_client_checksum_matches_server_window<W: Wire>() {
         checksum: wire_checksum::<W>(&(47..=66).collect::<Vec<_>>()),
         ..seen
     };
-    assert_eq!(lab.check(), [C2s::Chat(synced)]);
+    assert_eq!(lab.check(), [C2s::Chat(synced, 0)]);
 }
 
 pub(crate) fn hidden_message_acked_by_old_active_stays_acked<W: Wire>() {
@@ -1898,7 +1925,7 @@ pub(crate) fn hidden_message_acked_by_old_active_stays_acked<W: Wire>() {
         acked: 0b111 << 17,
         checksum: wire_checksum::<W>(&[1, 2, 3]),
     };
-    assert_eq!(lab.check(), [C2s::Chat(synced)]);
+    assert_eq!(lab.check(), [C2s::Chat(synced, 0)]);
 }
 
 pub(crate) fn message_ignored_by_old_active_is_not_acked<W: Wire>() {
@@ -1918,7 +1945,7 @@ pub(crate) fn message_ignored_by_old_active_is_not_acked<W: Wire>() {
         acked: 0b101 << 17,
         checksum: wire_checksum::<W>(&[1, 3]),
     };
-    assert_eq!(lab.check(), [C2s::Chat(synced)]);
+    assert_eq!(lab.check(), [C2s::Chat(synced, 0)]);
 }
 
 pub(crate) fn unsigned_chat_is_not_tracked<W: Wire>() {
@@ -1931,7 +1958,62 @@ pub(crate) fn unsigned_chat_is_not_tracked<W: Wire>() {
     lab.h.leave(P);
     let seen = lab.chat(S);
     assert_eq!(seen.offset, 0);
-    assert_eq!(lab.check(), [C2s::Chat(seen)]);
+    assert_eq!(lab.check(), [C2s::Chat(seen, 0)]);
+}
+
+/// The time stamp the server gets: raised to `last` on versions that check chat order.
+fn ordered<W: Wire>(time_stamp: i64, last: i64) -> i64 {
+    if W::CHAT_ORDER {
+        time_stamp.max(last)
+    } else {
+        time_stamp
+    }
+}
+
+pub(crate) fn chat_after_failover_to_lagging_clock_is_in_order<W: Wire>() {
+    let mut lab = ChatLab::<W>::new();
+    lab.clocks = PerClient::new(10_000, 4_000);
+    lab.broadcast(1..=3);
+    lab.read(P);
+    lab.read(S);
+    let seen = lab.chat(P);
+    assert_eq!(lab.check(), [C2s::Chat(seen, 10_000)]);
+
+    // The secondary's clock is 6 seconds behind, and only 1 more passes.
+    lab.h.leave(P);
+    let seen = lab.chat(S);
+    let time_stamp = ordered::<W>(4_000, 10_000);
+    assert_eq!(
+        lab.check(),
+        [C2s::Chat(Seen { offset: 0, ..seen }, time_stamp)]
+    );
+    lab.clocks[S] = 5_000;
+    let seen = lab.command(S);
+    let time_stamp = ordered::<W>(5_000, 10_000);
+    assert_eq!(lab.check(), [C2s::SignedCommand(seen, time_stamp)]);
+    lab.clocks[S] = 12_000;
+    let seen = lab.chat(S);
+    assert_eq!(lab.check(), [C2s::Chat(seen, 12_000)]);
+}
+
+pub(crate) fn chat_time_stamps_in_order_pass_unchanged<W: Wire>() {
+    let mut lab = ChatLab::<W>::new();
+    lab.clocks = PerClient::new(1_000, 1_500);
+    let seen = lab.chat(P);
+    assert_eq!(lab.check(), [C2s::Chat(seen, 1_000)]);
+    // The inactive client's chat never reaches the server, so it moves nothing.
+    lab.chat(S);
+    assert!(lab.check().is_empty());
+    lab.clocks[P] = 1_200;
+    let seen = lab.command(P);
+    assert_eq!(lab.check(), [C2s::SignedCommand(seen, 1_200)]);
+
+    lab.h.leave(P);
+    let seen = lab.chat(S);
+    assert_eq!(lab.check(), [C2s::Chat(seen, 1_500)]);
+    // `updateChatOrder` only rejects `isBefore`, so an equal one passes.
+    let seen = lab.command(S);
+    assert_eq!(lab.check(), [C2s::SignedCommand(seen, 1_500)]);
 }
 
 pub(crate) fn chat_window_restarts_with_game_listener<W: Wire>() {
@@ -1962,10 +2044,10 @@ pub(crate) fn chat_window_restarts_with_game_listener<W: Wire>() {
     lab.read(P);
     lab.read(S);
     let seen = lab.chat(P);
-    assert_eq!(lab.check(), [C2s::Chat(seen)]);
+    assert_eq!(lab.check(), [C2s::Chat(seen, 0)]);
     lab.h.leave(P);
     let seen = lab.chat(S);
-    assert_eq!(lab.check(), [C2s::Chat(Seen { offset: 0, ..seen })]);
+    assert_eq!(lab.check(), [C2s::Chat(Seen { offset: 0, ..seen }, 0)]);
 }
 
 /// Just over half the budget, so the second one overflows it.
@@ -2101,6 +2183,8 @@ macro_rules! controller_tests {
             hidden_message_acked_by_old_active_stays_acked
             message_ignored_by_old_active_is_not_acked
             unsigned_chat_is_not_tracked
+            chat_after_failover_to_lagging_clock_is_in_order
+            chat_time_stamps_in_order_pass_unchanged
             $($extra)*
         );
     };
