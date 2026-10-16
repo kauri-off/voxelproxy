@@ -1842,16 +1842,16 @@ mod tests {
                 C2s::ChatAck(offset) => pack(&c2s::game::ChatAck {
                     offset: VarInt(offset),
                 }),
-                C2s::Chat(seen) => pack(&c2s::game::Chat {
+                C2s::Chat(seen, time_stamp) => pack(&c2s::game::Chat {
                     message: "hi".into(),
-                    time_stamp: 0,
+                    time_stamp,
                     salt: 0,
                     signature: None,
                     last_seen: last_seen(seen),
                 }),
-                C2s::SignedCommand(seen) => pack(&c2s::game::ChatCommandSigned {
+                C2s::SignedCommand(seen, time_stamp) => pack(&c2s::game::ChatCommandSigned {
                     command: "msg a b".into(),
-                    time_stamp: 0,
+                    time_stamp,
                     salt: 0,
                     argument_signatures: vec![],
                     last_seen: last_seen(seen),
@@ -1974,10 +1974,12 @@ mod tests {
                     C2s::ChatAck(unpack::<game::ChatAck>(packet).offset.0)
                 }
                 (Phase::Game, game::Chat::PACKET_ID) => {
-                    C2s::Chat(seen(unpack::<game::Chat>(packet).last_seen))
+                    let p: game::Chat = unpack(packet);
+                    C2s::Chat(seen(p.last_seen), p.time_stamp)
                 }
                 (Phase::Game, game::ChatCommandSigned::PACKET_ID) => {
-                    C2s::SignedCommand(seen(unpack::<game::ChatCommandSigned>(packet).last_seen))
+                    let p: game::ChatCommandSigned = unpack(packet);
+                    C2s::SignedCommand(seen(p.last_seen), p.time_stamp)
                 }
                 _ => return None,
             })

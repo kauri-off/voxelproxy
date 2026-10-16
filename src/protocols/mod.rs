@@ -820,16 +820,16 @@ macro_rules! config_phase_tests {
                     C2s::ChatAck(offset) => pack(&c2s::game::ChatAck {
                         offset: VarInt(offset),
                     }),
-                    C2s::Chat(seen) => pack(&c2s::game::Chat {
+                    C2s::Chat(seen, time_stamp) => pack(&c2s::game::Chat {
                         message: "hi".into(),
-                        time_stamp: 0,
+                        time_stamp,
                         salt: 0,
                         signature: None,
                         last_seen: crate::protocols::config_phase_tests!(@write_seen $chat, seen),
                     }),
-                    C2s::SignedCommand(seen) => pack(&c2s::game::ChatCommandSigned {
+                    C2s::SignedCommand(seen, time_stamp) => pack(&c2s::game::ChatCommandSigned {
                         command: "msg a b".into(),
-                        time_stamp: 0,
+                        time_stamp,
                         salt: 0,
                         argument_signatures: vec![],
                         last_seen: crate::protocols::config_phase_tests!(@write_seen $chat, seen),
@@ -951,14 +951,17 @@ macro_rules! config_phase_tests {
                     }
                     (Phase::Game, game::Chat::PACKET_ID) => {
                         let p: game::Chat = unpack(packet);
-                        C2s::Chat(crate::protocols::config_phase_tests!(@read_seen $chat, p.last_seen))
+                        C2s::Chat(
+                            crate::protocols::config_phase_tests!(@read_seen $chat, p.last_seen),
+                            p.time_stamp,
+                        )
                     }
                     (Phase::Game, game::ChatCommandSigned::PACKET_ID) => {
                         let p: game::ChatCommandSigned = unpack(packet);
-                        C2s::SignedCommand(crate::protocols::config_phase_tests!(
-                            @read_seen $chat,
-                            p.last_seen
-                        ))
+                        C2s::SignedCommand(
+                            crate::protocols::config_phase_tests!(@read_seen $chat, p.last_seen),
+                            p.time_stamp,
+                        )
                     }
                     _ => return None,
                 })

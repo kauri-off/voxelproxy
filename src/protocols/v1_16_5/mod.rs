@@ -511,8 +511,8 @@ mod tests {
                 | C2s::ResourcePack(..)
                 | C2s::ChunkBatchReceived(_)
                 | C2s::ChatAck(_)
-                | C2s::Chat(_)
-                | C2s::SignedCommand(_) => {
+                | C2s::Chat(..)
+                | C2s::SignedCommand(..) => {
                     panic!("{packet:?} does not exist in 1.16.5")
                 }
             }

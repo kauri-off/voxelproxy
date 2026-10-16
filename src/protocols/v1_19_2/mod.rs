@@ -3,7 +3,8 @@ pub mod packets;
 use std::collections::VecDeque;
 
 use mc_protocol::{
-    packet::{RawPacket, UncompressedPacket},
+    packet::{PacketId, RawPacket, UncompressedPacket},
+    ser::Serialize,
     varint::VarInt,
 };
 
@@ -25,6 +26,8 @@ pub struct VersionData {
     pub pings: Vec<PingSync>,
     pub teleports: Vec<TeleportSync>,
     pub keep_alives: Vec<KeepAliveSync>,
+    /// The latest chat time stamp the server got, from `Instant.EPOCH` like `lastChatTimeStamp`.
+    pub chat_time_stamp: i64,
     /// Counts tracked pings, teleports and keep-alives in server stream order.
     pub seq: u64,
     pub threshold: Option<i32>,
@@ -54,6 +57,7 @@ impl VersionData {
             pings: vec![],
             teleports: vec![],
             keep_alives: vec![],
+            chat_time_stamp: 0,
             seq: 0,
             threshold: None,
             ids: PacketIdReader::default(),
@@ -307,16 +311,63 @@ impl VersionData {
                     )));
                 }
             }
-            c2s::game::ChatCommand::PACKET_ID | c2s::game::Chat::PACKET_ID => {
+            c2s::game::ChatCommand::PACKET_ID => {
                 if is_active && let Ok(text) = decode::<String>(packet, self.threshold) {
-                    let is_command = id == c2s::game::ChatCommand::PACKET_ID;
-                    config::report_chat(text, is_command);
+                    config::report_chat(text, true);
+                }
+                let mut command: c2s::game::ChatCommand = decode(packet, self.threshold)?;
+                let signed = !command.argument_signatures.is_empty();
+                if self.order_chat(&mut command.time_stamp, client_id, is_active, signed) {
+                    return Ok(Some(self.rewrite(&command)?));
+                }
+            }
+            c2s::game::Chat::PACKET_ID => {
+                if is_active && let Ok(text) = decode::<String>(packet, self.threshold) {
+                    config::report_chat(text, false);
+                }
+                let mut chat: c2s::game::Chat = decode(packet, self.threshold)?;
+                let signed = !chat.signature.0.is_empty();
+                if self.order_chat(&mut chat.time_stamp, client_id, is_active, signed) {
+                    return Ok(Some(self.rewrite(&chat)?));
                 }
             }
             _ => {}
         };
 
         Ok(None)
+    }
+
+    /// Raises a time stamp behind the last one the server got, which `updateChatOrder` kicks for.
+    fn order_chat(
+        &mut self,
+        time_stamp: &mut i64,
+        client_id: ClientId,
+        is_active: bool,
+        signed: bool,
+    ) -> bool {
+        if !is_active {
+            return false;
+        }
+        if *time_stamp >= self.chat_time_stamp {
+            self.chat_time_stamp = *time_stamp;
+            return false;
+        }
+        if signed {
+            crate::diag::warn(
+                "chat",
+                format!(
+                    "{client_id:?} sent signed chat behind the server's clock, raising it breaks the signature"
+                ),
+            );
+        }
+        *time_stamp = self.chat_time_stamp;
+        true
+    }
+
+    fn rewrite<T: PacketId + Serialize>(&self, packet: &T) -> anyhow::Result<ServerBoundEvent> {
+        Ok(ServerBoundEvent::Rewrite(
+            UncompressedPacket::from_packet(packet)?.to_raw_packet_compressed(self.threshold)?,
+        ))
     }
 
     fn send_position_to_inactive(
@@ -455,5 +506,95 @@ impl KeepAliveSync {
         let duplicate = is_active && self.sent;
         self.sent |= is_active;
         duplicate
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mc_protocol::ser::{ByteArray, Deserialize};
+
+    use super::*;
+
+    const P: ClientId = ClientId::Primary;
+    const S: ClientId = ClientId::Secondary;
+
+    fn c2s<T: PacketId + Serialize>(
+        data: &mut VersionData,
+        packet: &T,
+        client: ClientId,
+        active: ClientId,
+        both_online: bool,
+    ) -> Option<ServerBoundEvent> {
+        let packet = UncompressedPacket::from_packet(packet)
+            .unwrap()
+            .to_raw_packet_compressed(data.threshold)
+            .unwrap();
+        data.handle_c2s(&packet, client, client == active, both_online)
+    }
+
+    fn last_seen() -> c2s::game::LastSeen {
+        c2s::game::LastSeen {
+            last_seen: vec![],
+            last_received: None,
+        }
+    }
+
+    fn chat_at(time_stamp: i64) -> c2s::game::Chat {
+        c2s::game::Chat {
+            message: "hi".into(),
+            time_stamp,
+            salt: 0,
+            signature: ByteArray::default(),
+            signed_preview: false,
+            last_seen: last_seen(),
+        }
+    }
+
+    /// A premium client signs even through the proxy.
+    fn command_at(time_stamp: i64) -> c2s::game::ChatCommand {
+        c2s::game::ChatCommand {
+            command: "msg a b".into(),
+            time_stamp,
+            salt: 1,
+            argument_signatures: vec![c2s::game::ArgumentSignature {
+                name: "message".into(),
+                signature: ByteArray(vec![1; 256]),
+            }],
+            signed_preview: false,
+            last_seen: last_seen(),
+        }
+    }
+
+    /// The time stamp of a rewritten chat or command, which both put right after the text.
+    fn raised(data: &VersionData, event: Option<ServerBoundEvent>) -> i64 {
+        let Some(ServerBoundEvent::Rewrite(packet)) = event else {
+            panic!("expected a rewrite");
+        };
+        let packet = packet.uncompress(data.threshold).unwrap();
+        let mut payload = std::io::Cursor::new(&packet.payload);
+        String::deserialize(&mut payload).unwrap();
+        i64::deserialize(&mut payload).unwrap()
+    }
+
+    #[test]
+    fn lagging_clock_after_failover_is_raised() {
+        let mut data = VersionData::new();
+        assert!(c2s(&mut data, &chat_at(10_000), P, P, true).is_none());
+        data.handle_client_disconnect(S);
+        let event = c2s(&mut data, &chat_at(4_000), S, S, false);
+        assert_eq!(raised(&data, event), 10_000);
+        let event = c2s(&mut data, &command_at(5_000), S, S, false);
+        assert_eq!(raised(&data, event), 10_000);
+        assert!(c2s(&mut data, &chat_at(12_000), S, S, false).is_none());
+    }
+
+    #[test]
+    fn inactive_chat_leaves_chat_order() {
+        let mut data = VersionData::new();
+        assert!(c2s(&mut data, &chat_at(1_000), P, P, true).is_none());
+        assert!(c2s(&mut data, &chat_at(5_000), S, P, true).is_none());
+        assert!(c2s(&mut data, &command_at(2_000), P, P, true).is_none());
+        // `updateChatOrder` only rejects `isBefore`.
+        assert!(c2s(&mut data, &chat_at(2_000), P, P, true).is_none());
     }
 }

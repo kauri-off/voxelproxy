@@ -1,4 +1,4 @@
-use mc_protocol::{Packet, varint::VarInt};
+use mc_protocol::{Packet, ser::ByteArray, varint::VarInt};
 
 pub mod c2s {
     use super::*;
@@ -14,6 +14,8 @@ pub mod c2s {
     }
 
     pub mod game {
+        use uuid::Uuid;
+
         use super::*;
 
         #[derive(Packet, Debug)]
@@ -22,16 +24,47 @@ pub mod c2s {
             pub id: VarInt,
         }
 
+        /// `ArgumentSignatures.Entry`
+        #[derive(Packet, Debug)]
+        pub struct ArgumentSignature {
+            pub name: String,
+            pub signature: ByteArray,
+        }
+
+        /// `LastSeenMessages.Entry`
+        #[derive(Packet, Debug)]
+        pub struct LastSeenEntry {
+            pub profile_id: Uuid,
+            pub signature: ByteArray,
+        }
+
+        /// `LastSeenMessages.Update`
+        #[derive(Packet, Debug)]
+        pub struct LastSeen {
+            pub last_seen: Vec<LastSeenEntry>,
+            pub last_received: Option<LastSeenEntry>,
+        }
+
         #[derive(Packet, Debug)]
         #[packet(4)] // ServerboundChatCommandPacket
         pub struct ChatCommand {
             pub command: String,
+            pub time_stamp: i64,
+            pub salt: i64,
+            pub argument_signatures: Vec<ArgumentSignature>,
+            pub signed_preview: bool,
+            pub last_seen: LastSeen,
         }
 
         #[derive(Packet, Debug)]
         #[packet(5)] // ServerboundChatPacket
         pub struct Chat {
             pub message: String,
+            pub time_stamp: i64,
+            pub salt: i64,
+            pub signature: ByteArray,
+            pub signed_preview: bool,
+            pub last_seen: LastSeen,
         }
 
         #[derive(Packet, Debug)]
