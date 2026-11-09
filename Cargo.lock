@@ -1713,9 +1713,9 @@ checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
 name = "flate2"
-version = "1.1.10"
+version = "1.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e634e2e0ebac1ee034020da1ca582e17ffe4e0f5e985823721e168928136dcb"
+checksum = "626d4928326b646e70f65ed36fc7cf9f206bdb68a0019ee7c6b4709da4e084c4"
 dependencies = [
  "crc32fast",
  "miniz_oxide 0.9.1",
@@ -3905,9 +3905,9 @@ dependencies = [
 
 [[package]]
 name = "mc_protocol"
-version = "2.4.0"
+version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "242340ed87d95fd4fc2ad076ce4f44c6a40274602bd2165b6b090d7504045f33"
+checksum = "a113e23228a8c00e6b5387110b7e1032bff585d945bb7f5adde25c6c0eb7d8d1"
 dependencies = [
  "bytes",
  "flate2",
@@ -3919,9 +3919,9 @@ dependencies = [
 
 [[package]]
 name = "mc_protocol_derive"
-version = "2.0.3"
+version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df3fbd1e6ef67f84a741d8a34e6abd4426f6e76b15a0df0bb5d7faeff10be177"
+checksum = "770a6ec21cebc163a533affbb646e5c83b4e557b0143a0784ff3e68d4a0d9eb3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7490,9 +7490,9 @@ checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 
 [[package]]
 name = "uuid"
-version = "1.29.0"
+version = "1.29.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a0e2d11620c50695fe12bbbfde96b3477fe606e7284c22d505c12ce51214514"
+checksum = "bed99139f7dac9b5cfe5f17be4d66dc7079a34dee1d74bcc77217119240e267c"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
