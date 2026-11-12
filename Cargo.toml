@@ -28,9 +28,9 @@ futures-util = { version = "0.3.34", default-features = false, features = ["std"
 futures = "0.3.34"
 flate2 = "1.1.10"
 idna = "1.1.0"
-tonic = { version = "0.14.6", features = ["tls-ring", "tls-webpki-roots"] }
-tonic-prost = "0.14.6"
-prost = "0.14.4"
+tonic = { version = "0.14.9", features = ["tls-ring", "tls-webpki-roots"] }
+tonic-prost = "0.14.9"
+prost = "0.14.6"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [
@@ -52,7 +52,7 @@ if-addrs = "0.15.0"
 dirs = "7.0.0"
 
 [build-dependencies]
-tonic-prost-build = "0.14.6"
+tonic-prost-build = "0.14.9"
 protoc-bin-vendored = "3.3.0"
 winresource = "0.1.34"
 
